@@ -875,6 +875,19 @@ IF acc_i1 >= 1.0 THEN
   END_IF;
 END_IF;
 
+(* Publish the tunnel sensor event in the scan that moves a package into
+   cell 10. The camera result is still consumed at the start of the next
+   scan, before another belt shift can move this package away. *)
+IF ib1[10] <> 0 AND ib1[10] <> tun_pkg_1 THEN
+  IF tun_wait_1 THEN scan_late_ct := scan_late_ct + 1; END_IF;
+  tun_pkg_1 := ib1[10];
+  tun_seq_1 := tun_seq_1 + 1;
+  IF tun_seq_1 > 30000 THEN tun_seq_1 := 1; END_IF;
+  scan1_trig := tun_seq_1;
+  scan1_serial := ib1[10];
+  tun_wait_1 := TRUE;
+END_IF;
+
 (* ---------- induct lane 2 ---------- *)
 acc_i2 := acc_i2 + (INT_TO_REAL(induct2_fb) / 1750.0);
 IF acc_i2 >= 1.0 THEN
@@ -993,6 +1006,16 @@ IF acc_i2 >= 1.0 THEN
   END_IF;
 END_IF;
 
+IF ib2[10] <> 0 AND ib2[10] <> tun_pkg_2 THEN
+  IF tun_wait_2 THEN scan_late_ct := scan_late_ct + 1; END_IF;
+  tun_pkg_2 := ib2[10];
+  tun_seq_2 := tun_seq_2 + 1;
+  IF tun_seq_2 > 30000 THEN tun_seq_2 := 1; END_IF;
+  scan2_trig := tun_seq_2;
+  scan2_serial := ib2[10];
+  tun_wait_2 := TRUE;
+END_IF;
+
 (* ---------- induct lane 3 ---------- *)
 acc_i3 := acc_i3 + (INT_TO_REAL(induct3_fb) / 1750.0);
 IF acc_i3 >= 1.0 THEN
@@ -1109,6 +1132,16 @@ IF acc_i3 >= 1.0 THEN
     ib3[18] := 0;
     rt3[18] := 0;
   END_IF;
+END_IF;
+
+IF ib3[10] <> 0 AND ib3[10] <> tun_pkg_3 THEN
+  IF tun_wait_3 THEN scan_late_ct := scan_late_ct + 1; END_IF;
+  tun_pkg_3 := ib3[10];
+  tun_seq_3 := tun_seq_3 + 1;
+  IF tun_seq_3 > 30000 THEN tun_seq_3 := 1; END_IF;
+  scan3_trig := tun_seq_3;
+  scan3_serial := ib3[10];
+  tun_wait_3 := TRUE;
 END_IF;
 
 (* ---------- outbound belt 1 ---------- *)
