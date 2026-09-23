@@ -41,6 +41,7 @@ VAR
   fault_reset   AT %QX113.7    : BOOL;   (* hold the drive fault-reset bit for several scans *)
   scanner_fault_ack AT %QX114.0 : BOOL; (* operator acknowledges scanner fault *)
   scanner_retry AT %QX114.1 : BOOL;     (* operator retries after acknowledgement *)
+  xle_mode AT %QX114.2 : BOOL;           (* lane 1 external sort decisions *)
 
   speed_sp_1    AT %QW200      : INT;    (* induct 1 speed setpoint, rpm *)
   speed_sp_2    AT %QW201      : INT;    (* induct 2 speed setpoint, rpm *)
@@ -101,6 +102,16 @@ VAR
   scanner_fault_mask AT %QW256 : INT;   (* bits 0,1,2 identify missing tunnel ACKs *)
   scanner_ack_mask AT %QW257 : INT;     (* bits 0,1,2 for current phase ACKs *)
   scanner_wait AT %QW258 : INT;         (* elapsed PLC scans in current phase *)
+  xle_cmd_id AT %QW500 : INT;            (* XLe writes 500..503 *)
+  xle_cmd_bc AT %QW501 : INT;
+  xle_cmd_dest AT %QW502 : INT;
+  xle_cmd_nonce AT %QW503 : INT;
+  xle_ack_id AT %QW504 : INT;            (* PLC writes 504..509 *)
+  xle_state AT %QW505 : INT;             (* 0 idle, 1 accepted, 2 diverted, 3 loaded, 4 failed, 5 recirc *)
+  xle_reason AT %QW506 : INT;            (* 1 no decision, 2 invalid/late, 3 collision, 4 no home, 5 wrong door *)
+  xle_actual AT %QW507 : INT;            (* physical trailer, 1..9 *)
+  xle_package AT %QW508 : INT;           (* scanner barcode identity *)
+  xle_run_nonce AT %QW509 : INT;
 
   ib1_c0          AT %QW260      : INT;
   ib1_c1          AT %QW261      : INT;
@@ -425,6 +436,8 @@ VAR
   tun_wait_1, tun_wait_2, tun_wait_3 : BOOL := FALSE;
   init_done : BOOL := FALSE;
   reset_nonce : INT := 0;
+  xle_cmd_seen, xle_route_dest : INT := 0;
+  xle_inducted : BOOL := FALSE;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -462,6 +475,12 @@ IF NOT init_done THEN
   div_act_2 := 0;
   div_act_3 := 0;
   scan_code_1 := 0;
+  xle_mode := FALSE;
+  xle_cmd_seen := xle_cmd_id;
+  xle_route_dest := 0;
+  xle_inducted := FALSE;
+  xle_ack_id := 0; xle_state := 0; xle_reason := 0;
+  xle_actual := 0; xle_package := 0;
   acc_i1 := 0.0; tmr1 := 0; jam_lat_1 := FALSE;
   acc_o1 := 0.0;
   scan_code_2 := 0;
@@ -501,6 +520,7 @@ IF NOT init_done THEN
   tun_pkg_3 := 0; tun_seq_3 := 0; tun_wait_3 := FALSE;
   reset_nonce := reset_nonce + 1;
   IF reset_nonce > 30000 THEN reset_nonce := 1; END_IF;
+  xle_run_nonce := reset_nonce;
   scanner_state := 1; scanner_wait := 0;
   scanner_fault_mask := 0; scanner_ack_mask := 0;
   scan1_trig := 32766; scan1_serial := reset_nonce;
@@ -649,6 +669,7 @@ ELSIF scanner_state = 4 THEN
   IF scanner_retry THEN
     reset_nonce := reset_nonce + 1;
     IF reset_nonce > 30000 THEN reset_nonce := 1; END_IF;
+    xle_run_nonce := reset_nonce;
     scanner_state := 1; scanner_wait := 0; scanner_ack_mask := 0;
     scan1_trig := 32766; scan1_serial := reset_nonce;
     scan2_trig := 32766; scan2_serial := reset_nonce;
@@ -687,12 +708,19 @@ ELSIF tun_wait_1 AND scan1_result = tun_seq_1 AND scan1_nonce = reset_nonce THEN
        the trailer it actually ends up in. *)
     ib1[10] := bc;
     tun_pkg_1 := bc;
-    dest  := bc / 1000;
-    obelt := ((dest - 1) / 3) + 1;
-    IF obelt = 1 THEN rt1[10] := 14;
-    ELSIF obelt = 2 THEN rt1[10] := 16;
-    ELSIF obelt = 3 THEN rt1[10] := 18;
-    ELSE rt1[10] := 0;
+    IF xle_mode THEN
+      xle_package := bc;
+      xle_state := 0; xle_reason := 0; xle_actual := 0;
+      xle_route_dest := 0;
+      rt1[10] := 0;
+    ELSE
+      dest  := bc / 1000;
+      obelt := ((dest - 1) / 3) + 1;
+      IF obelt = 1 THEN rt1[10] := 14;
+      ELSIF obelt = 2 THEN rt1[10] := 16;
+      ELSIF obelt = 3 THEN rt1[10] := 18;
+      ELSE rt1[10] := 0;
+      END_IF;
     END_IF;
   ELSE
     (* no usable identity: the package keeps its serial, rides to the
@@ -818,6 +846,28 @@ ELSIF tun_wait_3 AND scan3_result = tun_seq_3 AND scan3_nonce = reset_nonce THEN
 END_IF;
 
 
+(* Accept one command for the current scanned package before cell 14.
+   A package without a valid command retains route zero and recirculates. *)
+IF xle_mode AND xle_cmd_id <> 0 AND xle_cmd_id <> xle_cmd_seen THEN
+  xle_cmd_seen := xle_cmd_id;
+  xle_ack_id := xle_cmd_id;
+  xle_state := 4; xle_reason := 2; xle_actual := 0;
+  IF xle_cmd_nonce = reset_nonce AND xle_cmd_bc = xle_package AND
+     xle_package <> 0 AND xle_cmd_dest >= 1 AND xle_cmd_dest <= 9 THEN
+    FOR i := 10 TO 13 DO
+      IF ib1[i] = xle_package THEN
+        xle_route_dest := xle_cmd_dest;
+        obelt := ((xle_route_dest - 1) / 3) + 1;
+        IF obelt = 1 THEN rt1[i] := 14;
+        ELSIF obelt = 2 THEN rt1[i] := 16;
+        ELSE rt1[i] := 18;
+        END_IF;
+        xle_state := 1; xle_reason := 0;
+      END_IF;
+    END_FOR;
+  END_IF;
+END_IF;
+
 (* ---------- induct lane 1 ---------- *)
 acc_i1 := acc_i1 + (INT_TO_REAL(induct1_fb) / 1750.0);
 IF acc_i1 >= 1.0 THEN
@@ -831,6 +881,9 @@ IF acc_i1 >= 1.0 THEN
   (* undiverted off the end of the belt: a recirc, not a jam *)
   IF ib1[19] <> 0 THEN
     recirc_ct := recirc_ct + 1;
+    IF xle_mode AND ib1[19] = xle_package AND xle_state = 0 THEN
+      xle_state := 5; xle_reason := 1;
+    END_IF;
   END_IF;
 
   (* jam: the tail of the belt is backing up. Three consecutive
@@ -862,8 +915,9 @@ IF acc_i1 >= 1.0 THEN
     FOR i := 0 TO min_gap_sp DO
       IF ib1[i] <> 0 THEN occ := occ + 1; END_IF;
     END_FOR;
-    IF occ = 0 THEN
+    IF occ = 0 AND (NOT xle_mode OR NOT xle_inducted) THEN
       ib1[0] := serial_next;
+      IF xle_mode THEN xle_inducted := TRUE; END_IF;
       serial_next := serial_next + 1;
       IF serial_next > 999 THEN serial_next := 1; END_IF;
       inducted_ct := inducted_ct + 1;
@@ -875,13 +929,16 @@ IF acc_i1 >= 1.0 THEN
   IF auto_mode AND ib1[14] <> 0 AND rt1[14] = 14 THEN
     l1_div1 := TRUE;
     div_act_1 := div_act_1 + 1;
+    IF xle_mode AND ib1[14] = xle_package THEN xle_state := 2; END_IF;
     IF ob1[2] <> 0 THEN
       coll_ct := coll_ct + 1;
       coll_alarm := TRUE;
+      IF xle_mode AND ib1[14] = xle_package THEN xle_state := 4; xle_reason := 3; END_IF;
     ELSE
       ob1[2] := ib1[14];
       (* carry the door target onto the outbound belt *)
       dest := ib1[14] / 1000;
+      IF xle_mode AND ib1[14] = xle_package THEN dest := xle_route_dest; END_IF;
       door := ((dest - 1) MOD 3) + 1;
       IF door = 1 THEN ort1[2] := 12;
       ELSIF door = 2 THEN ort1[2] := 15;
@@ -896,13 +953,16 @@ IF acc_i1 >= 1.0 THEN
   IF auto_mode AND ib1[16] <> 0 AND rt1[16] = 16 THEN
     l1_div2 := TRUE;
     div_act_2 := div_act_2 + 1;
+    IF xle_mode AND ib1[16] = xle_package THEN xle_state := 2; END_IF;
     IF ob2[2] <> 0 THEN
       coll_ct := coll_ct + 1;
       coll_alarm := TRUE;
+      IF xle_mode AND ib1[16] = xle_package THEN xle_state := 4; xle_reason := 3; END_IF;
     ELSE
       ob2[2] := ib1[16];
       (* carry the door target onto the outbound belt *)
       dest := ib1[16] / 1000;
+      IF xle_mode AND ib1[16] = xle_package THEN dest := xle_route_dest; END_IF;
       door := ((dest - 1) MOD 3) + 1;
       IF door = 1 THEN ort2[2] := 12;
       ELSIF door = 2 THEN ort2[2] := 15;
@@ -917,13 +977,16 @@ IF acc_i1 >= 1.0 THEN
   IF auto_mode AND ib1[18] <> 0 AND rt1[18] = 18 THEN
     l1_div3 := TRUE;
     div_act_3 := div_act_3 + 1;
+    IF xle_mode AND ib1[18] = xle_package THEN xle_state := 2; END_IF;
     IF ob3[2] <> 0 THEN
       coll_ct := coll_ct + 1;
       coll_alarm := TRUE;
+      IF xle_mode AND ib1[18] = xle_package THEN xle_state := 4; xle_reason := 3; END_IF;
     ELSE
       ob3[2] := ib1[18];
       (* carry the door target onto the outbound belt *)
       dest := ib1[18] / 1000;
+      IF xle_mode AND ib1[18] = xle_package THEN dest := xle_route_dest; END_IF;
       door := ((dest - 1) MOD 3) + 1;
       IF door = 1 THEN ort3[2] := 12;
       ELSIF door = 2 THEN ort3[2] := 15;
@@ -1214,6 +1277,9 @@ IF acc_o1 >= 1.0 THEN
   IF ob1[19] <> 0 THEN
     nohome_ct := nohome_ct + 1;
     nohome_alarm := TRUE;
+    IF xle_mode AND ob1[19] = xle_package AND xle_state = 2 THEN
+      xle_state := 4; xle_reason := 4;
+    END_IF;
   END_IF;
 
   FOR i := 19 TO 1 BY -1 DO
@@ -1230,9 +1296,14 @@ IF acc_o1 >= 1.0 THEN
     bc := ob1[12];
     dest := bc / 1000;
     tr11_ct := tr11_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 1; xle_reason := 0;
+    END_IF;
     IF dest <> 1 THEN
       tr11_bad := tr11_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob1[12] := 0;
     ort1[12] := 0;
@@ -1243,9 +1314,14 @@ IF acc_o1 >= 1.0 THEN
     bc := ob1[15];
     dest := bc / 1000;
     tr12_ct := tr12_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 2; xle_reason := 0;
+    END_IF;
     IF dest <> 2 THEN
       tr12_bad := tr12_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob1[15] := 0;
     ort1[15] := 0;
@@ -1256,9 +1332,14 @@ IF acc_o1 >= 1.0 THEN
     bc := ob1[18];
     dest := bc / 1000;
     tr13_ct := tr13_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 3; xle_reason := 0;
+    END_IF;
     IF dest <> 3 THEN
       tr13_bad := tr13_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob1[18] := 0;
     ort1[18] := 0;
@@ -1274,6 +1355,9 @@ IF acc_o2 >= 1.0 THEN
   IF ob2[19] <> 0 THEN
     nohome_ct := nohome_ct + 1;
     nohome_alarm := TRUE;
+    IF xle_mode AND ob2[19] = xle_package AND xle_state = 2 THEN
+      xle_state := 4; xle_reason := 4;
+    END_IF;
   END_IF;
 
   FOR i := 19 TO 1 BY -1 DO
@@ -1290,9 +1374,14 @@ IF acc_o2 >= 1.0 THEN
     bc := ob2[12];
     dest := bc / 1000;
     tr21_ct := tr21_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 4; xle_reason := 0;
+    END_IF;
     IF dest <> 4 THEN
       tr21_bad := tr21_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob2[12] := 0;
     ort2[12] := 0;
@@ -1303,9 +1392,14 @@ IF acc_o2 >= 1.0 THEN
     bc := ob2[15];
     dest := bc / 1000;
     tr22_ct := tr22_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 5; xle_reason := 0;
+    END_IF;
     IF dest <> 5 THEN
       tr22_bad := tr22_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob2[15] := 0;
     ort2[15] := 0;
@@ -1316,9 +1410,14 @@ IF acc_o2 >= 1.0 THEN
     bc := ob2[18];
     dest := bc / 1000;
     tr23_ct := tr23_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 6; xle_reason := 0;
+    END_IF;
     IF dest <> 6 THEN
       tr23_bad := tr23_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob2[18] := 0;
     ort2[18] := 0;
@@ -1334,6 +1433,9 @@ IF acc_o3 >= 1.0 THEN
   IF ob3[19] <> 0 THEN
     nohome_ct := nohome_ct + 1;
     nohome_alarm := TRUE;
+    IF xle_mode AND ob3[19] = xle_package AND xle_state = 2 THEN
+      xle_state := 4; xle_reason := 4;
+    END_IF;
   END_IF;
 
   FOR i := 19 TO 1 BY -1 DO
@@ -1350,9 +1452,14 @@ IF acc_o3 >= 1.0 THEN
     bc := ob3[12];
     dest := bc / 1000;
     tr31_ct := tr31_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 7; xle_reason := 0;
+    END_IF;
     IF dest <> 7 THEN
       tr31_bad := tr31_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob3[12] := 0;
     ort3[12] := 0;
@@ -1363,9 +1470,14 @@ IF acc_o3 >= 1.0 THEN
     bc := ob3[15];
     dest := bc / 1000;
     tr32_ct := tr32_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 8; xle_reason := 0;
+    END_IF;
     IF dest <> 8 THEN
       tr32_bad := tr32_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob3[15] := 0;
     ort3[15] := 0;
@@ -1376,9 +1488,14 @@ IF acc_o3 >= 1.0 THEN
     bc := ob3[18];
     dest := bc / 1000;
     tr33_ct := tr33_ct + 1;
+    IF xle_mode AND bc = xle_package AND xle_state = 2 THEN
+      dest := xle_route_dest;
+      xle_state := 3; xle_actual := 9; xle_reason := 0;
+    END_IF;
     IF dest <> 9 THEN
       tr33_bad := tr33_bad + 1;
       missort_ct := missort_ct + 1;
+      IF xle_mode AND bc = xle_package THEN xle_state := 4; xle_reason := 5; END_IF;
     END_IF;
     ob3[18] := 0;
     ort3[18] := 0;

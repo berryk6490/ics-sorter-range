@@ -17,3 +17,8 @@ for phase in prepare reset; do
         "$build_dir/reset_faults" "$phase" "$tunnel"
     done
 done
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/xle_plc.c" -lm -o "$build_dir/xle_plc"
+for case_name in valid unknown stale failed; do
+    "$build_dir/xle_plc" "$case_name"
+done

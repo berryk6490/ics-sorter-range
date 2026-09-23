@@ -6,7 +6,8 @@ identical copy of Structured Text despite its historical `.py` name;
 The nearby `../sorter_project/plc.xml` is an older one-lane Beremiz project.
 The repository includes copies of the deployed drive and scanner sources in
 `devices/`, plus their nine instance configurations and register maps in
-`deploy/README.md`. Firewall and HMI service sources have not been copied.
+`deploy/README.md`. The HMI and OPC UA service sources are in `scada/`.
+The next XLe/ASX milestone and its live evidence are in `XLE_SLICE.md`.
 
 ## Data path visible in the PLC source
 
@@ -104,7 +105,7 @@ same-seed replay: first barcode and trailer match
 
 ## Cold restart and scanner fault verification
 
-The current PLC program is `scanner_fault.st` with identity `24112` and source
+At that milestone, the PLC program was `scanner_fault.st` with identity `24112` and source
 SHA-256 `21337519a08571987a66889e346467f6ffc35140b5da8d6407dd25dd11f4c131`.
 It compiled successfully on the PLC guest. The two-phase scanner handshake,
 fault states, register mapping, and retry rules are in `deploy/README.md`.
