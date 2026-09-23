@@ -5,8 +5,9 @@ identical copy of Structured Text despite its historical `.py` name;
 `sorter.st` is an older version with scanner behavior still inside the PLC.
 The nearby `../sorter_project/plc.xml` is an older one-lane Beremiz project.
 The repository does not contain the drive, scanner, firewall, or HMI service
-source. Their deployed versions and OpenPLC runtime configuration still need
-inspection inside the guests.
+source. The inspected `drives` guest runs `/home/kevin/vfd.py` and
+`/home/kevin/scanner.py`; service units launch six VFD instances and three
+tunnel instances.
 
 ## Data path visible in the PLC source
 
@@ -29,14 +30,19 @@ Lane 2 uses drive registers `%QW103..105`, feedback `%IW114`, tunnel request
 `%QW122..125`, response `%IW169..172`, and belt `%QW280..299`. Lane 3 uses
 `%QW106..108`, `%IW123`, `%QW126..129`, `%IW180..183`, and `%QW300..319`.
 The other three drive command groups are `%QW109..117` and feedback registers
-`%IW132`, `%IW141`, and `%IW150`. The exact network mapping of these located
-variables must be confirmed in the running OpenPLC configuration.
+`%IW132`, `%IW141`, and `%IW150`. OpenPLC's `mbconfig.cfg` on `plc` maps the six
+drives to `10.10.1.21..26:502` and the three cameras to `10.10.1.27..29:502`.
+Each drive accepts command, speed reference, and belt load in holding
+registers 0..2 and publishes actual speed in register 5. Each camera accepts
+trigger sequence, serial, seed, and no-read rate in registers 0..3 and
+publishes result sequence, barcode, status, and dimensions in registers 4..10.
+The PLC is `10.10.1.10` and serves its located variables on Modbus TCP 502.
 
 The four VM definitions each reserve 786432 KiB (768 MiB) and two vCPUs.
 All four together reserve 3 GiB. `fw` connects to `ics-l1`, `ics-l2`, and
 `ics-l3`; `plc` and `drives` connect to `ics-l1`; `scada` connects to `ics-l2`.
-The smallest live PLC/drive/scanner test should need only `plc` and `drives`
-(1.5 GiB) if their scanner and drive services are running. `fw` is needed for
+The smallest live PLC/drive/scanner test needs only `plc` and `drives`
+(1.5 GiB). `fw` is needed for
 access across zones, and `scada` is needed only to verify the HMI path.
 
 ## Host-side check
@@ -49,15 +55,23 @@ barcode routing, and one correct trailer load. It checks that lanes 2 and 3
 also issue an arrival trigger. It does not emulate network timing or prove
 the guest services are wired to these registers.
 
-## Guest verification once console login is available
+## Guest verification
 
 Use `virsh -c qemu:///system console plc` and
 `virsh -c qemu:///system console drives` from the host terminal. Each console
-has a login prompt; enter credentials there, then exit the console with
-Ctrl+]. On `plc`, inspect the OpenPLC runtime version, running program,
-Modbus devices, and located-variable mapping. On `drives`, inspect the VFD
-and scanner services and their register map. Confirm the deployed program
-matches `Sorter.st` before any live test. Then reset the sorter, set the run
-bit, and observe `%QW220`, `%QW260..279`, `%QW118..119`, `%IW158..161`, and
-`%QW222` as the first package passes. This live step remains unverified until
-guest login and runtime access are available.
+has a login prompt; enter credentials there, then exit with Ctrl+]. The PLC
+guest's old active `Sorter` file matched the repository version before commit
+`f64a17f` byte for byte (SHA-256 `abb7579d...`). The new source was installed
+as a separate OpenPLC program, `f64a17f.st`, with SHA-256 `624a693f...`.
+OpenPLC's `compile_program.sh` succeeded and `active_program` now names
+`f64a17f.st`. The old program entry remains available.
+
+Copy `tests/live_first_package.py` to the PLC guest's home directory and run
+`~/OpenPLC_v3/.venv/bin/python3 ~/live_first_package.py` there. The script
+reads the PLC, induct drive 1, and camera 1 over Modbus, then checks the first
+serial from induction through barcode and trailer load. It stops the sorter
+and restores the lane-enable bits after the run. On 2026-09-23, the live run
+exited 0: first barcode `2001` reached trailer 1-2, with drive feedback,
+belt-cell occupancy, trigger sequence 1, and a matching camera result all
+observed. Only `plc` and `drives` were running. The HMI path through `scada`
+remains untested.
