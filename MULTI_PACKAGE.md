@@ -1,5 +1,8 @@
 # Lane 1 multi-package external sorting
 
+Process-restart recovery and the live three-package slot-reuse run are recorded
+in [XLE_RECOVERY.md](XLE_RECOVERY.md).
+
 ## Placement, identity, and capacity
 
 The scanner, PLC, XLe, ASX, PLC command, and physical belt outcome remain in
@@ -18,8 +21,8 @@ XLe releases a slot only after reading and logging its terminal result. A
 released slot can be reused without resetting the run; the PLC gives the next
 package a new token. `xle.py --packages 2` runs a finite verification batch;
 `--packages 0` keeps serving packages through the same two bounded slots.
-The continuous XLe option was not exercised live; PLC slot reuse was tested
-locally through a third package with no reset.
+The later finite three-package live batch is recorded in
+[XLE_RECOVERY.md](XLE_RECOVERY.md); continuous mode remains untested live.
 
 The stable package identity is `(scanner_run_nonce, slot_token,
 package_serial, scanner_sequence)`. XLe's `package_id` is

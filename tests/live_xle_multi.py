@@ -1,4 +1,4 @@
-"""Two-package SCADA-to-PLC Modbus verification. Restores settings in finally.
+"""Finite SCADA-to-PLC Modbus verification. Restores settings in finally.
 
 Run on SCADA with only the existing plc, drives, fw, and scada guests.
 The repeat case requires the test-only tunnel 1 scanner process described in
@@ -10,6 +10,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 from pymodbus.client import ModbusTcpClient
@@ -69,12 +70,14 @@ def stop(process):
 
 
 def main(case):
+    count = 3 if case == "three" else 2
     c = ModbusTcpClient("10.10.1.10", port=502, timeout=2)
     assert c.connect(), "SCADA cannot reach PLC through fw"
     original = {"enables": coils(c, 881, 7),
                 "external": coils(c, 914, 2),
                 "setpoints": holding(c, 200, 11), "seed": holding(c, 247)[0]}
     asx = xle = None
+    journal_dir = tempfile.TemporaryDirectory(prefix="sorter-xle-")
     rows = {}
     try:
         set_coil(c, 880, False)
@@ -104,7 +107,8 @@ def main(case):
         else:
             raise RuntimeError("ASX did not listen")
         xle = subprocess.Popen([sys.executable, str(ROOT / "xle.py"),
-                                "--packages", "2"], stdout=subprocess.PIPE,
+                                "--packages", str(count), "--journal",
+                                str(Path(journal_dir.name) / "outcomes.sqlite3")], stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True)
         set_coil(c, 883, False)
         set_coil(c, 884, False)
@@ -115,7 +119,7 @@ def main(case):
         set_coil(c, 880, True)
         until = time.monotonic() + 150
         while time.monotonic() < until:
-            if holding(c, 220)[0] >= 2:
+            if holding(c, 220)[0] >= count:
                 set_register(c, 207, 1000)
             data = holding(c, 530, 24)
             for slot in (0, 1):
@@ -128,10 +132,10 @@ def main(case):
                                     "reason": row[7], "scan_tick": row[8],
                                     "accept_tick": row[9], "divert_tick": row[10],
                                     "command_id": row[11]}
-            if len(rows) == 2 and xle.poll() is not None:
+            if len(rows) == count and xle.poll() is not None:
                 break
             time.sleep(.1)
-        assert len(rows) == 2, f"only {len(rows)} terminal Modbus rows: {rows}"
+        assert len(rows) == count, f"only {len(rows)} terminal Modbus rows: {rows}"
         xle_output = xle.communicate(timeout=5)[0]
         assert xle.returncode == 0, xle_output
         xle = None
@@ -141,8 +145,10 @@ def main(case):
         asx = None
         xe, ae = events(xle_output), events(asx_output)
         by_serial = {row["serial"]: row for row in rows.values()}
-        assert set(by_serial) == {1, 2}, by_serial
+        assert set(by_serial) == set(range(1, count + 1)), by_serial
         expected = {1: 2, 2: 0 if case == "timeout" else 5}
+        if count == 3:
+            expected[3] = 8
         for serial, row in by_serial.items():
             actual = expected[serial]
             assert row["actual_trailer"] == actual, row
@@ -168,9 +174,10 @@ def main(case):
         assert (by_serial[1]["barcode"] == by_serial[2]["barcode"]) == (case == "repeat")
         trailers = holding(c, 222, 9)
         assert trailers[1] == 1 and trailers[4] == (0 if case == "timeout" else 1)
-        assert sum(trailers) == (1 if case == "timeout" else 2)
+        assert trailers[7] == (1 if count == 3 else 0)
+        assert sum(trailers) == count - (1 if case == "timeout" else 0)
         assert holding(c, 218)[0] == (1 if case == "timeout" else 0)
-        assert holding(c, 220)[0] == 2
+        assert holding(c, 220)[0] == count
         print(json.dumps({"case": case, "rows": by_serial, "trailers": trailers,
                           "recirculated": holding(c, 218)[0],
                           "xle_events": xe, "asx_events": ae}, sort_keys=True), flush=True)
@@ -194,6 +201,7 @@ def main(case):
                 errors.append(f"{address}: {exc}")
         stop(xle)
         stop(asx)
+        journal_dir.cleanup()
         c.close()
         if errors:
             raise RuntimeError("operator restoration failed: " + ", ".join(errors))
@@ -201,5 +209,5 @@ def main(case):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("case", choices=("different", "repeat", "timeout"))
+    parser.add_argument("case", choices=("different", "repeat", "timeout", "three"))
     main(parser.parse_args().case)
