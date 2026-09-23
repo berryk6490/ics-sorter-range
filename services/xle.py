@@ -278,6 +278,9 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
     completed = 0
     run_identity = None
     startup_slots = None
+    heartbeat_sequence = None
+    heartbeat_at = 0
+    recovery_proved = False
     command_id = read(client, 528)[0]
     end = float("inf") if packages == 0 else time.monotonic() + deadline
     try:
@@ -293,6 +296,46 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                 if current_epoch is None:
                     time.sleep(.05)
                     continue
+                if run_identity is None or current_epoch != run_identity[0]:
+                    heartbeat_sequence = read(client, 567)[0]
+                    heartbeat_at = 0
+                    recovery_proved = False
+                if time.monotonic() - heartbeat_at >= .5:
+                    heartbeat_sequence = heartbeat_sequence % 30000 + 1
+                    reply = client.write_registers(565,
+                                                   [current_epoch % 30000,
+                                                    current_epoch // 30000], slave=1)
+                    if reply.isError():
+                        raise RuntimeError("PLC heartbeat identity write failed")
+                    reply = client.write_register(567, heartbeat_sequence, slave=1)
+                    if reply.isError():
+                        raise RuntimeError("PLC heartbeat commit failed")
+                    heartbeat_at = time.monotonic()
+                heartbeat_accepted = read(client, 573)[0] == heartbeat_sequence
+                liveness = read(client, 569)[0]
+                if liveness == 3 and heartbeat_accepted and not recovery_proved:
+                    # Recovery proof is issued only after the explicit retry.
+                    # The PLC ignores any proof already present when retry was pressed.
+                    try:
+                        integrity = log.db.execute("PRAGMA quick_check").fetchone()[0]
+                        if integrity != "ok" or not log.has_epoch(current_epoch):
+                            fail_closed(client, "journal or active run identity failed recovery verification")
+                    except (sqlite3.Error, OSError) as exc:
+                        fail_closed(client, f"journal recovery verification failed: {exc}")
+                    proof_id = read(client, 572)[0] % 30000 + 1
+                    reply = client.write_registers(570,
+                                                   [current_epoch % 30000,
+                                                    current_epoch // 30000], slave=1)
+                    if reply.isError():
+                        raise RuntimeError("PLC recovery identity write failed")
+                    reply = client.write_register(572, proof_id, slave=1)
+                    if reply.isError():
+                        raise RuntimeError("PLC recovery commit failed")
+                    event("xle_recovery_proved", run_epoch=current_epoch,
+                          recovery_sequence=proof_id)
+                    recovery_proved = True
+                elif liveness == 0:
+                    recovery_proved = False
                 nonce = read(client, 509)[0]
                 rows = slot_rows(client)
                 if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch:
@@ -318,15 +361,18 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                         event("slot_disappeared", package_id=task["request"]["package_id"])
                 for slot, row in enumerate(rows):
                     token, serial, seq, barcode, state, dest, actual, reason, scan_tick, accept_tick, divert_tick, plc_cmd = row
-                    if not token or state < 2:
+                    if not token or state < 2 or (state == 2 and not heartbeat_accepted
+                                                    and liveness == 0):
                         continue
                     key = (current_epoch, nonce, token, serial, seq)
                     if key not in pending and len(pending) < 2 and \
                        (packages == 0 or completed + len(pending) < packages):
                         request = package_request(current_epoch, nonce, row)
-                        future = pool.submit(lookup, request, asx_url) if state == 2 and barcode else None
+                        future = (pool.submit(lookup, request, asx_url)
+                                  if state == 2 and barcode and liveness == 0 else None)
                         pending[key] = {"slot": slot, "request": request,
-                                        "future": future, "decided": state != 2 or not barcode,
+                                        "future": future,
+                                        "decided": state != 2 or not barcode or liveness != 0,
                                         "terminal_at": None}
                         if state == 2:
                             event("scan", plc_scan_tick=scan_tick,
@@ -337,7 +383,8 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                             else:
                                 event("safe_fallback", package_id=request["package_id"],
                                       request_id=request["request_id"],
-                                      action="recirculate", reason="scanner_no_read")
+                                      action="recirculate",
+                                      reason="xle_liveness_fault" if liveness else "scanner_no_read")
                         else:
                             event("plc_recovered", package_id=request["package_id"],
                                   slot=slot, slot_token=token, state=state,
@@ -346,6 +393,12 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                     if task is None:
                         continue
                     package_id = task["request"]["package_id"]
+                    if state == 2 and not task["decided"] and liveness != 0:
+                        task["decided"] = True
+                        task["future"].cancel()
+                        event("safe_fallback", package_id=package_id,
+                              request_id=task["request"]["request_id"],
+                              action="recirculate", reason="xle_liveness_fault")
                     if state == 2 and not task["decided"] and task["future"].done():
                         destination, fault = task["future"].result()
                         task["decided"] = True

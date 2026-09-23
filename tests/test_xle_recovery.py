@@ -44,6 +44,10 @@ class PLC:
         self.fault_request = 0
         self.command_epoch = 0
         self.stopped = True
+        self.heartbeat_sequence = 0
+        self.liveness = 0
+        self.recovery_sequence = 0
+        self.recirc_after = False
 
     def connect(self):
         return True
@@ -66,8 +70,15 @@ class PLC:
         if address == 560: return Reply([self.ack_offer_id])
         if address == 564: return Reply([self.fault_request])
         if address == 255: return Reply([0])
+        if address == 567: return Reply([self.heartbeat_sequence])
+        if address == 569: return Reply([self.liveness])
+        if address == 572: return Reply([self.recovery_sequence])
+        if address == 573: return Reply([self.heartbeat_sequence])
         if address == 530:
             self.polls += 1
+            if self.recirc_after and self.row[4] == 2 and self.polls >= 3:
+                self.row[4] = 6
+                self.row[7] = 1
             if self.row[4] == 3 and self.polls >= 3:
                 self.row[4] = 5
                 self.row[6] = 2
@@ -81,6 +92,8 @@ class PLC:
         if address == 562:
             self.command_epoch = values[0] + values[1] * 30000
             return Reply([])
+        if address in (565, 570):
+            return Reply([])
         assert address == 520
         self.payload = values
         return Reply([])
@@ -92,6 +105,13 @@ class PLC:
             return Reply([])
         if address == 564:
             self.fault_request = value
+            return Reply([])
+        if address == 567:
+            self.heartbeat_sequence = value
+            return Reply([])
+        if address == 572:
+            self.recovery_sequence = value
+            self.liveness = 0
             return Reply([])
         assert address == 528
         self.command_id = self.ack_id = value
@@ -238,6 +258,30 @@ class Recovery(unittest.TestCase):
                               journal=str(Path(directory) / "outcomes.sqlite3"))
         self.assertTrue(plc.stopped)
         self.assertEqual(plc.fault_request, 2)
+
+    def test_liveness_fault_recirculates_undecided_slot_without_route(self):
+        plc = PLC(2)
+        plc.liveness = 1
+        plc.recirc_after = True
+        with tempfile.TemporaryDirectory() as directory, patch.object(xle, "lookup") as lookup:
+            self.assertEqual(xle.run_multi(plc, "unused", packages=1, deadline=1,
+                                           journal=str(Path(directory) / "outcomes.sqlite3"),
+                                           terminal_hold=0), 0)
+        lookup.assert_not_called()
+        self.assertEqual(plc.routes, 0)
+        self.assertEqual(plc.liveness, 1)
+
+    def test_retry_state_requires_fresh_journal_proof(self):
+        plc = PLC(5)
+        plc.liveness = 3
+        with tempfile.TemporaryDirectory() as directory, patch.object(xle, "event") as emit:
+            self.assertEqual(xle.run_multi(plc, "unused", packages=1, deadline=1,
+                                           journal=str(Path(directory) / "outcomes.sqlite3"),
+                                           terminal_hold=0), 0)
+        self.assertEqual(plc.recovery_sequence, 1)
+        self.assertEqual(plc.liveness, 0)
+        self.assertEqual(plc.routes, 0)
+        self.assertTrue(any(c.args[0] == "xle_recovery_proved" for c in emit.call_args_list))
 
     def test_old_asx_answer_cannot_route_reused_slot_after_cold_restart(self):
         plc = PLC(2)

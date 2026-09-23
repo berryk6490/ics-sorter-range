@@ -161,6 +161,17 @@ VAR
   cmd_epoch_lo AT %QW562 : INT;
   cmd_epoch_hi AT %QW563 : INT;
   epoch_fault_request AT %QW564 : INT;  (* XLe 2 = fail closed *)
+  hb_epoch_lo AT %QW565 : INT;          (* heartbeat payload before sequence *)
+  hb_epoch_hi AT %QW566 : INT;
+  hb_sequence AT %QW567 : INT;          (* XLe changes at least every 5 s *)
+  hb_age AT %QW568 : INT;               (* PLC scans since valid heartbeat *)
+  xle_liveness AT %QW569 : INT;         (* 0 healthy, 1 lost, 2 seen, 3 retry *)
+  recovery_epoch_lo AT %QW570 : INT;
+  recovery_epoch_hi AT %QW571 : INT;
+  recovery_sequence AT %QW572 : INT;   (* XLe writes after journal verification *)
+  hb_ack_sequence AT %QW573 : INT;
+  xle_fault_ack AT %QX114.4 : BOOL;    (* coil 916, operator action *)
+  xle_retry AT %QX114.5 : BOOL;        (* coil 917, operator action *)
 
   ib1_c0          AT %QW260      : INT;
   ib1_c1          AT %QW261      : INT;
@@ -493,6 +504,8 @@ VAR
   xle_inducted : BOOL := FALSE;
   token_next, multi_seen, slot_index, j : INT := 0;
   epoch_offer_seen : INT := 0;
+  hb_seen, recovery_seen : INT := 0;
+  hb_ready : BOOL := FALSE;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -536,6 +549,10 @@ IF NOT init_done THEN
   epoch_offer_seen := epoch_offer_id; epoch_ack_id := 0;
   epoch_active_lo := 0; epoch_active_hi := 0; epoch_fault := 1;
   epoch_fault_request := 0;
+  hb_seen := hb_sequence; hb_ack_sequence := 0;
+  hb_age := 0; hb_ready := FALSE; xle_liveness := 0;
+  recovery_seen := recovery_sequence;
+  xle_fault_ack := FALSE; xle_retry := FALSE;
   FOR j := 0 TO 1 DO
     st_token[j] := 0; st_serial[j] := 0; st_seq[j] := 0; st_bc[j] := 0;
     st_state[j] := 0; st_dest[j] := 0; st_actual[j] := 0;
@@ -620,6 +637,7 @@ IF epoch_offer_id <> 0 AND epoch_offer_id <> epoch_offer_seen THEN
      epoch_offer_hi >= 0 AND epoch_offer_hi < 30000 AND
      (epoch_offer_lo <> 0 OR epoch_offer_hi <> 0) THEN
     epoch_active_lo := epoch_offer_lo; epoch_active_hi := epoch_offer_hi;
+    hb_seen := hb_sequence; hb_age := 0; hb_ready := FALSE;
   END_IF;
 END_IF;
 IF epoch_fault_request = 2 THEN
@@ -628,6 +646,42 @@ ELSIF epoch_active_lo = 0 AND epoch_active_hi = 0 THEN
   epoch_fault := 1;
 ELSE
   epoch_fault := 0;
+END_IF;
+
+(* A changed heartbeat is valid only for this journal-backed run. The PLC
+   keeps belts moving on loss so accepted routes finish and undecided
+   packages recirculate. Only induction and new route commands are held. *)
+IF xle_mode AND xle_multi AND epoch_fault = 0 THEN
+  IF hb_sequence <> 0 AND hb_sequence <> hb_seen THEN
+    hb_seen := hb_sequence;
+    IF hb_epoch_lo = epoch_active_lo AND hb_epoch_hi = epoch_active_hi THEN
+      hb_age := 0; hb_ready := TRUE; hb_ack_sequence := hb_sequence;
+    END_IF;
+  END_IF;
+  IF hb_age < 32000 THEN hb_age := hb_age + 1; END_IF;
+  IF hb_age > 50 THEN
+    hb_ready := FALSE;
+    IF xle_liveness = 0 OR xle_liveness = 3 THEN
+      xle_liveness := 1;
+    END_IF;
+  END_IF;
+END_IF;
+IF xle_liveness = 1 AND xle_fault_ack THEN
+  xle_liveness := 2;
+END_IF;
+xle_fault_ack := FALSE;
+IF xle_liveness = 2 AND xle_retry AND hb_ready AND hb_age <= 50 THEN
+  recovery_seen := recovery_sequence;
+  xle_liveness := 3;
+END_IF;
+xle_retry := FALSE;
+IF xle_liveness = 3 AND hb_ready AND hb_age <= 50 AND
+   recovery_sequence <> 0 AND recovery_sequence <> recovery_seen THEN
+  recovery_seen := recovery_sequence;
+  IF recovery_epoch_lo = epoch_active_lo AND
+     recovery_epoch_hi = epoch_active_hi THEN
+    xle_liveness := 0;
+  END_IF;
 END_IF;
 
 (* operator fault reset: latch the request into a held countdown so the
@@ -982,7 +1036,8 @@ IF xle_mode AND xle_multi AND multi_cmd_id <> 0 AND multi_cmd_id <> multi_seen T
        cmd_epoch_hi = epoch_active_hi AND multi_nonce = reset_nonce AND st_state[j] <> 0 AND
        multi_token = st_token[j] AND multi_serial = st_serial[j] AND
        multi_seq = st_seq[j] AND multi_bc = st_bc[j] THEN
-      IF multi_op = 1 AND st_state[j] = 2 AND st_bc[j] <> 0 AND
+      IF multi_op = 1 AND xle_liveness = 0 AND hb_ready AND
+         hb_age <= 50 AND st_state[j] = 2 AND st_bc[j] <> 0 AND
          multi_dest >= 1 AND multi_dest <= 9 THEN
         FOR i := 10 TO 13 DO
           IF tok1[i] = st_token[j] THEN
@@ -1073,7 +1128,8 @@ IF acc_i1 >= 1.0 THEN
       IF ib1[i] <> 0 THEN occ := occ + 1; END_IF;
     END_FOR;
     IF occ = 0 AND (NOT xle_mode OR NOT xle_inducted OR xle_multi) AND
-       (NOT xle_mode OR NOT xle_multi OR epoch_fault = 0) THEN
+       (NOT xle_mode OR NOT xle_multi OR
+        (epoch_fault = 0 AND xle_liveness = 0 AND hb_ready AND hb_age <= 50)) THEN
       slot_index := -1;
       IF xle_mode AND xle_multi THEN
         FOR j := 0 TO 1 DO

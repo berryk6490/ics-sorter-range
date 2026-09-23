@@ -27,3 +27,6 @@ cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/
 for case_name in different repeat timeout reuse; do
     "$build_dir/multi_package" "$case_name"
 done
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/xle_heartbeat.c" -lm -o "$build_dir/xle_heartbeat"
+"$build_dir/xle_heartbeat"

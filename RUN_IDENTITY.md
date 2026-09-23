@@ -1,5 +1,8 @@
 # Durable identity for lane 1 multi-package mode
 
+For the later XLe heartbeat and operator recovery protocol, see
+[XLE_LIVENESS.md](XLE_LIVENESS.md).
+
 ## Risk reproduced from fd2e9d8
 
 The PLC's private `reset_nonce` and `token_next` start at zero on a cold

@@ -11,7 +11,14 @@ TIME __CURRENT_TIME;
 #define BIT(address, bit) (*__QX##address##_##bit)
 
 static SORTER plc;
-static void scan(void) { SORTER_body__(&plc); }
+static int automatic_hb = 0, scans = 0;
+static void scan(void) {
+    if (automatic_hb && ++scans % 5 == 0) {
+        WORD(565) = WORD(558); WORD(566) = WORD(559);
+        WORD(567) = WORD(567) % 30000 + 1;
+    }
+    SORTER_body__(&plc);
+}
 static int token(int slot) { return slot ? WORD(542) : WORD(530); }
 static int serial(int slot) { return slot ? WORD(543) : WORD(531); }
 static int seq(int slot) { return slot ? WORD(544) : WORD(532); }
@@ -63,6 +70,9 @@ int main(int argc, char **argv) {
     WORD(555) = 73; WORD(556) = 0; WORD(557) = 1; scan();
     assert(WORD(558) == 73 && WORD(559) == 0 && WORD(560) == 1);
     assert(WORD(561) == 0);
+    automatic_hb = 1;
+    for (int step = 0; step < 5; ++step) scan();
+    assert(WORD(573) == WORD(567) && WORD(569) == 0);
     BIT(110, 0) = 1;
     int last_trigger = 0, commanded[2] = {0, 0};
     for (int step = 0; step < 100; ++step) {

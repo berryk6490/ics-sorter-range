@@ -64,6 +64,11 @@ def _tagmap():
                       ("scanner_fault_ack", "ScannerFaultAck"),
                       ("scanner_retry", "ScannerRetry")):
         t[key] = ["Process", "Status", name]
+    for key, name in (("xle_heartbeat_age", "XLeHeartbeatAge"),
+                      ("xle_liveness", "XLeLivenessState"),
+                      ("xle_fault_ack", "XLeFaultAck"),
+                      ("xle_retry", "XLeRetry")):
+        t[key] = ["Process", "Status", name]
     for i in range(3):
         t[f"lane_run{i}"] = ["Process", "Status", f"Induct{i+1}Running"]
         t[f"ob_run{i}"] = ["Process", "Status", f"Outbound{i+1}Running"]
@@ -129,7 +134,8 @@ async def sample_rates():
 
 
 CONTROL = {"run", "auto", "lane_run0", "lane_run1", "lane_run2",
-           "ob_run0", "ob_run1", "ob_run2", "scanner_fault_ack", "scanner_retry"}
+           "ob_run0", "ob_run1", "ob_run2", "scanner_fault_ack", "scanner_retry",
+           "xle_fault_ack", "xle_retry"}
 ua_ctx = {"loop": None, "nodes": {}}     # set once a session is established
 
 
@@ -226,6 +232,8 @@ def api():
         "scanner_fault_mask": s["scanner_fault_mask"],
         "scanner_ack_mask": s["scanner_ack_mask"],
         "scanner_wait": s["scanner_wait"],
+        "xle_heartbeat_age": s["xle_heartbeat_age"],
+        "xle_liveness": s["xle_liveness"],
         "lane_run": [s[f"lane_run{i}"] for i in range(3)],
         "ob_run": [s[f"ob_run{i}"] for i in range(3)],
         "alarms": {"jam": s["a_jam"], "coll": s["a_coll"],
@@ -594,6 +602,11 @@ async function tick(){
     p+='<button class="btn" data-scanner="'+(d.scanner_state===3?'scanner_fault_ack':'scanner_retry')+'">'
       +(d.scanner_state===3?'ACKNOWLEDGE':'RETRY RESET')+'</button>';
   }
+  if(d.xle_liveness===1 || d.xle_liveness===2){
+    p+=stat('XLE HEARTBEAT LOST'+(d.xle_liveness===2?' — ACKNOWLEDGED':''),0,1);
+    p+='<button class="btn" data-scanner="'+(d.xle_liveness===1?'xle_fault_ack':'xle_retry')+'">'
+      +(d.xle_liveness===1?'ACKNOWLEDGE XLE':'RETRY XLE')+'</button>';
+  } else if(d.xle_liveness===3) p+=stat('XLE RECOVERY VERIFYING',1,0);
   const bar=document.getElementById('bar');
   if(p!==lastBarMarkup){ bar.innerHTML=p; lastBarMarkup=p; }
   bar.onclick=async e=>{

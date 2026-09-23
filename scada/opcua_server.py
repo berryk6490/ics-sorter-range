@@ -61,7 +61,7 @@ TRUSTLIST = "certs/trusted"
 # zero everywhere and looks like a dead process.
 
 SP_BASE, IB_BASE, OB_BASE, COIL_BASE = 200, 260, 380, 880
-SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 34
+SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 38
 
 # Offsets into the SP block (absolute address = SP_BASE + offset).
 SP = {
@@ -110,7 +110,8 @@ COIL = {"run": 0, "auto": 1, "lane_run": 2, "ob_run": 5,
         "jam_alarm": 26, "coll_alarm": 27,
         "noread_alarm": 28, "nohome_alarm": 29,
         "reset_cmd": 30, "fault_reset": 31,
-        "scanner_fault_ack": 32, "scanner_retry": 33}
+        "scanner_fault_ack": 32, "scanner_retry": 33,
+        "xle_fault_ack": 36, "xle_retry": 37}
 COIL_ABS = {k: COIL_BASE + v for k, v in COIL.items()}
 
 log = logging.getLogger("opcua_server")
@@ -144,7 +145,8 @@ class ModbusLink:
         ib = self.plc.read_holding_registers(IB_BASE, CELL_COUNT, slave=1)
         ob = self.plc.read_holding_registers(OB_BASE, CELL_COUNT, slave=1)
         co = self.plc.read_coils(COIL_BASE, COIL_COUNT, slave=1)
-        if sp.isError() or ib.isError() or ob.isError() or co.isError():
+        live = self.plc.read_holding_registers(568, 2, slave=1)
+        if sp.isError() or ib.isError() or ob.isError() or co.isError() or live.isError():
             raise IOError("plc read")
 
         drives = []
@@ -163,6 +165,7 @@ class ModbusLink:
             "ib": [s16(v) for v in ib.registers],
             "ob": [s16(v) for v in ob.registers],
             "coils": list(co.bits[:COIL_COUNT]),
+            "liveness": [s16(v) for v in live.registers],
             "drives": drives,
         }
 
@@ -289,10 +292,16 @@ class Namespace:
                           ("scanner_ack_mask", "ScannerAckMask"),
                           ("scanner_wait", "ScannerWaitScans")):
             await self._add_ro(status, key, name)
+        await self._add_ro(status, "xle_heartbeat_age", "XLeHeartbeatAge")
+        await self._add_ro(status, "xle_liveness", "XLeLivenessState")
         await self._add_rw_bool(status, "scanner_fault_ack", "ScannerFaultAck",
                                 COIL_ABS["scanner_fault_ack"])
         await self._add_rw_bool(status, "scanner_retry", "ScannerRetry",
                                 COIL_ABS["scanner_retry"])
+        await self._add_rw_bool(status, "xle_fault_ack", "XLeFaultAck",
+                                COIL_ABS["xle_fault_ack"])
+        await self._add_rw_bool(status, "xle_retry", "XLeRetry",
+                                COIL_ABS["xle_retry"])
         for i in range(3):
             await self._add_rw_bool(status, f"lane_run{i}", f"Induct{i+1}Running",
                                     COIL_ABS["lane_run"] + i)
@@ -459,6 +468,8 @@ async def push(ns, handler, snap):
     await w("prog_hash", sp[SP["prog_hash"]])
     for key in ("scanner_state", "scanner_fault_mask", "scanner_ack_mask", "scanner_wait"):
         await w(key, sp[SP[key]])
+    await w("xle_heartbeat_age", snap["liveness"][0])
+    await w("xle_liveness", snap["liveness"][1])
     for i in range(3):
         await w(f"shift_ct{i}", sp[SP["shift_ct"] + i])
     # reset_cmd is self-clearing in the PLC: it is true for one scan and the
@@ -468,6 +479,8 @@ async def push(ns, handler, snap):
     await w("fault_reset", bool(co[COIL["fault_reset"]]))
     await w("scanner_fault_ack", bool(co[COIL["scanner_fault_ack"]]))
     await w("scanner_retry", bool(co[COIL["scanner_retry"]]))
+    await w("xle_fault_ack", bool(co[COIL["xle_fault_ack"]]))
+    await w("xle_retry", bool(co[COIL["xle_retry"]]))
 
     await w("min_gap", sp[SP["min_gap"]])
     await w("noread_sp", sp[SP["noread_sp"]])

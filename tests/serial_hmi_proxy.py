@@ -1,8 +1,8 @@
 """Temporary localhost bridge to the isolated SCADA HMI over its serial console.
 
 Run on the hypervisor for browser checks. The bridge adds no host address or
-route to the isolated networks and forwards only GET /, GET /api, and the two
-scanner fault button POSTs to the guest's own localhost HMI.
+route to the isolated networks and forwards only GET /, GET /api, and the
+scanner/XLe fault button POSTs to the guest's own localhost HMI.
 """
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,7 +45,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def respond(self, path, post=False):
         allowed = {"/", "/api", "/cmd/scanner_fault_ack/1",
-                   "/cmd/scanner_retry/1"}
+                   "/cmd/scanner_retry/1", "/cmd/xle_fault_ack/1",
+                   "/cmd/xle_retry/1"}
         if path not in allowed or (post != path.startswith("/cmd/")):
             self.send_error(404)
             return
