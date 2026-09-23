@@ -372,6 +372,7 @@ VAR
   scan1_bc     AT %IW159      : INT;
   scan1_status AT %IW160      : INT;
   scan1_len    AT %IW161      : INT;
+  scan1_nonce  AT %IW164      : INT;
   scan2_trig   AT %QW122      : INT;
   scan2_serial AT %QW123      : INT;
   scan2_seed   AT %QW124      : INT;
@@ -380,6 +381,7 @@ VAR
   scan2_bc     AT %IW170      : INT;
   scan2_status AT %IW171      : INT;
   scan2_len    AT %IW172      : INT;
+  scan2_nonce  AT %IW175      : INT;
   scan3_trig   AT %QW126      : INT;
   scan3_serial AT %QW127      : INT;
   scan3_seed   AT %QW128      : INT;
@@ -388,6 +390,7 @@ VAR
   scan3_bc     AT %IW181      : INT;
   scan3_status AT %IW182      : INT;
   scan3_len    AT %IW183      : INT;
+  scan3_nonce  AT %IW186      : INT;
 END_VAR
 
 VAR
@@ -415,6 +418,8 @@ VAR
   tun_seq_1, tun_seq_2, tun_seq_3 : INT := 0;
   tun_wait_1, tun_wait_2, tun_wait_3 : BOOL := FALSE;
   init_done : BOOL := FALSE;
+  reset_nonce : INT := 0;
+  scanner_reset_pending : BOOL := FALSE;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -430,7 +435,7 @@ IF NOT init_done THEN
   rate_sp_1  := 14; rate_sp_2 := 14; rate_sp_3 := 14;
   noread_sp  := 30;
   serial_next := 1;
-  prog_hash := 18436;
+  prog_hash := 24111;
 
   (* master_seed is the root of the run. The controller no longer draws
      destinations or no-reads itself: both moved to the camera tunnels,
@@ -489,6 +494,12 @@ IF NOT init_done THEN
   tun_pkg_1 := 0; tun_seq_1 := 0; tun_wait_1 := FALSE;
   tun_pkg_2 := 0; tun_seq_2 := 0; tun_wait_2 := FALSE;
   tun_pkg_3 := 0; tun_seq_3 := 0; tun_wait_3 := FALSE;
+  reset_nonce := reset_nonce + 1;
+  IF reset_nonce > 30000 THEN reset_nonce := 1; END_IF;
+  scanner_reset_pending := TRUE;
+  scan1_trig := 32767; scan1_serial := reset_nonce;
+  scan2_trig := 32767; scan2_serial := reset_nonce;
+  scan3_trig := 32767; scan3_serial := reset_nonce;
   jam_alarm := FALSE; coll_alarm := FALSE;
   noread_alarm := FALSE; nohome_alarm := FALSE;
   auto_mode := TRUE;
@@ -594,6 +605,16 @@ ELSE
 END_IF;
 
 (* ---------- camera tunnels ---------- *)
+scan1_seed := master_seed; scan2_seed := master_seed; scan3_seed := master_seed;
+scan1_nrrate := noread_sp; scan2_nrrate := noread_sp; scan3_nrrate := noread_sp;
+IF scanner_reset_pending THEN
+  IF scan1_result = 32767 AND scan1_status = 6 AND scan1_nonce = reset_nonce
+     AND scan2_result = 32767 AND scan2_status = 6 AND scan2_nonce = reset_nonce
+     AND scan3_result = 32767 AND scan3_status = 6 AND scan3_nonce = reset_nonce THEN
+    scanner_reset_pending := FALSE;
+    scan1_trig := 0; scan2_trig := 0; scan3_trig := 0;
+  END_IF;
+ELSE
 (* tunnel 1: request a read on arrival, apply the answer when
    it comes back. Identity crosses a network hop and takes time, so
    a package can leave before its result arrives. That is a late
@@ -613,7 +634,7 @@ IF ib1[10] = 0 OR ib1[10] <> tun_pkg_1 THEN
     scan1_serial := ib1[10];
     tun_wait_1 := TRUE;
   END_IF;
-ELSIF tun_wait_1 AND scan1_result = tun_seq_1 THEN
+ELSIF tun_wait_1 AND scan1_result = tun_seq_1 AND scan1_nonce = reset_nonce THEN
   tun_wait_1 := FALSE;
   bc := scan1_bc;
   sts := scan1_status;
@@ -667,7 +688,7 @@ IF ib2[10] = 0 OR ib2[10] <> tun_pkg_2 THEN
     scan2_serial := ib2[10];
     tun_wait_2 := TRUE;
   END_IF;
-ELSIF tun_wait_2 AND scan2_result = tun_seq_2 THEN
+ELSIF tun_wait_2 AND scan2_result = tun_seq_2 AND scan2_nonce = reset_nonce THEN
   tun_wait_2 := FALSE;
   bc := scan2_bc;
   sts := scan2_status;
@@ -721,7 +742,7 @@ IF ib3[10] = 0 OR ib3[10] <> tun_pkg_3 THEN
     scan3_serial := ib3[10];
     tun_wait_3 := TRUE;
   END_IF;
-ELSIF tun_wait_3 AND scan3_result = tun_seq_3 THEN
+ELSIF tun_wait_3 AND scan3_result = tun_seq_3 AND scan3_nonce = reset_nonce THEN
   tun_wait_3 := FALSE;
   bc := scan3_bc;
   sts := scan3_status;
@@ -1323,6 +1344,8 @@ IF acc_o3 >= 1.0 THEN
     ort3[18] := 0;
   END_IF;
 END_IF;
+
+END_IF; (* scanner reset handshake gates package movement *)
 
 (* publish belt state to the exposed register map *)
 ib1_c0 := ib1[0];

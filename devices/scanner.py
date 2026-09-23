@@ -27,7 +27,7 @@ reason as the drive profile: OpenPLC writes a mapped output block as a unit.
     7  length_cm    scanner
     8  width_cm     scanner
     9  height_cm    scanner
-   10  scan_count   scanner  cumulative scans performed
+   10  run_nonce    scanner  echoes the most recent reset token
 
 The no-read rate is configuration pushed from the controller rather than a
 constant here, which is how a tunnel is actually set up and which keeps the
@@ -39,9 +39,10 @@ rather than a shared variable. The PLC must wait for result_seq to catch up,
 so a scan takes real time and can be late, lost, or answered out of order.
 That is the failure domain a scan result actually lives in.
 
-Determinism. Every random draw comes from a stream seeded by the PLC's
-master_seed, so a scenario replays identically. Reseeding happens whenever the
-seed register changes, which is what a run reset looks like from here.
+Reset uses trig_seq=32767 and a nonzero run nonce in trig_serial. The scanner
+reseeds even when seed is unchanged, clears history and the previous response,
+then acknowledges with result_seq=32767, status=6, and run_nonce at register
+10. Normal replies carry that nonce too, so the PLC rejects stale replies.
 """
 import sys
 import threading
@@ -54,6 +55,8 @@ from pymodbus.datastore import (ModbusSequentialDataBlock,
 # Read results. GOOD is the overwhelming majority; the rest are the ways a
 # real tunnel fails, each of which the controller has to handle differently.
 ST_GOOD, ST_NOREAD, ST_MULTIPLE, ST_OVERSIZE, ST_DUPLICATE, ST_INVALID = range(6)
+ST_RESET = 6
+RESET_SEQ = 32767
 
 # Per mille rates for the non-good outcomes. The no-read rate arrives from the
 # controller; the rest are properties of the tunnel. Together they sum to
@@ -95,45 +98,50 @@ class Stream:
         return (self.v >> 16) % n
 
 
-def simulate(ctx, tag, lane):
-    # Stream constants differ per lane so three tunnels fed the same seed do
-    # not produce the same barcodes.
-    # Distinct salts so three tunnels handed the same run seed do not read
-    # the same barcodes.
-    s_dest = Stream(1103515245, 12345, 7919 * lane)
-    s_fail = Stream(1103515245, 12345, 6271 * lane + 11)
-    s_dims = Stream(1103515245, 12345, 5081 * lane + 23)
+class Scanner:
+    def __init__(self, ctx, tag, lane):
+        self.ctx, self.tag = ctx, tag
+        self.s_dest = Stream(1103515245, 12345, 7919 * lane)
+        self.s_fail = Stream(1103515245, 12345, 6271 * lane + 11)
+        self.s_dims = Stream(1103515245, 12345, 5081 * lane + 23)
+        self.last_seed = None
+        self.last_seq = 0
+        self.run_nonce = 0
+        self.recent = []
+        self.scan_count = 0
 
-    last_seed = None
-    last_seq = 0
-    recent = []                 # serials seen lately, for duplicate detection
-
-    while True:
-        time.sleep(DT)
+    def step(self):
+        ctx, tag = self.ctx, self.tag
         hr = ctx[0].getValues(3, 0, count=11)
         (trig_seq, trig_serial, seed, noread_rate,
-         result_seq, _, _, _, _, _, scan_count) = hr
+         _, _, _, _, _, _, _) = hr
         rate_noread = noread_rate if noread_rate > 0 else DEFAULT_NOREAD
 
-        if seed and seed != last_seed:
-            last_seed = seed
-            s_dest.seed(seed)
-            s_fail.seed(seed)
-            s_dims.seed(seed)
-            recent = []
-            scan_count = 0
-            print(f"[{tag}] reseeded to {seed}", flush=True)
+        if trig_seq == RESET_SEQ:
+            if trig_serial and trig_serial != self.run_nonce:
+                self.run_nonce = trig_serial
+                self.last_seed = seed
+                self.s_dest.seed(seed)
+                self.s_fail.seed(seed)
+                self.s_dims.seed(seed)
+                self.recent = []
+                self.last_seq = 0
+                self.scan_count = 0
+                ctx[0].setValues(3, 4, [RESET_SEQ, 0, ST_RESET,
+                                        0, 0, 0, self.run_nonce])
+                print(f"[{tag}] reset nonce={self.run_nonce} seed={seed}", flush=True)
+            return
 
-        if trig_seq == last_seq or trig_seq == 0:
-            continue
-        last_seq = trig_seq
+        if not self.run_nonce or trig_seq == self.last_seq or trig_seq == 0:
+            return
+        self.last_seq = trig_seq
 
-        length = 20 + s_dims.next(100)
-        width = 15 + s_dims.next(60)
-        height = 10 + s_dims.next(50)
+        length = 20 + self.s_dims.next(100)
+        width = 15 + self.s_dims.next(60)
+        height = 10 + self.s_dims.next(50)
 
-        roll = s_fail.next(1000)
-        dest = s_dest.next(9) + 1
+        roll = self.s_fail.next(1000)
+        dest = self.s_dest.next(9) + 1
         barcode = dest * 1000 + (trig_serial % 1000)
 
         if roll < rate_noread:
@@ -144,33 +152,40 @@ def simulate(ctx, tag, lane):
             status, barcode = ST_MULTIPLE, 0
         elif roll < rate_noread + RATE_MULTIPLE + RATE_OVERSIZE:
             status = ST_OVERSIZE
-            length = OVERSIZE_CM + s_dims.next(40)
+            length = OVERSIZE_CM + self.s_dims.next(40)
         elif roll < rate_noread + RATE_MULTIPLE + RATE_OVERSIZE + RATE_DUPLICATE:
             # The same label read twice: a real barcode belonging to a package
             # already counted. The read succeeded, which is what makes this
             # more dangerous than a no-read.
             status = ST_DUPLICATE
-            if recent:
-                barcode = recent[-1]
+            if self.recent:
+                barcode = self.recent[-1]
         elif roll < (rate_noread + RATE_MULTIPLE + RATE_OVERSIZE
                      + RATE_DUPLICATE + RATE_INVALID):
             # Decoded cleanly but into something that is not a valid label.
             status = ST_INVALID
-            barcode = 99000 + s_dest.next(999)
+            barcode = 99000 + self.s_dest.next(999)
         else:
             status = ST_GOOD
 
         if barcode and status in (ST_GOOD, ST_OVERSIZE):
-            recent.append(barcode)
-            if len(recent) > 8:
-                recent.pop(0)
+            self.recent.append(barcode)
+            if len(self.recent) > 8:
+                self.recent.pop(0)
 
-        scan_count = (scan_count + 1) % 32000
+        self.scan_count = (self.scan_count + 1) % 32000
         ctx[0].setValues(3, 4, [trig_seq, barcode, status,
-                                length, width, height, scan_count])
+                                length, width, height, self.run_nonce])
         print(f"[{tag}] seq={trig_seq:5d} serial={trig_serial:4d} "
               f"bc={barcode:5d} st={status} {length}x{width}x{height}cm",
               flush=True)
+
+
+def simulate(ctx, tag, lane):
+    scanner = Scanner(ctx, tag, lane)
+    while True:
+        time.sleep(DT)
+        scanner.step()
 
 
 if __name__ == "__main__":

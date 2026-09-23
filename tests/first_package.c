@@ -19,12 +19,21 @@ static void scan(void) { SORTER_body__(&plc); }
 int main(void) {
     SORTER_init__(&plc, 0);
     scan();
-    assert(WORD(249) == 18436);
+    assert(WORD(249) == 24111);
+    assert(WORD(118) == 32767 && WORD(122) == 32767 && WORD(126) == 32767);
+    assert(WORD(119) == 1 && WORD(123) == 1 && WORD(127) == 1);
     assert(WORD(220) == 0);
     assert(WORD(270) == 0);
 
     BIT(110, 0) = 1;
+    for (int i = 0; i < 20; ++i) scan();
+    assert(WORD(220) == 0); /* no movement before all three ACKs */
+    INPUT(158) = INPUT(169) = INPUT(180) = 32767;
+    INPUT(160) = INPUT(171) = INPUT(182) = 6;
+    INPUT(164) = INPUT(175) = INPUT(186) = 1;
     scan();
+    assert(WORD(118) == 0 && WORD(122) == 0 && WORD(126) == 0);
+    assert(WORD(220) == 0);
     assert(WORD(100) == 3);
     assert(WORD(101) == 200);
     assert(WORD(220) == 0);
@@ -50,6 +59,11 @@ int main(void) {
     INPUT(158) = 1;
     INPUT(159) = 1001;
     INPUT(160) = 0;
+    INPUT(164) = 0; /* same sequence, prior run: must be ignored */
+    scan();
+    assert(WORD(270) == 1);
+    assert(WORD(211) == 0);
+    INPUT(164) = 1;
     scan();
     assert(WORD(270) == 1001);
     assert(WORD(330) == 14);

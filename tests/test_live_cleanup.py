@@ -31,19 +31,27 @@ class Client:
 class Plc(Client):
     def __init__(self, original_lanes, fail_at=None, initial_seed=137):
         super().__init__()
-        self.state = {880: False, 883: original_lanes[0], 884: original_lanes[1],
-                      247: initial_seed}
+        self.state = {880: False, 247: initial_seed, 249: 24111,
+                      **{address: True for address in range(881, 888)},
+                      **{address: 100 + address for address in range(200, 211)}}
+        self.state[883], self.state[884] = original_lanes
+        self.initial = self.state.copy()
         self.events = []
         self.fail_at = fail_at
 
     def read_coils(self, address, count, unit):
         self.events.append(("read", address, count))
-        return Reply(bits=[self.state[address], self.state[address + 1]])
+        return Reply(bits=[self.state[address + index] for index in range(count)])
 
     def read_holding_registers(self, address, count, unit):
-        return Reply(registers=[self.state[247] if address == 247 else 18436])
+        return Reply(registers=[self.state.get(address + index, 0)
+                                for index in range(count)])
 
     def read_input_registers(self, address, count, unit):
+        if address in (158, 169, 180):
+            return Reply(registers=[32767])
+        if address in (160, 171, 182):
+            return Reply(registers=[6])
         raise RuntimeError("injected measurement failure")
 
     def write_coil(self, address, value, unit):
@@ -52,6 +60,11 @@ class Plc(Client):
             self.fail_at = None
             raise RuntimeError("injected setup failure")
         self.state[address] = value
+        if address == 910 and value:
+            for register in range(200, 211):
+                self.state[register] = 1
+            for coil in range(881, 888):
+                self.state[coil] = True
         return Reply()
 
     def write_register(self, address, value, unit):
@@ -76,14 +89,14 @@ class CleanupTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, expected_error):
                 load_run()(plc, drive, camera)
 
-        self.assertEqual(plc.events[0], ("read", 883, 2))
-        coil_writes = [event for event in plc.events if event[0] == "write"]
-        self.assertEqual(coil_writes[-3:], [("write", 880, False),
-                                            ("write", 883, original_lanes[0]),
-                                            ("write", 884, original_lanes[1])])
+        self.assertEqual(plc.events[0], ("read", 881, 7))
         self.assertEqual([plc.state[880], plc.state[883], plc.state[884]],
                          [False, *original_lanes])
         self.assertEqual(plc.state[247], initial_seed)
+        self.assertEqual([plc.state[x] for x in range(881, 888)],
+                         [plc.initial[x] for x in range(881, 888)])
+        self.assertEqual([plc.state[x] for x in range(200, 211)],
+                         [plc.initial[x] for x in range(200, 211)])
         self.assertTrue(all(client.closed for client in (plc, drive, camera)))
 
     def test_measurement_failure_restores_mixed_lane_values(self):

@@ -1,7 +1,7 @@
 # Drives guest simulation
 
-`devices/vfd.py` and `devices/scanner.py` are byte-for-byte copies of the
-running `/home/kevin/vfd.py` and `/home/kevin/scanner.py` on the `drives` VM.
+`devices/vfd.py` and `devices/scanner.py` are the reproducible sources for
+`/home/kevin/vfd.py` and `/home/kevin/scanner.py` on the `drives` VM.
 The unit templates and nine instance environment files here are also copies
 of the deployed configuration. No log files, credentials, virtual environment,
 or generated files are included. The deployed Python environment reports
@@ -48,34 +48,40 @@ drive updates 3–8 every 100 ms.
 ## Scanner holding registers
 
 All three tunnels use the same map. The PLC writes registers 0–3; the scanner
-checks for a new trigger every 50 ms and writes 4–10. `result_seq` must match
-the triggering `trig_seq` before the PLC accepts a result.
+checks every 50 ms and writes 4–10. A normal result is accepted only when
+`result_seq` matches the request and `run_nonce` matches the current run.
 
 | Address | Name | Meaning |
 | ---: | --- | --- |
-| 0 | `trig_seq` | new request sequence |
-| 1 | `trig_serial` | package serial under the tunnel |
+| 0 | `trig_seq` | normal request 1–30000; 32767 requests reset; 0 is idle |
+| 1 | `trig_serial` | package serial; reset nonce when `trig_seq` is 32767 |
 | 2 | `seed` | random-stream seed from the PLC |
 | 3 | `noread_rate` | failed-read rate per mille; 0 selects the scanner's default 22 |
 | 4 | `result_seq` | completed request sequence |
 | 5 | `barcode` | destination × 1000 + serial, or 0 for an unreadable package |
-| 6 | `status` | 0 good, 1 no-read, 2 multiple, 3 oversize, 4 duplicate, 5 invalid |
+| 6 | `status` | 0 good, 1 no-read, 2 multiple, 3 oversize, 4 duplicate, 5 invalid, 6 reset acknowledged |
 | 7 | `length_cm` | package length |
 | 8 | `width_cm` | package width |
 | 9 | `height_cm` | package height |
-| 10 | `scan_count` | cumulative scans, wrapping at 32000 |
+| 10 | `run_nonce` | reset token echoed in the ACK and every normal result |
 
-## Reset behavior observed on the running guests
+## Reset exchange
 
-The `scanner.py` docstring describes reseeding when a run resets, but its code
-actually reseeds only when register 2 changes to a different nonzero value.
-The PLC's `reset_cmd` clears package state while retaining a valid
-`master_seed`, so a reset with the same seed does **not** replay the scanner's
-barcode sequence or clear its recent-barcode history. Consecutive live tests
-with seed 137 produced different first-package destinations. In a later run,
-the first serial received status 4 with barcode `7002`, a duplicate from an
-earlier package. The live test now changes the seed to 138 and back to 137
-before reset so the scanner clears its recent-barcode history; it restores
-the original seed after the test. This repository preserves the deployed code
-exactly. A general same-seed replay would need a separate reset signal or an
-explicit seed change protocol.
+On init or operator reset, the PLC increments a private nonce (1–30000), sends
+`trig_seq=32767`, `trig_serial=nonce`, and the current seed to all three
+tunnels, then holds package movement. Each scanner reseeds its destination,
+failure, and dimension streams even if the seed is unchanged; clears its
+recent-barcode history, request sequence, and scan count; and replaces the
+entire previous response with `[32767, 0, 6, 0, 0, 0, nonce]` at registers
+4–10. Repeated polls of the same reset command do not reseed again. The PLC
+waits for all three ACKs with the matching nonce, then writes `trig_seq=0`.
+Normal replies echo the nonce in register 10. This rejects a delayed response
+from the preceding run even if its normal sequence number is reused.
+
+Register 10 previously held `scan_count`; it now holds `run_nonce`. Its address
+and the 11-register read block are unchanged. A PLC and scanner from different
+protocol versions must not be mixed. The nonce wraps after 30000 resets;
+the handshake assumes no response from 30000 runs earlier remains in flight.
+After a cold PLC restart, a scanner service restart is needed if its current
+nonce happens to equal the PLC's initial nonce; the two-run live replay below
+exercises ordinary operator resets, not that restart case.
