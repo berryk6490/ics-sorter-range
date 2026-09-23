@@ -23,6 +23,7 @@ static void event(int seq, int type, int slot, int actual) {
     int base = slot ? 542 : 530;
     WORD(580) = type; WORD(581) = base == 530 ? WORD(530) : WORD(542);
     WORD(582) = base == 530 ? WORD(531) : WORD(543);
+    WORD(578) = slot ? WORD(645) : WORD(644);
     WORD(583) = actual; WORD(584) = type * 10; WORD(585) = seq;
     scan();
     assert(WORD(586) == seq);
@@ -76,6 +77,7 @@ int main(void) {
     event(8, 6, 1, 0);
     assert(WORD(546) == 7 && WORD(549) == 4 && WORD(226) == 0);
     assert(WORD(219) == 1 && WORD(592) == 1 && BIT(113, 5));
+    assert(WORD(646) == 1);
     WORD(610) = WORD(558); WORD(611) = WORD(559); WORD(612) = WORD(509);
     WORD(613) = WORD(542); WORD(614) = WORD(543);
     WORD(615) = 3; WORD(616) = 150; WORD(617) = 6; WORD(618) = 0;

@@ -1,4 +1,4 @@
-"""Lane 1 XLe: correlate scanner reads, ask ASX, command PLC, log outcomes.
+"""XLe: correlate lane 1/2 scanner reads, ask ASX, command PLC, log outcomes.
 
 Run on SCADA with pymodbus 3.6.9. Events are JSON lines on stdout. The
 The legacy one-package runner and bounded two-slot multi runner share this file.
@@ -212,13 +212,15 @@ class OutcomeJournal:
         self.db.close()
 
 
-def package_request(epoch, nonce, row):
+def package_request(epoch, nonce, row, lane=1):
     token, serial, seq, barcode = row[:4]
-    return {"package_id": f"l1-{epoch}-{nonce}-{token}-{serial}",
+    if lane not in (1, 2):
+        raise ValueError(f"invalid PLC package lane {lane}")
+    return {"package_id": f"l{lane}-{epoch}-{nonce}-{token}-{serial}",
             "request_id": str(uuid.uuid4()), "barcode": barcode,
             "package_serial": serial, "slot_token": token,
             "scanner_sequence": seq, "scanner_run_nonce": nonce,
-            "run_epoch": epoch, "lane": 1}
+            "run_epoch": epoch, "lane": lane}
 
 
 def plc_epoch(client):
@@ -338,8 +340,12 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                     recovery_proved = False
                 nonce = read(client, 509)[0]
                 rows = slot_rows(client)
+                lanes = read(client, 644, 2)
                 if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch:
                     continue  # reset raced the row read
+                if any(row[0] and row[4] >= 2 and lane not in (1, 2)
+                       for row, lane in zip(rows, lanes)):
+                    fail_closed(client, "PLC occupied slot has no valid lane identity")
                 if startup_slots is None:
                     startup_slots = {(current_epoch, nonce, r[0], r[1], r[2])
                                      for r in rows if r[0] and r[4] >= 2}
@@ -360,6 +366,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                             task["future"].cancel()
                         event("slot_disappeared", package_id=task["request"]["package_id"])
                 for slot, row in enumerate(rows):
+                    lane = lanes[slot]
                     token, serial, seq, barcode, state, dest, actual, reason, scan_tick, accept_tick, divert_tick, plc_cmd = row
                     if not token or state < 2 or (state == 2 and not heartbeat_accepted
                                                     and liveness == 0):
@@ -367,7 +374,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                     key = (current_epoch, nonce, token, serial, seq)
                     if key not in pending and len(pending) < 2 and \
                        (packages == 0 or completed + len(pending) < packages):
-                        request = package_request(current_epoch, nonce, row)
+                        request = package_request(current_epoch, nonce, row, lane)
                         future = (pool.submit(lookup, request, asx_url)
                                   if state == 2 and barcode and liveness == 0 else None)
                         pending[key] = {"slot": slot, "request": request,
@@ -415,7 +422,8 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                             fresh_nonce = read(client, 509)[0]
                             fresh_epoch = plc_epoch(client)
                             fresh_row = slot_rows(client)[slot]
-                            if fresh_nonce != nonce or fresh_epoch != current_epoch or fresh_row[:5] != row[:5]:
+                            if (fresh_nonce != nonce or fresh_epoch != current_epoch or
+                                fresh_row[:5] != row[:5] or read(client, 644, 2)[slot] != lane):
                                 event("decision_discarded", package_id=package_id,
                                       reason="run_or_slot_changed")
                                 continue
@@ -442,7 +450,8 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                     if state in TERMINAL:
                         if task["terminal_at"] is None:
                             task["terminal_at"] = time.monotonic()
-                            outcome = {"package_id": package_id, "command_id": plc_cmd,
+                            outcome = {"package_id": package_id, "lane": lane,
+                                       "command_id": plc_cmd,
                                        "state": TERMINAL[state], "reason": reason,
                                        "actual_trailer": actual, "scanner_sequence": seq,
                                        "slot_token": token, "scan_tick": scan_tick,
@@ -459,7 +468,9 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                             else:
                                 event("plc_outcome_already_recorded", package_id=package_id)
                         if time.monotonic() - task["terminal_at"] >= terminal_hold:
-                            if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch or slot_rows(client)[slot][:5] != row[:5]:
+                            if (read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch or
+                                slot_rows(client)[slot][:5] != row[:5] or
+                                read(client, 644, 2)[slot] != lane):
                                 continue
                             command_id = command_id % 30000 + 1
                             if write_multi(client, command_id, 2, slot, row, nonce=nonce,

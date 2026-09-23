@@ -74,6 +74,7 @@ class PLC:
         if address == 569: return Reply([self.liveness])
         if address == 572: return Reply([self.recovery_sequence])
         if address == 573: return Reply([self.heartbeat_sequence])
+        if address == 644: return Reply([1, 0])
         if address == 530:
             self.polls += 1
             if self.recirc_after and self.row[4] == 2 and self.polls >= 3:
@@ -139,6 +140,13 @@ class PLC:
 
 
 class Recovery(unittest.TestCase):
+    def test_lane_two_identity_and_asx_request(self):
+        request = xle.package_request(8, 3,
+                                      [41, 2, 9, 5002, 2, 3, 0, 0, 100, 0, 0, 0],
+                                      lane=2)
+        self.assertEqual(request["package_id"], "l2-8-3-41-2")
+        self.assertEqual(request["lane"], 2)
+
     def test_restart_with_already_terminal_slot(self):
         plc = PLC(5)
         with tempfile.TemporaryDirectory() as directory, patch.object(xle, "event") as emit:

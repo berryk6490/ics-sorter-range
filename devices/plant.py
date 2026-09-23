@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent lane 1 package motion, driven by the six existing VFDs.
+"""Independent lane 1/2 package motion, driven by existing VFDs.
 
 The plant is a Modbus master on the existing drives VM and L1 network. It
 reads PLC requests and slot commands, writes one sensor event at a time, and
@@ -14,7 +14,8 @@ import time
 
 LOG = logging.getLogger("sorter_plant")
 PLC = "10.10.1.10"
-VFD = ["10.10.1.21", "10.10.1.24", "10.10.1.25", "10.10.1.26"]
+VFD = ["10.10.1.21", "10.10.1.22", "10.10.1.24", "10.10.1.25", "10.10.1.26"]
+ENTRY = {1: 2.0, 2: 5.0}
 INDUCT, TUNNEL, DIVERT, TRAILER, RECIRC, FAILED_CONFIRM = range(1, 7)
 
 
@@ -23,6 +24,7 @@ class Package:
     token: int
     serial: int
     length: float
+    lane: int = 1
     position: float = 0.0
     outbound: int = 0
     outbound_position: float = 2.0
@@ -48,33 +50,42 @@ class PlantModel:
         self.pending = deque()
         self.queued = deque()
         self.last_token = 0
+        self.lane_by_token = {}
         self.clock = 0.0
         self.recent = {}
         self.last_event = {}
         self.miss_divert_token = miss_divert_token
         self.fail_confirm_token = fail_confirm_token
 
-    def request(self, token, serial):
+    def request(self, token, serial, lane=1):
+        if lane not in ENTRY:
+            raise ValueError(f"unsupported plant lane {lane}")
         if token and token != self.last_token:
             self.last_token = token
-            self.queued.append(Package(token, serial, self.length))
+            self.lane_by_token[token] = lane
+            self.queued.append(Package(token, serial, self.length, lane))
 
     def step(self, seconds, rpm, slots):
         """slots maps token to (serial, state, destination) from PLC rows."""
         self.clock += seconds
         self.recent = {token: record for token, record in self.recent.items()
                        if record[0] > self.clock}
-        if self.queued and rpm[0] > 0 and (
-            not self.packages or
-            all(p.outbound or p.position >= self.length + self.spacing
-                for p in self.packages)
-        ):
-            p = self.queued.popleft()
-            self.packages.append(p)
-            self.pending.append((INDUCT, p.token, p.serial, 0, 0))
+        active_tokens = {p.token for p in self.packages} | set(self.recent)
+        self.last_event = {token: value for token, value in self.last_event.items()
+                           if token in active_tokens}
+        for p in list(self.queued):
+            if rpm[p.lane - 1] > 0 and all(
+                other.lane != p.lane or other.outbound or
+                other.position >= self.length + self.spacing
+                for other in self.packages):
+                self.queued.remove(p)
+                self.packages.append(p)
+                self.pending.append((INDUCT, p.token, p.serial, 0, 0))
+        # Advance outbound parcels first. Admission below then compares every
+        # candidate with the new positions, independent of list insertion order.
         for p in list(self.packages):
             if p.outbound:
-                p.outbound_position += seconds * 10 * max(0, rpm[p.outbound]) / 1750
+                p.outbound_position += seconds * 10 * max(0, rpm[p.outbound + 1]) / 1750
                 if not p.terminal_sent and p.outbound_position >= 12 + 3 * ((p.target - 1) % 3):
                     p.terminal_sent = True
                     kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
@@ -86,8 +97,12 @@ class PlantModel:
                                             int(p.outbound_position * 10),
                                             kind, actual)
                     self.packages.remove(p)
+        candidates = []
+        for p in list(self.packages):
+            if p.outbound:
                 continue
-            p.position += seconds * 10 * max(0, rpm[0]) / 1750
+            speed = seconds * 10 * max(0, rpm[p.lane - 1]) / 1750
+            p.position += speed
             if p.position >= 10 and not p.tunnel_sent:
                 p.tunnel_sent = True
                 self.pending.append((TUNNEL, p.token, p.serial, 0, int(p.position * 10)))
@@ -101,28 +116,44 @@ class PlantModel:
                     p.target = dest if state == 3 and 1 <= dest <= 9 else -1
                 target_cell = 14 + 2 * ((p.target - 1) // 3) if p.target > 0 else 14
                 if p.position >= target_cell:
-                    p.divert_sent = True
                     belt = (p.target - 1) // 3 + 1 if p.target > 0 else 0
                     if p.token == self.miss_divert_token:
                         belt = 0
-                    self.pending.append((DIVERT, p.token, p.serial, belt,
-                                         int(p.position * 10)))
-                    if belt:
-                        p.outbound = belt
-                        p.outbound_position = 2.0
+                    candidates.append((p, belt, target_cell))
             if p.divert_sent and not p.outbound and p.position >= 19:
                 self.pending.append((RECIRC, p.token, p.serial, 0,
                                      int(p.position * 10)))
-                self.recent[p.token] = (self.clock + 2.0, p.serial, 1,
+                self.recent[p.token] = (self.clock + 2.0, p.serial,
+                                        1 if p.lane == 1 else 5,
                                         int(p.position * 10), RECIRC, 0)
                 self.packages.remove(p)
+
+        # First arrival wins; a simultaneous arrival is lane 1 before lane 2.
+        # One waiting package per lane can accumulate at its divert gate.
+        # Capacity is the two PLC slots, and no outbound pair may be closer
+        # than one package length plus the configured clear spacing.
+        candidates.sort(key=lambda item: (item[2] - item[0].position, item[0].lane))
+        for p, belt, target_cell in candidates:
+            if belt:
+                entry = ENTRY[p.lane]
+                clear = all(other is p or other.outbound != belt or
+                            abs(other.outbound_position - entry) >= self.length + self.spacing
+                            for other in self.packages)
+                if not clear:
+                    p.position = target_cell
+                    continue
+                p.outbound = belt
+                p.outbound_position = entry
+            p.divert_sent = True
+            self.pending.append((DIVERT, p.token, p.serial, belt,
+                                 int(p.position * 10)))
 
     def telemetry(self, token, serial):
         """Return belt, position ×10, latest sent sensor, actual; all bounded."""
         for package in self.packages:
             if package.token == token and package.serial == serial:
                 kind, actual = self.last_event.get(token, (0, 0))
-                belt = package.outbound + 1 if package.outbound else 1
+                belt = package.outbound + 1 if package.outbound else (1 if package.lane == 1 else 5)
                 position = (package.outbound_position if package.outbound
                             else package.position)
                 return belt, min(300, int(position * 10)), kind, actual
@@ -200,11 +231,11 @@ def run(args):
             if not active:
                 time.sleep(0.1)
                 continue
-            request, token, serial = read(plc, 574, 3)
+            request, token, serial, lane = read(plc, 574, 4)
             if request and request != last_request and request == token:
                 last_request = request
-                model.request(token, serial)
-                LOG.info("request token=%s serial=%s", token, serial)
+                model.request(token, serial, lane)
+                LOG.info("request lane=%s token=%s serial=%s", lane, token, serial)
             rpm = [read(client, 5)[0] for client in drives]
             rows = read(plc, 530, 24)
             slots = {rows[i]: (rows[i + 1], rows[i + 4], rows[i + 5])
@@ -226,10 +257,14 @@ def run(args):
             if outstanding is None and model.pending:
                 event = model.pending.popleft()
                 sequence = sequence % 30000 + 1
+                event_lane = model.lane_by_token[event[1]]
+                write(plc, 578, [event_lane])
                 write(plc, 580, list(event))
                 write(plc, 585, [sequence])
                 outstanding = sequence
                 model.last_event[event[1]] = (event[0], event[3])
+                if event[0] in (TRAILER, RECIRC, FAILED_CONFIRM):
+                    model.lane_by_token.pop(event[1], None)
                 LOG.info("sensor %s", json.dumps(dict(zip(
                     ("type", "token", "serial", "actual", "position"), event))))
             time.sleep(0.1)
@@ -241,7 +276,7 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plc", default=PLC)
-    parser.add_argument("--vfd", nargs=4, default=VFD)
+    parser.add_argument("--vfd", nargs=5, default=VFD)
     parser.add_argument("--length-cm", type=float, default=60)
     parser.add_argument("--spacing-cm", type=float, default=100)
     parser.add_argument("--miss-divert-token", type=int, default=0)

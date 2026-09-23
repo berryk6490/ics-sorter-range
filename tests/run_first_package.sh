@@ -33,3 +33,9 @@ cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/
 cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
     "$build_dir/POUS.c" "$repo_dir/tests/plant_mode.c" -lm -o "$build_dir/plant_mode"
 "$build_dir/plant_mode"
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/plant_lane2.c" -lm -o "$build_dir/plant_lane2"
+"$build_dir/plant_lane2"
+cc -std=c11 -DFAIL_LANE2 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/plant_lane2.c" -lm -o "$build_dir/plant_lane2_failure"
+"$build_dir/plant_lane2_failure"

@@ -62,7 +62,7 @@ def main(case):
             for(let i=1;i<1000;i++) clearInterval(i);
             const row=[1,0,8,41,2,1,83,2,0,3];
             const d={connected:true,plant_rows:[row,[0,0,0,0,0,0,0,0,0,0]],
-                     plant_status:[1,0],plant_age:[0,0],plant_fault:0};
+                     plant_status:[1,0],plant_age:[0,0],plant_lane:[1,0],plant_fault:0};
             window.eval('currentPlantMode=true'); paintPlant(d);
             const node=document.querySelector('.pkg.plant');
             const before=node.style.transform;
@@ -84,7 +84,23 @@ def main(case):
             capture(session, "plant-stale-unavailable.png")
             print(json.dumps(result, sort_keys=True), flush=True)
             return
-        request(HMI + "/test/plant_run/" + case, "POST")
+        if case == "fault":
+            first = snapshot(session)
+            assert len(first["nodes"]) == 2, first
+            assert {n["id"].split("-")[0] for n in first["nodes"]} == {"l1", "l2"}
+            assert all(n["status"] == "stale" for n in first["nodes"]), first
+            assert "PLANT FAULT 1" in first["body"].upper(), first["body"][-1000:]
+            time.sleep(2)
+            second = snapshot(session)
+            assert [(n["id"], n["position"], n["transform"]) for n in first["nodes"]] == [
+                (n["id"], n["position"], n["transform"]) for n in second["nodes"]]
+            capture(session, "plant-lanes-service-stopped.png")
+            print(json.dumps({"first": first["nodes"], "second": second["nodes"],
+                              "state": second["state"]}, sort_keys=True), flush=True)
+            return
+        route = ("/test/lane2_run/" + ("failure" if case == "lane2_failure" else case)
+                 if case in ("shared", "lane2_failure") else "/test/plant_run/" + case)
+        request(HMI + route, "POST")
         request(HMI + "/test/plant_start", "POST")
         deadline = time.monotonic() + 175
         while time.monotonic() < deadline:
@@ -95,33 +111,48 @@ def main(case):
                 entry = (node["belt"], node["position"], node["event"], node["status"])
                 if not history or history[-1] != entry:
                     history.append(entry)
-            if case == "two":
+            if case in ("two", "shared", "lane2_failure"):
                 if len(nodes) == 2 and "two_induct" not in saved:
-                    capture(session, "plant-two-induct.png"); saved.add("two_induct")
+                    capture(session, "plant-lanes-induct.png" if case != "two" else "plant-two-induct.png")
+                    saved.add("two_induct")
+                if case != "two" and any(n["id"].startswith("l2-") and n["belt"] == "ib1"
+                                         and n["position"] == 14 for n in nodes) and "merge_wait" not in saved:
+                    capture(session, "plant-lanes-merge-wait.png"); saved.add("merge_wait")
                 if len(nodes) == 2 and all(n["belt"].startswith("ob") for n in nodes) and "two_outbound" not in saved:
-                    capture(session, "plant-two-outbound.png"); saved.add("two_outbound")
+                    capture(session, "plant-lanes-shared-outbound.png" if case != "two" else "plant-two-outbound.png")
+                    saved.add("two_outbound")
+                if case == "lane2_failure" and any(n["id"].startswith("l2-") and n["event"] == 6 for n in nodes):
+                    capture(session, "plant-lanes-failed-confirmation.png")
+                    break
                 if (len(observations) >= 2 and
                     all(any(item[2] == 4 for item in h) for h in observations.values())):
-                    capture(session, "plant-two-trailer.png")
+                    capture(session, "plant-lanes-shared-trailers.png" if case != "two" else "plant-two-trailer.png")
                     break
             else:
                 if any(n["event"] == 6 for n in nodes):
                     capture(session, "plant-failed-confirmation.png")
                     break
             time.sleep(.35)
-        expected = 2 if case == "two" else 1
+        expected = 2 if case in ("two", "shared", "lane2_failure") else 1
         assert len(observations) == expected, observations
         for identity, history in observations.items():
-            assert any(belt == "ib0" and position > 0 for belt, position, _, _ in history), (identity, history)
+            induct = "ib1" if identity.startswith("l2-") else "ib0"
+            assert any(belt == induct and position > 0 for belt, position, _, _ in history), (identity, history)
             assert any(belt.startswith("ob") and position > 0 for belt, position, _, _ in history), (identity, history)
             assert any(event == 2 for _, _, event, _ in history), (identity, history)
             assert any(event == 3 for _, _, event, _ in history), (identity, history)
-            assert any(event == (6 if case == "failure" else 4) for _, _, event, _ in history), (identity, history)
+            terminal = 6 if case == "failure" or (case == "lane2_failure" and identity.startswith("l2-")) else 4
+            assert any(event == terminal for _, _, event, _ in history), (identity, history)
         if case == "two":
             assert "two_induct" in saved and "two_outbound" in saved, saved
             assert len({next(b for b, _, _, _ in h if b.startswith("ob")) for h in observations.values()}) == 2
+        elif case == "shared":
+            assert "merge_wait" in saved and "two_outbound" in saved, saved
+            assert all(any(belt == "ob0" for belt, _, _, _ in h) for h in observations.values())
         else:
             assert "NO HOME" in state["body"].upper() or "FAILED" in state["body"].upper(), state["body"][-1000:]
+            if case == "lane2_failure":
+                assert "LANE 2 FAILED CONFIRMATION" in state["body"].upper(), state["body"][-1000:]
         print(json.dumps({"case": case, "packages": observations,
                           "final_state": state["state"], "screenshots": sorted(saved)},
                          sort_keys=True), flush=True)
@@ -131,5 +162,5 @@ def main(case):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("case", choices=("two", "failure", "stale"))
+    parser.add_argument("case", choices=("two", "failure", "stale", "fault", "shared", "lane2_failure"))
     main(parser.parse_args().case)
