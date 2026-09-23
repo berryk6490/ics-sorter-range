@@ -1,4 +1,4 @@
-"""XLe: correlate lane 1/2 scanner reads, ask ASX, command PLC, log outcomes.
+"""XLe: correlate lane 1/2/3 scanner reads, ask ASX, command PLC, log outcomes.
 
 Run on SCADA with pymodbus 3.6.9. Events are JSON lines on stdout. The
 The legacy one-package runner and bounded two-slot multi runner share this file.
@@ -214,7 +214,7 @@ class OutcomeJournal:
 
 def package_request(epoch, nonce, row, lane=1):
     token, serial, seq, barcode = row[:4]
-    if lane not in (1, 2):
+    if lane not in (1, 2, 3):
         raise ValueError(f"invalid PLC package lane {lane}")
     return {"package_id": f"l{lane}-{epoch}-{nonce}-{token}-{serial}",
             "request_id": str(uuid.uuid4()), "barcode": barcode,
@@ -343,7 +343,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                 lanes = read(client, 644, 2)
                 if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch:
                     continue  # reset raced the row read
-                if any(row[0] and row[4] >= 2 and lane not in (1, 2)
+                if any(row[0] and row[4] >= 2 and lane not in (1, 2, 3)
                        for row, lane in zip(rows, lanes)):
                     fail_closed(client, "PLC occupied slot has no valid lane identity")
                 if startup_slots is None:

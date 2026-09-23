@@ -581,20 +581,20 @@ function paintPlant(d){
     if(status===0){labels.push('SLOT '+(slot+1)+' EMPTY');continue;}
     if(status===3 || !r[3]){labels.push('<span class="unavailable">SLOT '+(slot+1)+' TELEMETRY UNAVAILABLE</span>');continue;}
     const lane=d.plant_lane[slot];
-    if(lane!==1 && lane!==2){labels.push('<span class="unavailable">SLOT '+(slot+1)+' LANE UNAVAILABLE</span>');continue;}
+    if(lane!==1 && lane!==2 && lane!==3){labels.push('<span class="unavailable">SLOT '+(slot+1)+' LANE UNAVAILABLE</span>');continue;}
     const identity='l'+lane+'-'+(r[0]+r[1]*30000)+'-'+r[2]+'-'+r[3]+'-'+r[4];
     const belt=r[5], pos=r[6]/10, kind=r[7], actual=r[8];
-    const beltId=belt===1?'ib0':belt===5?'ib1':('ob'+(belt-2));
+    const beltId=belt===1?'ib0':belt===5?'ib1':belt===6?'ib2':('ob'+(belt-2));
     const stale=status!==1 || d.plant_fault!==0;
     const state=stale?'STALE':'LIVE';
     labels.push('<span class="'+(stale?'stale':'')+'">SLOT '+(slot+1)+' '+identity+
       ' '+beltId.toUpperCase()+' '+pos.toFixed(1)+' '+(SENSOR_NAME[kind]||'UNKNOWN')+
       (actual?' '+actual:'')+' '+state+' ('+age+')</span>');
-    if(!['ib0','ib1','ob0','ob1','ob2'].includes(beltId)) continue;
+    if(!['ib0','ib1','ib2','ob0','ob1','ob2'].includes(beltId)) continue;
     now[identity]=true;
     let el=plantSeen[identity];
     if(!el){
-      el=document.createElement('div'); el.className='pkg plant '+(lane===2?'g2':'g1');
+      el=document.createElement('div'); el.className='pkg plant g'+lane;
       el.textContent=r[4]+'/'+r[3];
       el.dataset.packageId=identity;
       plantSeen[identity]=el;
@@ -729,12 +729,11 @@ async function tick(){
 
   if(d.plant_mode){
     if(!currentPlantMode){
-      clearLegacy('ib0'); clearLegacy('ib1');
+      clearLegacy('ib0'); clearLegacy('ib1'); clearLegacy('ib2');
       for(let i=0;i<3;i++) clearLegacy('ob'+i);
     }
     currentPlantMode=true;
     paintPlant(d);
-    paint('ib2',d.ib[2],d.drives[2].rpm);
   } else {
     if(currentPlantMode){clearPlant();document.getElementById('plantstate').style.display='none';}
     currentPlantMode=false;

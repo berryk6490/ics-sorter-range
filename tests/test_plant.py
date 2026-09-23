@@ -9,7 +9,7 @@ from plant import PlantModel, INDUCT, TUNNEL, DIVERT, TRAILER, RECIRC, FAILED_CO
 class PlantModelTest(unittest.TestCase):
     def drive(self, model, slots, ticks=250):
         for _ in range(ticks):
-            model.step(.1, [1750] * 5, slots)
+            model.step(.1, [1750] * 6, slots)
         return list(model.pending)
 
     def test_two_packages_have_distinct_sensor_and_trailer_events(self):
@@ -38,7 +38,7 @@ class PlantModelTest(unittest.TestCase):
     def test_speed_feedback_stops_position_and_identity_mismatch_does_not_route(self):
         model = PlantModel()
         model.request(1, 11)
-        model.step(.1, [0] * 5, {})
+        model.step(.1, [0] * 6, {})
         self.assertFalse(model.pending)
         slots = {1: (99, 3, 2)}
         events = self.drive(model, slots)
@@ -48,7 +48,7 @@ class PlantModelTest(unittest.TestCase):
     def test_bounded_telemetry_tracks_belt_and_recent_sensor(self):
         model = PlantModel()
         model.request(1, 11)
-        model.step(.1, [1750] * 5, {1: (11, 3, 2)})
+        model.step(.1, [1750] * 6, {1: (11, 3, 2)})
         model.last_event[1] = (INDUCT, 0)
         self.assertEqual(model.telemetry(1, 11)[:3], (1, 10, INDUCT))
         self.assertEqual(model.telemetry(1, 99), (0, 0, 0, 0))
@@ -64,7 +64,7 @@ class PlantModelTest(unittest.TestCase):
         slots = {1: (11, 3, 2), 2: (12, 3, 3)}
         saw_wait = False
         for _ in range(250):
-            model.step(.1, [1750] * 5, slots)
+            model.step(.1, [1750] * 6, slots)
             outbound = [p for p in model.packages if p.outbound == 1]
             if len(outbound) == 2:
                 self.assertGreaterEqual(abs(outbound[0].outbound_position -
@@ -86,6 +86,36 @@ class PlantModelTest(unittest.TestCase):
         self.assertEqual([e[0] for e in events],
                          [INDUCT, TUNNEL, DIVERT, FAILED_CONFIRM])
         self.assertEqual(model.telemetry(2, 12)[:2], (0, 0))
+
+    def test_lane_three_shares_outbound_with_lane_two_and_reuses_token(self):
+        model = PlantModel(length_cm=60, spacing_cm=100)
+        model.request(1, 11, lane=2)
+        model.request(2, 12, lane=3)
+        slots = {1: (11, 3, 3), 2: (12, 3, 2)}
+        waited = False
+        for _ in range(250):
+            model.step(.1, [1750] * 6, slots)
+            outbound = [p for p in model.packages if p.outbound == 1]
+            if len(outbound) == 2:
+                self.assertGreaterEqual(abs(outbound[0].outbound_position -
+                                            outbound[1].outbound_position),
+                                        model.length + model.spacing)
+            waited |= any(p.lane == 3 and p.position == 14 and
+                          not p.divert_sent for p in model.packages)
+        self.assertTrue(waited)
+        self.assertEqual([(e[1], e[3]) for e in model.pending if e[0] == TRAILER],
+                         [(1, 3), (2, 2)])
+        model.request(3, 13, lane=3)
+        self.drive(model, {3: (13, 3, 8)})
+        self.assertIn((TRAILER, 3, 13, 8), [e[:4] for e in model.pending])
+
+    def test_lane_three_failed_confirmation_has_no_trailer_event(self):
+        model = PlantModel(fail_confirm_token=1)
+        model.request(1, 11, lane=3)
+        events = self.drive(model, {1: (11, 3, 8)})
+        self.assertEqual([e[0] for e in events],
+                         [INDUCT, TUNNEL, DIVERT, FAILED_CONFIRM])
+        self.assertFalse(any(e[0] == TRAILER for e in events))
 
 
 if __name__ == "__main__":

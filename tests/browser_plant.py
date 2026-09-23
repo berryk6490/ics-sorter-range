@@ -98,6 +98,63 @@ def main(case):
             print(json.dumps({"first": first["nodes"], "second": second["nodes"],
                               "state": second["state"]}, sort_keys=True), flush=True)
             return
+        if case.startswith("lane3_"):
+            scenario = case.removeprefix("lane3_")
+            expected_lanes = {"all": {"l1", "l2", "l3"},
+                              "shared": {"l2", "l3"},
+                              "failure": {"l3"}}[scenario]
+            request(HMI + "/test/lane3_run/" + scenario, "POST")
+            request(HMI + "/test/plant_start", "POST")
+            deadline = time.monotonic() + 195
+            while time.monotonic() < deadline:
+                state = snapshot(session)
+                nodes = state["nodes"]
+                for node in nodes:
+                    history = observations.setdefault(node["id"], [])
+                    entry = (node["belt"], node["position"], node["event"], node["status"])
+                    if not history or history[-1] != entry:
+                        history.append(entry)
+                lanes = {key.split("-")[0] for key in observations}
+                if scenario == "all" and "l3" in lanes and "lane3_induct" not in saved:
+                    capture(session, "plant-lane3-induct.png"); saved.add("lane3_induct")
+                if scenario == "shared":
+                    if (any(n["id"].startswith("l3-") and n["belt"] == "ib2"
+                            and n["position"] == 14 for n in nodes) and
+                            "merge_wait" not in saved):
+                        capture(session, "plant-lane3-merge-wait.png"); saved.add("merge_wait")
+                    if (len(nodes) == 2 and all(n["belt"] == "ob0" for n in nodes)
+                            and "shared_outbound" not in saved):
+                        capture(session, "plant-lane3-shared-outbound.png")
+                        saved.add("shared_outbound")
+                if scenario == "failure" and any(n["event"] == 6 for n in nodes):
+                    assert "LANE 3 FAILED CONFIRMATION" in state["body"].upper()
+                    capture(session, "plant-lane3-failed-confirmation.png")
+                    saved.add("failure")
+                    break
+                if (lanes == expected_lanes and all(
+                        any(item[2] == 4 for item in h) for h in observations.values())):
+                    capture(session, "plant-lane3-trailers.png")
+                    saved.add("trailers")
+                    break
+                time.sleep(.35)
+            assert {key.split("-")[0] for key in observations} == expected_lanes, observations
+            for identity, history in observations.items():
+                lane = int(identity[1])
+                induct = {1: "ib0", 2: "ib1", 3: "ib2"}[lane]
+                assert any(belt == induct and pos > 0 for belt, pos, _, _ in history)
+                assert any(belt.startswith("ob") for belt, _, _, _ in history)
+                assert any(event == 2 for _, _, event, _ in history), (identity, history)
+                assert any(event == 3 for _, _, event, _ in history), (identity, history)
+                terminal = 6 if scenario == "failure" else 4
+                assert any(event == terminal for _, _, event, _ in history), (identity, history)
+            if scenario == "shared":
+                assert "merge_wait" in saved and "shared_outbound" in saved, saved
+            if scenario == "failure":
+                assert "failure" in saved
+            print(json.dumps({"case": case, "packages": observations,
+                              "final_state": state["state"], "screenshots": sorted(saved)},
+                             sort_keys=True), flush=True)
+            return
         route = ("/test/lane2_run/" + ("failure" if case == "lane2_failure" else case)
                  if case in ("shared", "lane2_failure") else "/test/plant_run/" + case)
         request(HMI + route, "POST")
@@ -162,5 +219,7 @@ def main(case):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("case", choices=("two", "failure", "stale", "fault", "shared", "lane2_failure"))
+    parser.add_argument("case", choices=("two", "failure", "stale", "fault", "shared",
+                                         "lane2_failure", "lane3_all", "lane3_shared",
+                                         "lane3_failure"))
     main(parser.parse_args().case)

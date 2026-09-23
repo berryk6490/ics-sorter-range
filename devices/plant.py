@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent lane 1/2 package motion, driven by existing VFDs.
+"""Independent lane 1/2/3 package motion, driven by existing VFDs.
 
 The plant is a Modbus master on the existing drives VM and L1 network. It
 reads PLC requests and slot commands, writes one sensor event at a time, and
@@ -14,8 +14,9 @@ import time
 
 LOG = logging.getLogger("sorter_plant")
 PLC = "10.10.1.10"
-VFD = ["10.10.1.21", "10.10.1.22", "10.10.1.24", "10.10.1.25", "10.10.1.26"]
-ENTRY = {1: 2.0, 2: 5.0}
+VFD = ["10.10.1.21", "10.10.1.22", "10.10.1.23",
+       "10.10.1.24", "10.10.1.25", "10.10.1.26"]
+ENTRY = {1: 2.0, 2: 5.0, 3: 8.0}
 INDUCT, TUNNEL, DIVERT, TRAILER, RECIRC, FAILED_CONFIRM = range(1, 7)
 
 
@@ -85,7 +86,7 @@ class PlantModel:
         # candidate with the new positions, independent of list insertion order.
         for p in list(self.packages):
             if p.outbound:
-                p.outbound_position += seconds * 10 * max(0, rpm[p.outbound + 1]) / 1750
+                p.outbound_position += seconds * 10 * max(0, rpm[p.outbound + 2]) / 1750
                 if not p.terminal_sent and p.outbound_position >= 12 + 3 * ((p.target - 1) % 3):
                     p.terminal_sent = True
                     kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
@@ -124,11 +125,11 @@ class PlantModel:
                 self.pending.append((RECIRC, p.token, p.serial, 0,
                                      int(p.position * 10)))
                 self.recent[p.token] = (self.clock + 2.0, p.serial,
-                                        1 if p.lane == 1 else 5,
+                                        1 if p.lane == 1 else 5 if p.lane == 2 else 6,
                                         int(p.position * 10), RECIRC, 0)
                 self.packages.remove(p)
 
-        # First arrival wins; a simultaneous arrival is lane 1 before lane 2.
+        # First arrival wins; a simultaneous arrival is lower lane first.
         # One waiting package per lane can accumulate at its divert gate.
         # Capacity is the two PLC slots, and no outbound pair may be closer
         # than one package length plus the configured clear spacing.
@@ -153,7 +154,8 @@ class PlantModel:
         for package in self.packages:
             if package.token == token and package.serial == serial:
                 kind, actual = self.last_event.get(token, (0, 0))
-                belt = package.outbound + 1 if package.outbound else (1 if package.lane == 1 else 5)
+                belt = package.outbound + 1 if package.outbound else (
+                    1 if package.lane == 1 else 5 if package.lane == 2 else 6)
                 position = (package.outbound_position if package.outbound
                             else package.position)
                 return belt, min(300, int(position * 10)), kind, actual
@@ -218,6 +220,10 @@ def run(args):
                                    miss_divert_token=args.miss_divert_token,
                                    fail_confirm_token=args.fail_confirm_token)
                 outstanding = None
+                # Reset may have accepted a separately injected event. Continue
+                # after the PLC's committed sequence so its seen-sequence
+                # guard cannot discard this run's first INDUCT photoeye.
+                sequence = read(plc, 585)[0]
                 telemetry_sequence = [0, 0]
                 last_request = read(plc, 574)[0]
                 if active:
@@ -276,7 +282,7 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plc", default=PLC)
-    parser.add_argument("--vfd", nargs=5, default=VFD)
+    parser.add_argument("--vfd", nargs=6, default=VFD)
     parser.add_argument("--length-cm", type=float, default=60)
     parser.add_argument("--spacing-cm", type=float, default=100)
     parser.add_argument("--miss-divert-token", type=int, default=0)

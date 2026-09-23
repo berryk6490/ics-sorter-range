@@ -1,6 +1,6 @@
 [Unit]
-Description=Independent sorter lanes 1 and 2 plant model
-After=network-online.target vfd@induct1.service vfd@induct2.service vfd@outbnd1.service vfd@outbnd2.service vfd@outbnd3.service
+Description=Independent sorter lanes 1, 2 and 3 plant model
+After=network-online.target vfd@induct1.service vfd@induct2.service vfd@induct3.service vfd@outbnd1.service vfd@outbnd2.service vfd@outbnd3.service
 Wants=network-online.target
 
 [Service]

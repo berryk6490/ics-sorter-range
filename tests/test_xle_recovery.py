@@ -147,6 +147,15 @@ class Recovery(unittest.TestCase):
         self.assertEqual(request["package_id"], "l2-8-3-41-2")
         self.assertEqual(request["lane"], 2)
 
+    def test_lane_three_identity_and_invalid_lane_fail_closed(self):
+        request = xle.package_request(8, 3,
+                                      [41, 2, 9, 9003, 2, 8, 0, 0, 100, 0, 0, 0],
+                                      lane=3)
+        self.assertEqual(request["package_id"], "l3-8-3-41-2")
+        self.assertEqual(request["lane"], 3)
+        with self.assertRaises(ValueError):
+            xle.package_request(8, 3, [41, 2, 9, 9003], lane=4)
+
     def test_restart_with_already_terminal_slot(self):
         plc = PLC(5)
         with tempfile.TemporaryDirectory() as directory, patch.object(xle, "event") as emit:

@@ -174,7 +174,7 @@ VAR
   plant_request AT %QW574 : INT;         (* PLC commits induction request last *)
   plant_request_token AT %QW575 : INT;
   plant_request_serial AT %QW576 : INT;
-  plant_request_lane AT %QW577 : INT;   (* 1 or 2; written before request commit *)
+  plant_request_lane AT %QW577 : INT;   (* 1..3; written before request commit *)
   plant_event_lane AT %QW578 : INT;     (* plant payload, written before event commit *)
   plant_event_type AT %QW580 : INT;      (* 1 induct, 2 tunnel, 3 divert, 4 trailer, 5 recirc, 6 failed confirmation *)
   plant_event_token AT %QW581 : INT;
@@ -574,10 +574,12 @@ VAR
   epoch_offer_seen : INT := 0;
   hb_seen, recovery_seen : INT := 0;
   hb_ready : BOOL := FALSE;
-  plant_seen, plant_hb_seen, plant_hb_age, plant_scan_token, plant_scan_token_2 : INT := 0;
+  plant_seen, plant_hb_seen, plant_hb_age, plant_scan_token, plant_scan_token_2,
+  plant_scan_token_3 : INT := 0;
   plant_request_pending : BOOL := FALSE;
   plant_lane_match : BOOL := FALSE;
   plant_next_lane : INT := 1;
+  plant_pick_lane, plant_candidate : INT := 0;
   plant_view_seen0, plant_view_seen1 : INT := 0;
 END_VAR
 
@@ -623,7 +625,7 @@ IF NOT init_done THEN
   plant_request_lane := 0;
   plant_seen := plant_event_seq; plant_event_ack := 0;
   plant_hb_seen := plant_heartbeat; plant_hb_age := 0;
-  plant_scan_token := 0; plant_scan_token_2 := 0;
+  plant_scan_token := 0; plant_scan_token_2 := 0; plant_scan_token_3 := 0;
   plant_request_pending := FALSE; plant_fault := 1;
   plant_next_lane := 1;
   plant_failed_count := 0;
@@ -1085,6 +1087,7 @@ END_IF;
    scan, which is not the same thing as a failed read. *)
 scan3_seed := master_seed;
 scan3_nrrate := noread_sp;
+IF NOT plant_mode THEN
 IF ib3[10] = 0 OR ib3[10] <> tun_pkg_3 THEN
   IF tun_wait_3 THEN
     scan_late_ct := scan_late_ct + 1;
@@ -1132,15 +1135,36 @@ ELSIF tun_wait_3 AND scan3_result = tun_seq_3 AND scan3_nonce = reset_nonce THEN
     END_IF;
   END_IF;
 END_IF;
+ELSE
+  IF tun_wait_3 AND scan3_result = tun_seq_3 AND scan3_nonce = reset_nonce THEN
+    tun_wait_3 := FALSE;
+    scan_code_3 := scan3_bc;
+    FOR j := 0 TO 1 DO
+      IF st_state[j] = 1 AND st_lane[j] = 3 AND
+         st_token[j] = plant_scan_token_3 THEN
+        st_seq[j] := tun_seq_3;
+        st_bc[j] := scan3_bc;
+        st_scan[j] := scan_ct;
+        st_state[j] := 2;
+        IF scan3_status = 1 THEN noread_ct := noread_ct + 1; noread_alarm := TRUE; END_IF;
+        IF scan3_status = 2 THEN multiple_ct := multiple_ct + 1; END_IF;
+        IF scan3_status = 3 THEN oversize_ct := oversize_ct + 1; END_IF;
+        IF scan3_status = 4 THEN duplicate_ct := duplicate_ct + 1; END_IF;
+        IF scan3_status = 5 THEN invalid_ct := invalid_ct + 1; END_IF;
+      END_IF;
+    END_FOR;
+  END_IF;
+END_IF;
 
 
-(* Lane 1 plant events are serialized by the event/ack pair. The plant writes
+(* Plant events are serialized by the event/ack pair. The plant writes
    payload first and sequence last. The PLC accepts only its current run and
    an occupied slot with the exact token and serial. No counter advances on
    a route decision: only a physical confirmation can load a trailer. *)
 IF plant_mode THEN
   l1_div1 := FALSE; l1_div2 := FALSE; l1_div3 := FALSE;
   l2_div1 := FALSE; l2_div2 := FALSE; l2_div3 := FALSE;
+  l3_div1 := FALSE; l3_div2 := FALSE; l3_div3 := FALSE;
   IF plant_heartbeat <> plant_hb_seen THEN
     plant_hb_seen := plant_heartbeat; plant_hb_age := 0;
   ELSIF plant_hb_age < 32000 THEN
@@ -1151,7 +1175,7 @@ IF plant_mode THEN
     IF plant_hb_age > 30 THEN plant_fault := 1; END_IF;
     IF plant_epoch_lo <> epoch_active_lo OR plant_epoch_hi <> epoch_active_hi OR
        plant_nonce <> reset_nonce THEN plant_fault := 2; END_IF;
-    IF NOT xle_mode OR NOT xle_multi OR lane3_run THEN plant_fault := 2; END_IF;
+    IF NOT xle_mode OR NOT xle_multi THEN plant_fault := 2; END_IF;
   END_IF;
   IF plant_fault <> 0 THEN sorter_run := FALSE; END_IF;
   (* Only identity-matched, bounded plant telemetry is published to SCADA.
@@ -1173,6 +1197,7 @@ IF plant_mode THEN
          p0_raw_serial = st_serial[0] AND
          ((st_lane[0] = 1 AND p0_raw_belt = 1) OR
           (st_lane[0] = 2 AND p0_raw_belt = 5) OR
+          (st_lane[0] = 3 AND p0_raw_belt = 6) OR
           (p0_raw_belt >= 2 AND p0_raw_belt <= 4)) AND
          p0_raw_pos >= 0 AND p0_raw_pos <= 300 AND
          p0_raw_event >= 0 AND p0_raw_event <= 6 AND
@@ -1208,6 +1233,7 @@ IF plant_mode THEN
          p1_raw_serial = st_serial[1] AND
          ((st_lane[1] = 1 AND p1_raw_belt = 1) OR
           (st_lane[1] = 2 AND p1_raw_belt = 5) OR
+          (st_lane[1] = 3 AND p1_raw_belt = 6) OR
           (p1_raw_belt >= 2 AND p1_raw_belt <= 4)) AND
          p1_raw_pos >= 0 AND p1_raw_pos <= 300 AND
          p1_raw_event >= 0 AND p1_raw_event <= 6 AND
@@ -1260,6 +1286,14 @@ IF plant_mode THEN
           scan2_serial := st_serial[j];
           plant_scan_token_2 := st_token[j];
           tun_wait_2 := TRUE;
+        ELSIF st_lane[j] = 3 THEN
+          IF tun_wait_3 THEN scan_late_ct := scan_late_ct + 1; END_IF;
+          tun_seq_3 := tun_seq_3 + 1;
+          IF tun_seq_3 > 30000 THEN tun_seq_3 := 1; END_IF;
+          scan3_trig := tun_seq_3;
+          scan3_serial := st_serial[j];
+          plant_scan_token_3 := st_token[j];
+          tun_wait_3 := TRUE;
         END_IF;
       ELSIF plant_event_type = 3 AND (st_state[j] = 2 OR st_state[j] = 3) THEN
         st_divert[j] := scan_ct;
@@ -1267,15 +1301,21 @@ IF plant_mode THEN
         IF st_dest[j] >= 1 AND st_dest[j] <= 9 THEN
           obelt := ((st_dest[j] - 1) / 3) + 1;
           IF obelt = 1 THEN
-            IF st_lane[j] = 1 THEN l1_div1 := TRUE; ELSE l2_div1 := TRUE; END_IF;
+            IF st_lane[j] = 1 THEN l1_div1 := TRUE;
+            ELSIF st_lane[j] = 2 THEN l2_div1 := TRUE;
+            ELSE l3_div1 := TRUE; END_IF;
             div_act_1 := div_act_1 + 1;
           END_IF;
           IF obelt = 2 THEN
-            IF st_lane[j] = 1 THEN l1_div2 := TRUE; ELSE l2_div2 := TRUE; END_IF;
+            IF st_lane[j] = 1 THEN l1_div2 := TRUE;
+            ELSIF st_lane[j] = 2 THEN l2_div2 := TRUE;
+            ELSE l3_div2 := TRUE; END_IF;
             div_act_2 := div_act_2 + 1;
           END_IF;
           IF obelt = 3 THEN
-            IF st_lane[j] = 1 THEN l1_div3 := TRUE; ELSE l2_div3 := TRUE; END_IF;
+            IF st_lane[j] = 1 THEN l1_div3 := TRUE;
+            ELSIF st_lane[j] = 2 THEN l2_div3 := TRUE;
+            ELSE l3_div3 := TRUE; END_IF;
             div_act_3 := div_act_3 + 1;
           END_IF;
         END_IF;
@@ -1401,40 +1441,60 @@ IF xle_mode AND xle_multi AND multi_cmd_id <> 0 AND multi_cmd_id <> multi_seen T
   END_IF;
 END_IF;
 
-(* ---------- induct lane 1 ---------- *)
+(* Two global slots are shared by the three inducts. At each free slot, scan
+   ready lanes starting at plant_next_lane and wrap 3 -> 1. A successful
+   request advances the pointer. The INDUCT event completes the request
+   before another slot may be assigned. *)
 IF plant_mode THEN
   IF tmr1 < rate_sp_1 THEN tmr1 := tmr1 + 1; END_IF;
-  IF tmr1 >= rate_sp_1 AND NOT plant_request_pending AND
-     sorter_run AND lane1_run AND plant_fault = 0 AND
-     (plant_next_lane = 1 OR tmr2 < rate_sp_2 OR NOT lane2_run) AND
+  IF tmr2 < rate_sp_2 THEN tmr2 := tmr2 + 1; END_IF;
+  IF tmr3 < rate_sp_3 THEN tmr3 := tmr3 + 1; END_IF;
+  IF NOT plant_request_pending AND sorter_run AND plant_fault = 0 AND
      epoch_fault = 0 AND xle_liveness = 0 AND hb_ready AND hb_age <= 50 THEN
-    tmr1 := 0;
     slot_index := -1;
     FOR j := 0 TO 1 DO
       IF st_state[j] = 0 AND slot_index = -1 THEN slot_index := j; END_IF;
     END_FOR;
     IF slot_index >= 0 THEN
-      token_next := token_next + 1;
-      IF token_next > 30000 THEN token_next := 1; END_IF;
-      st_token[slot_index] := token_next;
-      st_lane[slot_index] := 1;
-      st_serial[slot_index] := serial_next;
-      st_seq[slot_index] := 0; st_bc[slot_index] := 0;
-      st_state[slot_index] := 1; st_dest[slot_index] := 0;
-      st_actual[slot_index] := 0; st_reason[slot_index] := 0;
-      st_scan[slot_index] := 0; st_accept[slot_index] := 0;
-      st_divert[slot_index] := 0; st_command[slot_index] := 0;
-      plant_request_token := token_next;
-      plant_request_serial := serial_next;
-      plant_request_lane := 1;
-      plant_request := token_next;
-      plant_request_pending := TRUE;
-      plant_next_lane := 2;
-      serial_next := serial_next + 1;
-      IF serial_next > 999 THEN serial_next := 1; END_IF;
+      plant_pick_lane := 0;
+      FOR i := 0 TO 2 DO
+        plant_candidate := ((plant_next_lane - 1 + i) MOD 3) + 1;
+        IF plant_pick_lane = 0 AND
+           ((plant_candidate = 1 AND lane1_run AND tmr1 >= rate_sp_1) OR
+            (plant_candidate = 2 AND lane2_run AND tmr2 >= rate_sp_2) OR
+            (plant_candidate = 3 AND lane3_run AND tmr3 >= rate_sp_3)) THEN
+          plant_pick_lane := plant_candidate;
+        END_IF;
+      END_FOR;
+      IF plant_pick_lane <> 0 THEN
+        token_next := token_next + 1;
+        IF token_next > 30000 THEN token_next := 1; END_IF;
+        st_token[slot_index] := token_next;
+        st_lane[slot_index] := plant_pick_lane;
+        st_serial[slot_index] := serial_next;
+        st_seq[slot_index] := 0; st_bc[slot_index] := 0;
+        st_state[slot_index] := 1; st_dest[slot_index] := 0;
+        st_actual[slot_index] := 0; st_reason[slot_index] := 0;
+        st_scan[slot_index] := 0; st_accept[slot_index] := 0;
+        st_divert[slot_index] := 0; st_command[slot_index] := 0;
+        plant_request_token := token_next;
+        plant_request_serial := serial_next;
+        plant_request_lane := plant_pick_lane;
+        plant_request := token_next;
+        plant_request_pending := TRUE;
+        IF plant_pick_lane = 1 THEN tmr1 := 0; END_IF;
+        IF plant_pick_lane = 2 THEN tmr2 := 0; END_IF;
+        IF plant_pick_lane = 3 THEN tmr3 := 0; END_IF;
+        plant_next_lane := (plant_pick_lane MOD 3) + 1;
+        serial_next := serial_next + 1;
+        IF serial_next > 999 THEN serial_next := 1; END_IF;
+      END_IF;
     END_IF;
   END_IF;
-ELSE
+END_IF;
+
+(* ---------- induct lane 1 ---------- *)
+IF NOT plant_mode THEN
 acc_i1 := acc_i1 + (INT_TO_REAL(induct1_fb) / 1750.0);
 IF acc_i1 >= 1.0 THEN
   acc_i1 := acc_i1 - 1.0;
@@ -1670,39 +1730,7 @@ END_IF;
 END_IF; (* legacy lane 1 belt cells *)
 
 (* ---------- induct lane 2 ---------- *)
-IF plant_mode THEN
-  IF tmr2 < rate_sp_2 THEN tmr2 := tmr2 + 1; END_IF;
-  IF tmr2 >= rate_sp_2 AND NOT plant_request_pending AND
-     sorter_run AND lane2_run AND plant_fault = 0 AND
-     (plant_next_lane = 2 OR tmr1 < rate_sp_1 OR NOT lane1_run) AND
-     epoch_fault = 0 AND xle_liveness = 0 AND hb_ready AND hb_age <= 50 THEN
-    tmr2 := 0;
-    slot_index := -1;
-    FOR j := 0 TO 1 DO
-      IF st_state[j] = 0 AND slot_index = -1 THEN slot_index := j; END_IF;
-    END_FOR;
-    IF slot_index >= 0 THEN
-      token_next := token_next + 1;
-      IF token_next > 30000 THEN token_next := 1; END_IF;
-      st_token[slot_index] := token_next;
-      st_lane[slot_index] := 2;
-      st_serial[slot_index] := serial_next;
-      st_seq[slot_index] := 0; st_bc[slot_index] := 0;
-      st_state[slot_index] := 1; st_dest[slot_index] := 0;
-      st_actual[slot_index] := 0; st_reason[slot_index] := 0;
-      st_scan[slot_index] := 0; st_accept[slot_index] := 0;
-      st_divert[slot_index] := 0; st_command[slot_index] := 0;
-      plant_request_token := token_next;
-      plant_request_serial := serial_next;
-      plant_request_lane := 2;
-      plant_request := token_next;
-      plant_request_pending := TRUE;
-      plant_next_lane := 1;
-      serial_next := serial_next + 1;
-      IF serial_next > 999 THEN serial_next := 1; END_IF;
-    END_IF;
-  END_IF;
-ELSE
+IF NOT plant_mode THEN
 acc_i2 := acc_i2 + (INT_TO_REAL(induct2_fb) / 1750.0);
 IF acc_i2 >= 1.0 THEN
   acc_i2 := acc_i2 - 1.0;
@@ -1832,6 +1860,7 @@ END_IF;
 END_IF; (* legacy lane 2 belt cells *)
 
 (* ---------- induct lane 3 ---------- *)
+IF NOT plant_mode THEN
 acc_i3 := acc_i3 + (INT_TO_REAL(induct3_fb) / 1750.0);
 IF acc_i3 >= 1.0 THEN
   acc_i3 := acc_i3 - 1.0;
@@ -1958,6 +1987,7 @@ IF ib3[10] <> 0 AND ib3[10] <> tun_pkg_3 THEN
   scan3_serial := ib3[10];
   tun_wait_3 := TRUE;
 END_IF;
+END_IF; (* legacy lane 3 belt cells *)
 
 IF NOT plant_mode THEN
 (* ---------- outbound belt 1 ---------- *)

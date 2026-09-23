@@ -1,5 +1,8 @@
 # Lane 2 independent plant extension
 
+This records the lane 2 milestone. [LANE3_PLANT.md](LANE3_PLANT.md) describes
+the current three-lane plant mode and supersedes lane 3 limits below.
+
 ## Topology and ownership
 
 Legacy PLC cells retain all three induct lanes. Their merge points on each
