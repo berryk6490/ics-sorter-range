@@ -53,13 +53,13 @@ checks every 50 ms and writes 4–10. A normal result is accepted only when
 
 | Address | Name | Meaning |
 | ---: | --- | --- |
-| 0 | `trig_seq` | normal request 1–30000; 32767 requests reset; 0 is idle |
+| 0 | `trig_seq` | normal request 1–30000; 32766 prepares reset; 32767 commits reset; 0 is idle |
 | 1 | `trig_serial` | package serial; reset nonce when `trig_seq` is 32767 |
 | 2 | `seed` | random-stream seed from the PLC |
 | 3 | `noread_rate` | failed-read rate per mille; 0 selects the scanner's default 22 |
 | 4 | `result_seq` | completed request sequence |
 | 5 | `barcode` | destination × 1000 + serial, or 0 for an unreadable package |
-| 6 | `status` | 0 good, 1 no-read, 2 multiple, 3 oversize, 4 duplicate, 5 invalid, 6 reset acknowledged |
+| 6 | `status` | 0 good, 1 no-read, 2 multiple, 3 oversize, 4 duplicate, 5 invalid, 6 reset acknowledged, 7 prepare acknowledged |
 | 7 | `length_cm` | package length |
 | 8 | `width_cm` | package width |
 | 9 | `height_cm` | package height |
@@ -68,20 +68,34 @@ checks every 50 ms and writes 4–10. A normal result is accepted only when
 ## Reset exchange
 
 On init or operator reset, the PLC increments a private nonce (1–30000), sends
-`trig_seq=32767`, `trig_serial=nonce`, and the current seed to all three
-tunnels, then holds package movement. Each scanner reseeds its destination,
+`trig_seq=32766`, `trig_serial=nonce`, and the current seed to all three
+tunnels, then holds package movement. Each scanner replaces its stale reply
+with `[32766, 0, 7, 0, 0, 0, nonce]`. After all three prepare ACKs, the PLC
+sends `trig_seq=32767` with the same nonce. Each scanner reseeds its destination,
 failure, and dimension streams even if the seed is unchanged; clears its
 recent-barcode history, request sequence, and scan count; and replaces the
 entire previous response with `[32767, 0, 6, 0, 0, 0, nonce]` at registers
 4–10. Repeated polls of the same reset command do not reseed again. The PLC
 waits for all three ACKs with the matching nonce, then writes `trig_seq=0`.
 Normal replies echo the nonce in register 10. This rejects a delayed response
-from the preceding run even if its normal sequence number is reused.
+from the preceding run even if its normal sequence number is reused. The
+prepare phase also overwrites a stale reset ACK with a reused nonce after a
+cold PLC restart. A scanner only accepts the reset command after prepare.
 
 Register 10 previously held `scan_count`; it now holds `run_nonce`. Its address
 and the 11-register read block are unchanged. A PLC and scanner from different
 protocol versions must not be mixed. The nonce wraps after 30000 resets;
 the handshake assumes no response from 30000 runs earlier remains in flight.
-After a cold PLC restart, a scanner service restart is needed if its current
-nonce happens to equal the PLC's initial nonce; the two-run live replay below
-exercises ordinary operator resets, not that restart case.
+The PLC waits at most 200 scans in each phase. Registers `%QW255..258` expose
+state (0 ready, 1 preparing, 2 resetting, 3 fault active, 4 fault
+acknowledged), fault mask, current ACK mask, and elapsed scans. Mask bits 0,
+1, and 2 identify tunnels 1, 2, and 3. At timeout, the PLC latches the mask,
+forces the run bit off, and keeps package movement stopped. A late ACK or
+scanner return does not clear the fault. The operator writes coil `%QX114.0`
+(Modbus 912) to acknowledge; this changes state 3 to 4 without clearing the
+mask. The operator then writes `%QX114.1` (Modbus 913) to retry. Retry starts
+a new prepare/reset exchange with a new nonce and leaves the old fault mask
+visible. Only three matching reset ACKs clear the mask and enter state 0.
+The run bit stays off until the operator starts the sorter. Both commands
+self-clear; retry before acknowledgement and the general reset command while
+faulted are ignored. The SCADA OPC UA nodes and HMI expose the same fields.

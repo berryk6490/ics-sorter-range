@@ -52,7 +52,7 @@ def run(plc, drive, camera):
         original_options = coils(plc, 881, 7)  # auto, induct and outbound enables
         original_setpoints = registers(plc, 200, 11)
         original_seed = registers(plc, 247)[0]
-        if registers(plc, 249)[0] != 24111:
+        if registers(plc, 249)[0] != 24112:
             raise RuntimeError("The running PLC program is not the expected sorter generation")
 
         set_coil(plc, 880, False)  # %QX110.0: operator run
@@ -60,7 +60,7 @@ def run(plc, drive, camera):
         set_coil(plc, 910, True)   # %QX113.6: reset process state
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if (registers(plc, 118)[0] == 0 and
+            if (registers(plc, 255)[0] == 0 and registers(plc, 118)[0] == 0 and
                     all(registers(plc, address, input_registers=True)[0] == 32767
                         for address in (158, 169, 180)) and
                     all(registers(plc, address, input_registers=True)[0] == 6

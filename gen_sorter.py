@@ -39,6 +39,8 @@ VAR
   nohome_alarm  AT %QX113.5    : BOOL;   (* package reached end of an outbound belt *)
   reset_cmd     AT %QX113.6    : BOOL;   (* re-run the init block, clearing all process state *)
   fault_reset   AT %QX113.7    : BOOL;   (* hold the drive fault-reset bit for several scans *)
+  scanner_fault_ack AT %QX114.0 : BOOL; (* operator acknowledges scanner fault *)
+  scanner_retry AT %QX114.1 : BOOL;     (* operator retries after acknowledgement *)
 
   speed_sp_1    AT %QW200      : INT;    (* induct 1 speed setpoint, rpm *)
   speed_sp_2    AT %QW201      : INT;    (* induct 2 speed setpoint, rpm *)
@@ -95,6 +97,10 @@ VAR
   duplicate_ct  AT %QW252      : INT;    (* tunnel returned a barcode already seen *)
   invalid_ct    AT %QW253      : INT;    (* tunnel decoded something that is not a label *)
   scan_late_ct  AT %QW254      : INT;    (* package left the tunnel before its result arrived *)
+  scanner_state AT %QW255 : INT;        (* 0 ready, 1 prepare, 2 reset, 3 fault, 4 acknowledged *)
+  scanner_fault_mask AT %QW256 : INT;   (* bits 0,1,2 identify missing tunnel ACKs *)
+  scanner_ack_mask AT %QW257 : INT;     (* bits 0,1,2 for current phase ACKs *)
+  scanner_wait AT %QW258 : INT;         (* elapsed PLC scans in current phase *)
 
   ib1_c0          AT %QW260      : INT;
   ib1_c1          AT %QW261      : INT;
@@ -419,14 +425,13 @@ VAR
   tun_wait_1, tun_wait_2, tun_wait_3 : BOOL := FALSE;
   init_done : BOOL := FALSE;
   reset_nonce : INT := 0;
-  scanner_reset_pending : BOOL := FALSE;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
-IF reset_cmd THEN
+IF reset_cmd AND scanner_state = 0 THEN
   init_done := FALSE;
-  reset_cmd := FALSE;
 END_IF;
+reset_cmd := FALSE;
 
 IF NOT init_done THEN
   speed_sp_1 := 200; speed_sp_2 := 200; speed_sp_3 := 200;
@@ -435,7 +440,7 @@ IF NOT init_done THEN
   rate_sp_1  := 14; rate_sp_2 := 14; rate_sp_3 := 14;
   noread_sp  := 30;
   serial_next := 1;
-  prog_hash := 24111;
+  prog_hash := 24112;
 
   (* master_seed is the root of the run. The controller no longer draws
      destinations or no-reads itself: both moved to the camera tunnels,
@@ -496,10 +501,11 @@ IF NOT init_done THEN
   tun_pkg_3 := 0; tun_seq_3 := 0; tun_wait_3 := FALSE;
   reset_nonce := reset_nonce + 1;
   IF reset_nonce > 30000 THEN reset_nonce := 1; END_IF;
-  scanner_reset_pending := TRUE;
-  scan1_trig := 32767; scan1_serial := reset_nonce;
-  scan2_trig := 32767; scan2_serial := reset_nonce;
-  scan3_trig := 32767; scan3_serial := reset_nonce;
+  scanner_state := 1; scanner_wait := 0;
+  scanner_fault_mask := 0; scanner_ack_mask := 0;
+  scan1_trig := 32766; scan1_serial := reset_nonce;
+  scan2_trig := 32766; scan2_serial := reset_nonce;
+  scan3_trig := 32766; scan3_serial := reset_nonce;
   jam_alarm := FALSE; coll_alarm := FALSE;
   noread_alarm := FALSE; nohome_alarm := FALSE;
   auto_mode := TRUE;
@@ -607,12 +613,46 @@ END_IF;
 (* ---------- camera tunnels ---------- *)
 scan1_seed := master_seed; scan2_seed := master_seed; scan3_seed := master_seed;
 scan1_nrrate := noread_sp; scan2_nrrate := noread_sp; scan3_nrrate := noread_sp;
-IF scanner_reset_pending THEN
-  IF scan1_result = 32767 AND scan1_status = 6 AND scan1_nonce = reset_nonce
-     AND scan2_result = 32767 AND scan2_status = 6 AND scan2_nonce = reset_nonce
-     AND scan3_result = 32767 AND scan3_status = 6 AND scan3_nonce = reset_nonce THEN
-    scanner_reset_pending := FALSE;
-    scan1_trig := 0; scan2_trig := 0; scan3_trig := 0;
+IF scanner_state = 1 OR scanner_state = 2 THEN
+  scanner_ack_mask := 0;
+  IF scanner_state = 1 THEN
+    IF scan1_result = 32766 AND scan1_status = 7 AND scan1_nonce = reset_nonce THEN scanner_ack_mask := scanner_ack_mask + 1; END_IF;
+    IF scan2_result = 32766 AND scan2_status = 7 AND scan2_nonce = reset_nonce THEN scanner_ack_mask := scanner_ack_mask + 2; END_IF;
+    IF scan3_result = 32766 AND scan3_status = 7 AND scan3_nonce = reset_nonce THEN scanner_ack_mask := scanner_ack_mask + 4; END_IF;
+  ELSE
+    IF scan1_result = 32767 AND scan1_status = 6 AND scan1_nonce = reset_nonce THEN scanner_ack_mask := scanner_ack_mask + 1; END_IF;
+    IF scan2_result = 32767 AND scan2_status = 6 AND scan2_nonce = reset_nonce THEN scanner_ack_mask := scanner_ack_mask + 2; END_IF;
+    IF scan3_result = 32767 AND scan3_status = 6 AND scan3_nonce = reset_nonce THEN scanner_ack_mask := scanner_ack_mask + 4; END_IF;
+  END_IF;
+  IF scanner_ack_mask = 7 THEN
+    scanner_wait := 0;
+    IF scanner_state = 1 THEN
+      scanner_state := 2;
+      scan1_trig := 32767; scan2_trig := 32767; scan3_trig := 32767;
+    ELSE
+      scanner_state := 0; scanner_fault_mask := 0;
+      scan1_trig := 0; scan2_trig := 0; scan3_trig := 0;
+    END_IF;
+  ELSE
+    scanner_wait := scanner_wait + 1;
+    IF scanner_wait >= 200 THEN
+      scanner_fault_mask := 7 - scanner_ack_mask;
+      scanner_state := 3;
+      sorter_run := FALSE;
+    END_IF;
+  END_IF;
+ELSIF scanner_state = 3 THEN
+  sorter_run := FALSE;
+  IF scanner_fault_ack THEN scanner_state := 4; END_IF;
+ELSIF scanner_state = 4 THEN
+  sorter_run := FALSE;
+  IF scanner_retry THEN
+    reset_nonce := reset_nonce + 1;
+    IF reset_nonce > 30000 THEN reset_nonce := 1; END_IF;
+    scanner_state := 1; scanner_wait := 0; scanner_ack_mask := 0;
+    scan1_trig := 32766; scan1_serial := reset_nonce;
+    scan2_trig := 32766; scan2_serial := reset_nonce;
+    scan3_trig := 32766; scan3_serial := reset_nonce;
   END_IF;
 ELSE
 (* tunnel 1: request a read on arrival, apply the answer when
@@ -1345,7 +1385,9 @@ IF acc_o3 >= 1.0 THEN
   END_IF;
 END_IF;
 
-END_IF; (* scanner reset handshake gates package movement *)
+END_IF; (* scanner handshake and fault gate package movement *)
+scanner_fault_ack := FALSE;
+scanner_retry := FALSE;
 
 (* publish belt state to the exposed register map *)
 ib1_c0 := ib1[0];

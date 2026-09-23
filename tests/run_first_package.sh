@@ -10,3 +10,10 @@ trap 'rm -rf "$build_dir"' EXIT
 cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
     "$build_dir/POUS.c" "$repo_dir/tests/first_package.c" -lm -o "$build_dir/first_package"
 "$build_dir/first_package"
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/reset_faults.c" -lm -o "$build_dir/reset_faults"
+for phase in prepare reset; do
+    for tunnel in 1 2 3; do
+        "$build_dir/reset_faults" "$phase" "$tunnel"
+    done
+done

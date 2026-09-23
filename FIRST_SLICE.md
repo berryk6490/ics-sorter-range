@@ -69,10 +69,10 @@ guest's old active `Sorter` file matched the repository version before commit
 `f64a17f.st` with SHA-256 `624a693f...`. The reset-handshake source is
 `scanner_reset.st` with SHA-256
 `60797245b525eac761a59ca0f4091e012a48d5e27256ac66212dd2382aa11189`.
-OpenPLC's `compile_program.sh` succeeded and `active_program` names
-`scanner_reset.st`. The old program remains available. All three scanner
-services on `drives` use repository `devices/scanner.py` (SHA-256
-`da75c4414dd219ac477314a018572fd5ddc9ace45ad0a95f91ee7aef351d79b6`).
+OpenPLC's `compile_program.sh` succeeded and previously selected
+`scanner_reset.st`. The old program remains available. The earlier scanner
+source had SHA-256
+`da75c4414dd219ac477314a018572fd5ddc9ace45ad0a95f91ee7aef351d79b6`.
 
 Copy `tests/live_first_package.py` to the PLC guest's home directory and run
 `~/OpenPLC_v3/.venv/bin/python3 ~/live_first_package.py` there. The script
@@ -92,7 +92,7 @@ operator enables `True`, setpoints `[200,200,200,233,233,233,2,14,14,14,30]`,
 seed `137`, and program identity `24111`. All three scanner services were
 active. Local checks: `bash tests/run_first_package.sh` passed; five Python
 unit tests passed (three scanner reset cases and two cleanup failure cases).
-The HMI path through `scada` remains untested.
+The HMI path through `scada` was not tested in that earlier run.
 
 The live command's output was:
 
@@ -101,3 +101,43 @@ The live command's output was:
 {"last": {"barcode": 5002, "drive_feedback": 200, "first_barcode": 6001, "inducted": 3, "response_nonce": 3, "result_seq": 2, "scan_code": 5002, "serial": 2, "status": 0, "trailer": 6, "trailers": [0, 0, 0, 0, 0, 1, 0, 0, 0], "trigger": 2}, "observed": {"barcode": true, "belt_cell": true, "camera_result": true, "drive_feedback": true, "inducted": true, "sensor_trigger": true, "trailer_load": true}}
 same-seed replay: first barcode and trailer match
 ```
+
+## Cold restart and scanner fault verification
+
+The current PLC program is `scanner_fault.st` with identity `24112` and source
+SHA-256 `21337519a08571987a66889e346467f6ffc35140b5da8d6407dd25dd11f4c131`.
+It compiled successfully on the PLC guest. The two-phase scanner handshake,
+fault states, register mapping, and retry rules are in `deploy/README.md`.
+`scada/README.md` records the copied HMI source and its fault display.
+The final scanner source SHA-256 on `drives` is
+`f5b32d2c2a7d83e318c57a66b3cd0b3ef3306be594f07f328c534600c2ac1419`.
+
+The old cold-restart failure was reproduced before deployment: tunnel 1 had
+normal response `[1,6001,0,25,69,25,1]`; after OpenPLC restarted, its reset
+request was `[32767,1,137,30]` while the tunnel still returned the old normal
+response. After deployment, the same token-1 normal response was left at the
+tunnel before another PLC restart. The PLC completed prepare and reset and
+reported `cold_restart [0,0,7,0] request [0,1] scanner
+[32767,0,6,0,0,0,1]`. Scanner services were not restarted for that check.
+
+For the stopped-service test, only `scanner@tunnel2` was stopped. The PLC
+reported `stopped_tunnel2 [3,2,5,200] inducted [0] belt [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] run False`.
+After the service returned, state stayed `[3,2,5,200]`. The HMI command path
+acknowledged the fault and showed state 4 with mask 2; retry completed the
+handshake and showed `[0,0,7,0]`. Without another reset, scanner 1 logged
+`seq=1 serial=1 bc=6001 st=0`; the PLC loaded a package at trailer 2-3.
+Post-run trailer counters were `[0,1,0,0,1,1,0,0,0]`. The simple recovery
+probe printed `trailer None` because it compared the latest scan code (`7004`)
+after subsequent packages had arrived; the tunnel log and trailer counters
+confirm sorting. The final operator read matched the pre-test values: run off,
+all seven enables on, setpoints `[200,200,200,233,233,233,2,14,14,14,30]`,
+seed 137, and fault `[0,0]`.
+
+Host checks passed: `bash tests/run_first_package.sh` exercised first-package
+movement plus prepare and reset timeouts for each tunnel, no movement during
+fault, late ACK rejection, acknowledgement, retry, and recovery. Seven Python
+unit tests passed, including same-token cold restart and reset without
+prepare. The HMI API and served page source were inspected; rendered browser
+behavior remains untested.
+The SCADA and firewall VMs were shut down after verification; only `plc` and
+`drives` remained running. All three scanner services and OpenPLC were active.

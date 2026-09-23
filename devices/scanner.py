@@ -39,10 +39,12 @@ rather than a shared variable. The PLC must wait for result_seq to catch up,
 so a scan takes real time and can be late, lost, or answered out of order.
 That is the failure domain a scan result actually lives in.
 
-Reset uses trig_seq=32767 and a nonzero run nonce in trig_serial. The scanner
-reseeds even when seed is unchanged, clears history and the previous response,
-then acknowledges with result_seq=32767, status=6, and run_nonce at register
-10. Normal replies carry that nonce too, so the PLC rejects stale replies.
+Reset first uses trig_seq=32766 (prepare). The scanner replaces the old
+response with status=7, result_seq=32766, and the nonce at register 10. A
+following trig_seq=32767 with the same nonce reseeds even when the seed is
+unchanged, clears history and the previous response, and acknowledges with
+status=6. Normal replies carry the nonce too. Prepare makes a cold PLC restart
+safe when its private nonce starts again at 1 and the scanner still holds 1.
 """
 import sys
 import threading
@@ -56,7 +58,9 @@ from pymodbus.datastore import (ModbusSequentialDataBlock,
 # real tunnel fails, each of which the controller has to handle differently.
 ST_GOOD, ST_NOREAD, ST_MULTIPLE, ST_OVERSIZE, ST_DUPLICATE, ST_INVALID = range(6)
 ST_RESET = 6
+ST_PREPARED = 7
 RESET_SEQ = 32767
+PREPARE_SEQ = 32766
 
 # Per mille rates for the non-good outcomes. The no-read rate arrives from the
 # controller; the rest are properties of the tunnel. Together they sum to
@@ -107,6 +111,7 @@ class Scanner:
         self.last_seed = None
         self.last_seq = 0
         self.run_nonce = 0
+        self.prepared_nonce = 0
         self.recent = []
         self.scan_count = 0
 
@@ -117,8 +122,16 @@ class Scanner:
          _, _, _, _, _, _, _) = hr
         rate_noread = noread_rate if noread_rate > 0 else DEFAULT_NOREAD
 
+        if trig_seq == PREPARE_SEQ:
+            if trig_serial and self.prepared_nonce != trig_serial:
+                self.prepared_nonce = trig_serial
+                ctx[0].setValues(3, 4, [PREPARE_SEQ, 0, ST_PREPARED,
+                                        0, 0, 0, trig_serial])
+            return
+
         if trig_seq == RESET_SEQ:
-            if trig_serial and trig_serial != self.run_nonce:
+            if trig_serial and self.prepared_nonce == trig_serial:
+                self.prepared_nonce = 0
                 self.run_nonce = trig_serial
                 self.last_seed = seed
                 self.s_dest.seed(seed)

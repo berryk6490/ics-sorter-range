@@ -35,7 +35,12 @@ class ScannerResetTest(unittest.TestCase):
         self.device = scanner_module.Scanner({0: self.reg}, "test", 1)
 
     def reset(self, nonce, seed=137):
-        self.reg.values[:4] = [scanner_module.RESET_SEQ, nonce, seed, 30]
+        self.reg.values[:4] = [scanner_module.PREPARE_SEQ, nonce, seed, 30]
+        self.device.step()
+        self.assertEqual(self.reg.values[4:11],
+                         [scanner_module.PREPARE_SEQ, 0, scanner_module.ST_PREPARED,
+                          0, 0, 0, nonce])
+        self.reg.values[0] = scanner_module.RESET_SEQ
         self.device.step()
         self.assertEqual(self.reg.values[4:11],
                          [scanner_module.RESET_SEQ, 0, scanner_module.ST_RESET,
@@ -73,6 +78,19 @@ class ScannerResetTest(unittest.TestCase):
         self.reset(2)
         second = [self.request(1, 1)[:6], self.request(2, 2)[:6]]
         self.assertEqual(first, second)
+
+    def test_cold_plc_restart_reuses_nonce(self):
+        self.reset(1)
+        first = self.request(1, 1)
+        self.reset(1)  # new PLC process starts its private nonce at 1
+        second = self.request(1, 1)
+        self.assertEqual(first, second)
+        self.assertEqual(self.device.scan_count, 1)
+
+    def test_reset_without_prepare_does_not_ack(self):
+        self.reg.values[:4] = [scanner_module.RESET_SEQ, 1, 137, 30]
+        self.device.step()
+        self.assertEqual(self.reg.values[4:11], [0] * 7)
 
 
 if __name__ == "__main__":
