@@ -58,6 +58,22 @@ unchanged.
 | 590 | plant | changing heartbeat; PLC bounds the gap at 30 scans |
 | 591 | PLC | fault: 0 ready, 1 unavailable, 2 identity/configuration, 3 invalid event (latched until reset) |
 | 592 | PLC | latched count of failed physical confirmations, cleared by reset |
+| 593 | PLC | scans since the last plant heartbeat, saturated at the PLC integer limit |
+| 600..619 | plant | two 10-register telemetry rows, slot 1 then slot 2; commit sequence written last |
+| 620..639 | PLC | two validated telemetry rows published to OPC UA; never copied directly from plant to HMI |
+| 640..641 | PLC | per-slot telemetry state: 0 empty, 1 live, 2 stale, 3 identity mismatch/unavailable |
+| 642..643 | PLC | per-slot scans since last validated telemetry update |
+
+Each telemetry row is `epoch_lo, epoch_hi, scanner_nonce, slot_token,
+package_serial, belt, position_x10, last_sensor_event, actual, sequence`.
+Belts are 1 for lane 1 induction and 2..4 for outbound belts 1..3. The
+position is measured in tenths of the existing cell equivalent. The PLC only
+publishes a new row when epoch, nonce, token, and serial match its occupied
+slot, and the belt, position, event, and actual values are bounded. The row
+becomes stale after 15 PLC scans without a new sequence. The HMI receives
+these PLC rows from OPC UA and freezes each package at the last reported
+position when stale or disconnected. Legacy mode continues to draw PLC cell
+arrays. XLe and ASX do not consume the telemetry.
 
 Event types: 1 induction accepted, 2 tunnel photoeye, 3 divert photoeye with
 actual outbound 0..3, 4 trailer confirmation with actual door 1..9, 5
@@ -71,10 +87,40 @@ plant fault and a persistent “LANE 1 FAILED CONFIRMATION” alarm from 592.
 The plant cannot recover exact positions after a process crash during an
 active run. On startup with coil 918 already set, it clears its run identity
 and refuses to run until an operator stops and resets the PLC. A lost Modbus
-connection is retried; loss of heartbeat stops the sorter. This active-run
-restart path is fail-closed by design but has **not** had a live crash test.
+connection is retried; loss of heartbeat stops the sorter. The active-run
+service-stop and restart path was exercised live (details below).
 
 ## Deployment and verification
+
+### Active-run service loss, before telemetry deployment
+
+`tests/live_plant_stop.py` saved the initial operator coils, seed, and eleven
+drive setpoints, then started a two-package run at seed 137. When both slots
+were occupied, the drives guest's `sorter-plant.service` was stopped through
+its serial console. Immediately before the stop, PLC slots held token/serial
+1/1 (barcode 6001, destination 2) and 2/2 (barcode 5002, destination 5);
+`inducted_ct=2`, the request counter was 2, all trailer counters were zero,
+and XLe had accepted command IDs 17 and 18. After the 30-scan plant heartbeat
+timeout, `plant_fault=1`, master run was false, induction remained at 2, both
+slots remained occupied, and all nine trailer counters remained zero. Slot 2
+had consumed a previously queued divert event, but neither slot had a
+terminal outcome; XLe logged no `plc_outcome`. Thus a missing plant trailer
+event did not become a PLC confirmation.
+
+Restarting the normal service while that run was still selected produced
+`plant_fault=2` (unavailable run identity). Its epoch/nonce registers 587..589
+were zero, the heartbeat stayed unchanged, and the slot and trailer state did
+not advance. The drives journal reported `active run at plant startup; PLC
+reset required`. The documented operator path then stopped master, dropped
+plant mode, and reset the PLC. A fresh `tests/live_plant.py two` run sorted
+6001 to trailer 2 and 5002 to trailer 5. `tests/restore_plant_stop.py`
+restored the saved settings, and the normal plant unit was left active. The
+failure observer's full output is `/tmp/plant-stop-result.json` on SCADA.
+The host controlled the test with `virsh -c qemu:///system console drives`
+and `sudo systemctl stop sorter-plant.service`; it restarted the normal unit
+with `sudo systemctl start sorter-plant.service`. The recovery probe was
+`/home/kevin/opcua/bin/python live_plant.py two` on SCADA, followed by
+`/home/kevin/opcua/bin/python restore_plant_stop.py`.
 
 `devices/plant.py` and `deploy/systemd/sorter-plant.service` were installed on
 drives as `/home/kevin/plant.py` and
@@ -90,8 +136,9 @@ Host checks:
 
 ```text
 bash tests/run_first_package.sh                    PASS (legacy three-lane, scanner reset, XLe, heartbeat, new plant PLC test)
-python3 -m unittest discover -s tests -p 'test_*.py'  29 tests, OK
-python3 -m py_compile devices/plant.py scada/opcua_server.py scada/hmi_ua.py tests/live_plant.py  PASS
+python3 -m unittest discover -s tests -p 'test_*.py'  30 tests, OK
+python3 -m py_compile devices/plant.py scada/opcua_server.py scada/hmi_ua.py tests/live_plant.py tests/browser_plant.py  PASS
+node --check < extracted HMI script              PASS
 ```
 
 Live tests used `tests/live_plant.py` on SCADA, actual PLC and VFD Modbus
@@ -128,15 +175,57 @@ actual 0, reason 4. These runs passed `tests/live_plant.py`'s scanner,
 ASX request, XLe command, PLC outcome, and HMI assertions. The failure
 injection was again removed and the normal enabled plant service restored.
 
-The rendered Firefox HMI showed “NO-HOME” and “LANE 1 FAILED CONFIRMATION”,
-connected to OPC UA, with zero loaded trailers; see
+The final telemetry run used `tests/live_plant.py two --speed 120
+--terminal-hold 4` over the actual VM Modbus path. It reported two concurrent
+live HMI rows and eight ordered plant photoeye events:
+`(1,1,1,0), (1,2,2,0), (2,1,1,0), (2,2,2,0), (3,1,1,1),
+(3,2,2,2), (4,1,1,2), (4,2,2,5)` (type/token/serial/actual).
+
+| Package identity | Barcode | Scan/accept/divert scan | PLC state/reason | Actual trailer |
+| --- | ---: | --- | --- | ---: |
+| `l1-1-3-1-1` | 6001 | 169/172/226 | loaded/0 | 2 |
+| `l1-1-3-2-2` | 5002 | 216/219/302 | loaded/0 | 5 |
+
+The trailer counter vector was `[0,1,0,0,1,0,0,0,0]`, and maximum occupied
+slots was 2. The browser test observed each identity at increasing induction
+and outbound positions, with tunnel, divert, and trailer sensor labels. Its
+rendered screenshots show [both on induction](tests/artifacts/plant-two-induct.png),
+[different outbound belts](tests/artifacts/plant-two-outbound.png), and
+[trailer arrival](tests/artifacts/plant-two-trailer.png).
+
+The final injected failure used the same PLC/SCADA interfaces. Package
+`l1-1-4-1-1` (barcode 6001) had scan/accept/divert scans 170/172/226;
+its events were induction, tunnel, divert outbound 1, and failed confirmation.
+PLC state 7/reason 4 had actual trailer 0; all nine trailer counters were zero.
+Firefox showed “NO-HOME” and “LANE 1 FAILED CONFIRMATION,” connected to OPC UA,
+with the package still displayed at outbound position 15.0 and sensor label
+“FAILED CONFIRM”; see
 [`tests/artifacts/plant-failed-confirmation.png`](tests/artifacts/plant-failed-confirmation.png).
+The focused rendered stale/unavailable check injected a PLC-shaped row into
+the HMI renderer, changed its status to stale at age 16, then unavailable.
+Both states preserved `translateX(369.2px)` and set `transition: none`; the
+display said “STALE” then “PLANT TELEMETRY UNAVAILABLE.” This is a browser
+renderer check; the PLC's 15-scan stale threshold was exercised in the host
+PLC suite, not by stopping the guest plant a second time. See
+[`tests/artifacts/plant-stale-unavailable.png`](tests/artifacts/plant-stale-unavailable.png).
+The rendered checks ran with `geckodriver --port 4445`,
+`python3 tests/serial_hmi_proxy.py`, and `python3 tests/browser_plant.py
+{two,failure,stale}`. The serial proxy binds only to host loopback and speaks
+to the SCADA guest's localhost HMI over its existing serial console; it adds
+no interface or route to the isolated networks.
+
 Each live runner restores seed, setpoints, lane enables, XLe mode, and plant
 mode in `finally`, and leaves master run false. The temporary failure-injection
-process was stopped and the normal plant unit restored. Existing scanner, VFD,
-HMI, and OPC UA services were active at final guest verification; SCADA and fw
+process was stopped and the normal plant unit restored. The final
+`tests/restore_plant_stop.py` invocation reset the PLC to clear the injected
+alarm, then restored the original saved settings. HMI API verification read
+`run=false`, `plant_mode=false`, failed confirmation count 0, NO-HOME false,
+and OPC UA connected. Existing scanner, VFD, HMI, and OPC UA services were
+active at final guest verification; SCADA and fw
 were then shut down to restore the VM set present at the start. PLC and drives
-remain running, with the normal plant unit active. The HMI belt-cell drawing is still fed by
-the legacy PLC arrays, so it appears empty in physical mode; sensor and
-outcome alarms/counters are live. The new physical movement is lane 1 only;
-legacy lanes and their cell movement are retained.
+remain running, with the normal plant unit active. In plant mode the HMI draws
+the two bounded PLC-validated telemetry rows; in legacy mode it draws the
+original PLC cells. The new physical movement is lane 1 only; legacy lanes
+and their cell movement are retained. The plant is a deterministic model using
+simulated VFD speed feedback and ideal photoeye thresholds; package skew,
+slip, sensor bounce, jams, and physical divert actuation are not simulated.

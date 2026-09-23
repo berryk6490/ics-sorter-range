@@ -71,7 +71,13 @@ def _tagmap():
         t[key] = ["Process", "Status", name]
     t["plant_fault"] = ["Process", "Status", "PlantFault"]
     t["plant_failed_count"] = ["Process", "Status", "PlantFailedConfirmationCount"]
+    t["plant_heartbeat_age"] = ["Process", "Status", "PlantHeartbeatAge"]
     t["plant_mode"] = ["Process", "Status", "PlantMode"]
+    for i in range(2):
+        slot = ["Process", "Plant", f"Slot{i+1}"]
+        t[f"plant{i}"] = slot + ["Telemetry"]
+        t[f"plant_status{i}"] = slot + ["Status"]
+        t[f"plant_age{i}"] = slot + ["AgeScans"]
     for i in range(3):
         t[f"lane_run{i}"] = ["Process", "Status", f"Induct{i+1}Running"]
         t[f"ob_run{i}"] = ["Process", "Status", f"Outbound{i+1}Running"]
@@ -94,7 +100,8 @@ def _tagmap():
 
 TAGS = _tagmap()
 
-state = {k: ([0] * 20 if k.startswith(("ib", "ob")) and len(k) == 3 else 0)
+state = {k: ([0] * 20 if k.startswith(("ib", "ob")) and len(k) == 3
+             else [0] * 10 if k in ("plant0", "plant1") else 0)
          for k in TAGS}
 state["connected"] = False
 hist = collections.deque(maxlen=int(RATE_WINDOW / RATE_SAMPLE))
@@ -239,6 +246,10 @@ def api():
         "xle_liveness": s["xle_liveness"],
         "plant_fault": s["plant_fault"], "plant_mode": s["plant_mode"],
         "plant_failed_count": s["plant_failed_count"],
+        "plant_heartbeat_age": s["plant_heartbeat_age"],
+        "plant_rows": [s[f"plant{i}"] for i in range(2)],
+        "plant_status": [s[f"plant_status{i}"] for i in range(2)],
+        "plant_age": [s[f"plant_age{i}"] for i in range(2)],
         "lane_run": [s[f"lane_run{i}"] for i in range(3)],
         "ob_run": [s[f"ob_run{i}"] for i in range(3)],
         "alarms": {"jam": s["a_jam"], "coll": s["a_coll"],
@@ -335,6 +346,14 @@ h2{font-size:10px;font-weight:600;color:var(--dim);margin:0 0 9px;
   font-size:9px;font-weight:600;color:#0e1114;
   transition:opacity .18s linear}
 .pkg.g1{background:var(--d1)}.pkg.g2{background:var(--d2)}.pkg.g3{background:var(--d3)}
+.pkg.plant{width:44px;border:1px solid #d7e8db;z-index:2;
+  transition:transform .09s linear,opacity .18s linear}
+.pkg.plant.stale{background:var(--warn);border-color:var(--warn);
+  transition:none}
+.plantstate{display:flex;gap:12px;margin:0 0 9px 67px;color:var(--dim);
+  font-size:10px;font-variant-numeric:tabular-nums}
+.plantstate .stale{color:var(--warn);font-weight:700}
+.plantstate .unavailable{color:var(--alarm);font-weight:700}
 .flow{height:14px;margin:2px 0 8px 67px;position:relative}
 .flow div{position:absolute;top:6px;height:1px;background:var(--line)}
 .doors{display:flex;gap:9px;margin-left:67px;margin-top:3px}
@@ -395,6 +414,7 @@ th:first-child{text-align:left}
 
 <div class="panel">
   <h2>Sortation</h2>
+  <div class="plantstate" id="plantstate" style="display:none"></div>
   <div id="ibelts"></div>
   <div class="flow"><div style="left:0;right:0"></div></div>
   <div id="obelts"></div>
@@ -525,6 +545,66 @@ function frame(t){
 }
 requestAnimationFrame(frame);
 
+/* Plant mode consumes PLC-validated positions verbatim. It never integrates
+   VFD speed in the browser, so a missed update cannot make a parcel drift. */
+const plantSeen={};
+let currentPlantMode=false;
+const SENSOR_NAME=['WAIT','INDUCT','TUNNEL','DIVERT','TRAILER','RECIRC','FAILED CONFIRM'];
+function clearLegacy(belt){
+  const live=seen[belt]||{};
+  for(const key in live) live[key].el.remove();
+  seen[belt]={}; delete pace[belt];
+}
+function clearPlant(){
+  for(const key in plantSeen){plantSeen[key].remove(); delete plantSeen[key];}
+}
+function freezePlant(reason){
+  for(const key in plantSeen){
+    const el=plantSeen[key]; el.classList.add('stale');
+    el.style.transition='none'; el.dataset.status='unavailable';
+  }
+  const line=document.getElementById('plantstate');
+  if(currentPlantMode){line.style.display='flex';line.innerHTML='<span class="unavailable">'+reason+'</span>';}
+}
+function paintPlant(d){
+  const line=document.getElementById('plantstate');
+  line.style.display='flex';
+  if(!d.connected){freezePlant('PLANT TELEMETRY UNAVAILABLE — UA DISCONNECTED');return;}
+  const now={};
+  const labels=[];
+  for(let slot=0;slot<2;slot++){
+    const r=d.plant_rows[slot], status=d.plant_status[slot], age=d.plant_age[slot];
+    if(status===0){labels.push('SLOT '+(slot+1)+' EMPTY');continue;}
+    if(status===3 || !r[3]){labels.push('<span class="unavailable">SLOT '+(slot+1)+' TELEMETRY UNAVAILABLE</span>');continue;}
+    const identity='l1-'+(r[0]+r[1]*30000)+'-'+r[2]+'-'+r[3]+'-'+r[4];
+    const belt=r[5], pos=r[6]/10, kind=r[7], actual=r[8];
+    const beltId=belt===1?'ib0':('ob'+(belt-2));
+    const stale=status!==1 || d.plant_fault!==0;
+    const state=stale?'STALE':'LIVE';
+    labels.push('<span class="'+(stale?'stale':'')+'">SLOT '+(slot+1)+' '+identity+
+      ' '+beltId.toUpperCase()+' '+pos.toFixed(1)+' '+(SENSOR_NAME[kind]||'UNKNOWN')+
+      (actual?' '+actual:'')+' '+state+' ('+age+')</span>');
+    if(!['ib0','ob0','ob1','ob2'].includes(beltId)) continue;
+    now[identity]=true;
+    let el=plantSeen[identity];
+    if(!el){
+      el=document.createElement('div'); el.className='pkg plant '+(slot?'g2':'g1');
+      el.textContent=r[4]+'/'+r[3];
+      el.dataset.packageId=identity;
+      plantSeen[identity]=el;
+    }
+    const track=document.getElementById(beltId);
+    if(el.parentElement!==track) track.appendChild(el);
+    el.classList.toggle('stale',stale);
+    el.style.transition=stale?'none':'transform .09s linear,opacity .18s linear';
+    el.style.transform='translateX('+(Math.max(0,Math.min(19,pos))*CW+4)+'px)';
+    el.dataset.belt=beltId; el.dataset.position=String(pos);
+    el.dataset.event=String(kind); el.dataset.status=stale?'stale':'live';
+  }
+  for(const key in plantSeen){if(!now[key]){plantSeen[key].remove();delete plantSeen[key];}}
+  line.innerHTML=labels.join(' · ');
+}
+
 function spark(id, arr){
   const s=document.getElementById(id); if(!s) return;
   if(arr.length<2){ s.innerHTML=''; return; }
@@ -586,7 +666,8 @@ let lastBarMarkup="";
 async function tick(){
   let d;
   try { d = await (await fetch('/api')).json(); }
-  catch(e){ document.getElementById('conn').textContent='HMI polling error'; return; }
+  catch(e){ document.getElementById('conn').textContent='HMI polling error';
+    freezePlant('PLANT TELEMETRY UNAVAILABLE — HMI POLLING ERROR'); return; }
 
   const c=document.getElementById('conn');
   c.textContent = d.connected ? 'connected to UA server 10.10.2.10:4840' : 'UA SERVER UNREACHABLE';
@@ -640,8 +721,19 @@ async function tick(){
   hist1.push(d.ind_rate); if(hist1.length>40) hist1.shift(); spark('sp1',hist1);
   hist2.push(d.load_rate); if(hist2.length>40) hist2.shift(); spark('sp2',hist2);
 
-  d.ib.forEach((cells,i)=>paint('ib'+i,cells,d.drives[BELT_DRIVE['ib'+i]].rpm));
-  d.ob.forEach((cells,i)=>paint('ob'+i,cells,d.drives[BELT_DRIVE['ob'+i]].rpm));
+  if(d.plant_mode){
+    if(!currentPlantMode){
+      clearLegacy('ib0'); for(let i=0;i<3;i++) clearLegacy('ob'+i);
+    }
+    currentPlantMode=true;
+    paintPlant(d);
+    for(let i=1;i<3;i++) paint('ib'+i,d.ib[i],d.drives[i].rpm);
+  } else {
+    if(currentPlantMode){clearPlant();document.getElementById('plantstate').style.display='none';}
+    currentPlantMode=false;
+    d.ib.forEach((cells,i)=>paint('ib'+i,cells,d.drives[BELT_DRIVE['ib'+i]].rpm));
+    d.ob.forEach((cells,i)=>paint('ob'+i,cells,d.drives[BELT_DRIVE['ob'+i]].rpm));
+  }
 
   let t='';
   for(let i=0;i<9;i++){

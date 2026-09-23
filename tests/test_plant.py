@@ -45,6 +45,18 @@ class PlantModelTest(unittest.TestCase):
         self.assertIn((RECIRC, 1, 11, 0), [e[:4] for e in events])
         self.assertFalse(any(e[0] == TRAILER for e in events))
 
+    def test_bounded_telemetry_tracks_belt_and_recent_sensor(self):
+        model = PlantModel()
+        model.request(1, 11)
+        model.step(.1, [1750] * 4, {1: (11, 3, 2)})
+        model.last_event[1] = (INDUCT, 0)
+        self.assertEqual(model.telemetry(1, 11)[:3], (1, 10, INDUCT))
+        self.assertEqual(model.telemetry(1, 99), (0, 0, 0, 0))
+        self.drive(model, {1: (11, 3, 2)}, 30)
+        self.assertEqual(model.telemetry(1, 11), (2, 150, TRAILER, 2))
+        self.drive(model, {}, 30)
+        self.assertEqual(model.telemetry(1, 11), (0, 0, 0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -187,6 +187,51 @@ VAR
   plant_heartbeat AT %QW590 : INT;
   plant_fault AT %QW591 : INT;          (* 0 ready, 1 unavailable, 2 identity mismatch, 3 bad event *)
   plant_failed_count AT %QW592 : INT;   (* latched failed physical confirmations, cleared by reset *)
+  plant_heartbeat_age AT %QW593 : INT;  (* PLC scans since the last plant heartbeat *)
+  p0_raw_epoch_lo AT %QW600 : INT;
+  p0_raw_epoch_hi AT %QW601 : INT;
+  p0_raw_nonce AT %QW602 : INT;
+  p0_raw_token AT %QW603 : INT;
+  p0_raw_serial AT %QW604 : INT;
+  p0_raw_belt AT %QW605 : INT;
+  p0_raw_pos AT %QW606 : INT;
+  p0_raw_event AT %QW607 : INT;
+  p0_raw_actual AT %QW608 : INT;
+  p0_raw_seq AT %QW609 : INT;
+  p1_raw_epoch_lo AT %QW610 : INT;
+  p1_raw_epoch_hi AT %QW611 : INT;
+  p1_raw_nonce AT %QW612 : INT;
+  p1_raw_token AT %QW613 : INT;
+  p1_raw_serial AT %QW614 : INT;
+  p1_raw_belt AT %QW615 : INT;
+  p1_raw_pos AT %QW616 : INT;
+  p1_raw_event AT %QW617 : INT;
+  p1_raw_actual AT %QW618 : INT;
+  p1_raw_seq AT %QW619 : INT;
+  p0_view_epoch_lo AT %QW620 : INT;
+  p0_view_epoch_hi AT %QW621 : INT;
+  p0_view_nonce AT %QW622 : INT;
+  p0_view_token AT %QW623 : INT;
+  p0_view_serial AT %QW624 : INT;
+  p0_view_belt AT %QW625 : INT;
+  p0_view_pos AT %QW626 : INT;
+  p0_view_event AT %QW627 : INT;
+  p0_view_actual AT %QW628 : INT;
+  p0_view_seq AT %QW629 : INT;
+  p1_view_epoch_lo AT %QW630 : INT;
+  p1_view_epoch_hi AT %QW631 : INT;
+  p1_view_nonce AT %QW632 : INT;
+  p1_view_token AT %QW633 : INT;
+  p1_view_serial AT %QW634 : INT;
+  p1_view_belt AT %QW635 : INT;
+  p1_view_pos AT %QW636 : INT;
+  p1_view_event AT %QW637 : INT;
+  p1_view_actual AT %QW638 : INT;
+  p1_view_seq AT %QW639 : INT;
+  p0_view_status AT %QW640 : INT;       (* 0 empty, 1 live, 2 stale, 3 identity mismatch *)
+  p1_view_status AT %QW641 : INT;
+  p0_view_age AT %QW642 : INT;
+  p1_view_age AT %QW643 : INT;
   xle_fault_ack AT %QX114.4 : BOOL;    (* coil 916, operator action *)
   xle_retry AT %QX114.5 : BOOL;        (* coil 917, operator action *)
 
@@ -525,6 +570,7 @@ VAR
   hb_ready : BOOL := FALSE;
   plant_seen, plant_hb_seen, plant_hb_age, plant_scan_token : INT := 0;
   plant_request_pending : BOOL := FALSE;
+  plant_view_seen0, plant_view_seen1 : INT := 0;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -570,6 +616,12 @@ IF NOT init_done THEN
   plant_hb_seen := plant_heartbeat; plant_hb_age := 0;
   plant_scan_token := 0; plant_request_pending := FALSE; plant_fault := 1;
   plant_failed_count := 0;
+  plant_heartbeat_age := 0;
+  plant_view_seen0 := p0_raw_seq; plant_view_seen1 := p1_raw_seq;
+  p0_view_status := 0; p1_view_status := 0;
+  p0_view_age := 0; p1_view_age := 0;
+  p0_view_token := 0; p1_view_token := 0;
+  p0_view_belt := 0; p1_view_belt := 0;
   multi_seen := multi_cmd_id; multi_ack := 0; multi_ack_id := 0; token_next := 0;
   epoch_offer_seen := epoch_offer_id; epoch_ack_id := 0;
   epoch_active_lo := 0; epoch_active_hi := 0; epoch_fault := 1;
@@ -1063,9 +1115,75 @@ IF plant_mode THEN
     IF plant_hb_age > 30 THEN plant_fault := 1; END_IF;
     IF plant_epoch_lo <> epoch_active_lo OR plant_epoch_hi <> epoch_active_hi OR
        plant_nonce <> reset_nonce THEN plant_fault := 2; END_IF;
-    IF NOT xle_mode OR NOT xle_multi OR lane2_run OR lane3_run THEN plant_fault := 2; END_IF;
+  IF NOT xle_mode OR NOT xle_multi OR lane2_run OR lane3_run THEN plant_fault := 2; END_IF;
   END_IF;
   IF plant_fault <> 0 THEN sorter_run := FALSE; END_IF;
+  (* Only identity-matched, bounded plant telemetry is published to SCADA.
+     A stopped writer leaves its last coordinate intact but marks it stale. *)
+  IF st_state[0] = 0 OR st_token[0] = 0 THEN
+    p0_view_status := 0; p0_view_age := 0;
+    p0_view_token := 0; p0_view_belt := 0;
+    plant_view_seen0 := p0_raw_seq;
+  ELSE
+    IF p0_view_token <> 0 AND
+       (p0_view_token <> st_token[0] OR p0_view_serial <> st_serial[0]) THEN
+      p0_view_status := 3; p0_view_token := 0; p0_view_belt := 0;
+      p0_view_age := 0;
+    END_IF;
+    IF p0_raw_seq <> 0 AND p0_raw_seq <> plant_view_seen0 THEN
+      plant_view_seen0 := p0_raw_seq;
+      IF p0_raw_epoch_lo = epoch_active_lo AND p0_raw_epoch_hi = epoch_active_hi AND
+         p0_raw_nonce = reset_nonce AND p0_raw_token = st_token[0] AND
+         p0_raw_serial = st_serial[0] AND p0_raw_belt >= 1 AND p0_raw_belt <= 4 AND
+         p0_raw_pos >= 0 AND p0_raw_pos <= 300 AND
+         p0_raw_event >= 0 AND p0_raw_event <= 6 AND
+         p0_raw_actual >= 0 AND p0_raw_actual <= 9 THEN
+        p0_view_epoch_lo := p0_raw_epoch_lo; p0_view_epoch_hi := p0_raw_epoch_hi;
+        p0_view_nonce := p0_raw_nonce; p0_view_token := p0_raw_token;
+        p0_view_serial := p0_raw_serial; p0_view_belt := p0_raw_belt;
+        p0_view_pos := p0_raw_pos; p0_view_event := p0_raw_event;
+        p0_view_actual := p0_raw_actual; p0_view_seq := p0_raw_seq;
+        p0_view_age := 0; p0_view_status := 1;
+      ELSE
+        p0_view_status := 3; p0_view_token := 0; p0_view_belt := 0;
+      END_IF;
+    ELSIF p0_view_age < 32000 THEN
+      p0_view_age := p0_view_age + 1;
+    END_IF;
+    IF p0_view_age > 15 AND p0_view_status = 1 THEN p0_view_status := 2; END_IF;
+  END_IF;
+  IF st_state[1] = 0 OR st_token[1] = 0 THEN
+    p1_view_status := 0; p1_view_age := 0;
+    p1_view_token := 0; p1_view_belt := 0;
+    plant_view_seen1 := p1_raw_seq;
+  ELSE
+    IF p1_view_token <> 0 AND
+       (p1_view_token <> st_token[1] OR p1_view_serial <> st_serial[1]) THEN
+      p1_view_status := 3; p1_view_token := 0; p1_view_belt := 0;
+      p1_view_age := 0;
+    END_IF;
+    IF p1_raw_seq <> 0 AND p1_raw_seq <> plant_view_seen1 THEN
+      plant_view_seen1 := p1_raw_seq;
+      IF p1_raw_epoch_lo = epoch_active_lo AND p1_raw_epoch_hi = epoch_active_hi AND
+         p1_raw_nonce = reset_nonce AND p1_raw_token = st_token[1] AND
+         p1_raw_serial = st_serial[1] AND p1_raw_belt >= 1 AND p1_raw_belt <= 4 AND
+         p1_raw_pos >= 0 AND p1_raw_pos <= 300 AND
+         p1_raw_event >= 0 AND p1_raw_event <= 6 AND
+         p1_raw_actual >= 0 AND p1_raw_actual <= 9 THEN
+        p1_view_epoch_lo := p1_raw_epoch_lo; p1_view_epoch_hi := p1_raw_epoch_hi;
+        p1_view_nonce := p1_raw_nonce; p1_view_token := p1_raw_token;
+        p1_view_serial := p1_raw_serial; p1_view_belt := p1_raw_belt;
+        p1_view_pos := p1_raw_pos; p1_view_event := p1_raw_event;
+        p1_view_actual := p1_raw_actual; p1_view_seq := p1_raw_seq;
+        p1_view_age := 0; p1_view_status := 1;
+      ELSE
+        p1_view_status := 3; p1_view_token := 0; p1_view_belt := 0;
+      END_IF;
+    ELSIF p1_view_age < 32000 THEN
+      p1_view_age := p1_view_age + 1;
+    END_IF;
+    IF p1_view_age > 15 AND p1_view_status = 1 THEN p1_view_status := 2; END_IF;
+  END_IF;
   IF plant_event_seq <> 0 AND plant_event_seq <> plant_seen THEN
     plant_seen := plant_event_seq;
     plant_event_ack := plant_event_seq;
@@ -1146,6 +1264,12 @@ IF plant_mode THEN
       plant_fault := 3; sorter_run := FALSE;
     END_IF;
   END_IF;
+END_IF;
+plant_heartbeat_age := plant_hb_age;
+IF NOT plant_mode THEN
+  p0_view_status := 0; p1_view_status := 0;
+  p0_view_token := 0; p1_view_token := 0;
+  p0_view_belt := 0; p1_view_belt := 0;
 END_IF;
 
 (* Accept one command for the current scanned package before cell 14.

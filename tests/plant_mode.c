@@ -10,12 +10,13 @@ TIME __CURRENT_TIME;
 #define BIT(address, bit) (*__QX##address##_##bit)
 static SORTER plc;
 static int scans;
+static int plant_heartbeat_enabled = 1;
 static void scan(void) {
     if (++scans % 5 == 0) {
         WORD(565) = WORD(558); WORD(566) = WORD(559);
         WORD(567) = WORD(567) % 30000 + 1;
     }
-    WORD(590) = WORD(590) % 30000 + 1;
+    if (plant_heartbeat_enabled) WORD(590) = WORD(590) % 30000 + 1;
     SORTER_body__(&plc);
 }
 static void event(int seq, int type, int slot, int actual) {
@@ -75,6 +76,20 @@ int main(void) {
     event(8, 6, 1, 0);
     assert(WORD(546) == 7 && WORD(549) == 4 && WORD(226) == 0);
     assert(WORD(219) == 1 && WORD(592) == 1 && BIT(113, 5));
+    WORD(610) = WORD(558); WORD(611) = WORD(559); WORD(612) = WORD(509);
+    WORD(613) = WORD(542); WORD(614) = WORD(543);
+    WORD(615) = 3; WORD(616) = 150; WORD(617) = 6; WORD(618) = 0;
+    WORD(619) = 1; scan();
+    assert(WORD(641) == 1 && WORD(633) == 2 && WORD(636) == 150);
+    for (int i = 0; i < 17; ++i) scan();
+    assert(WORD(641) == 2 && WORD(636) == 150);
+    WORD(616) = 151; WORD(619) = 2; scan();
+    assert(WORD(641) == 1 && WORD(636) == 151);
+    WORD(610) = WORD(558) + 1; WORD(619) = 3; scan();
+    assert(WORD(641) == 3 && WORD(633) == 0);
+    plant_heartbeat_enabled = 0;
+    for (int i = 0; i < 31; ++i) scan();
+    assert(WORD(593) > 30 && WORD(591) == 1 && !BIT(110, 0));
     WORD(580) = 4; WORD(581) = 1234; WORD(582) = 1;
     WORD(583) = 2; WORD(585) = 9; scan();
     assert(WORD(591) == 3 && !BIT(110, 0) && WORD(223) == 1);

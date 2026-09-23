@@ -48,6 +48,9 @@ class PlantModel:
         self.pending = deque()
         self.queued = deque()
         self.last_token = 0
+        self.clock = 0.0
+        self.recent = {}
+        self.last_event = {}
         self.miss_divert_token = miss_divert_token
         self.fail_confirm_token = fail_confirm_token
 
@@ -58,6 +61,9 @@ class PlantModel:
 
     def step(self, seconds, rpm, slots):
         """slots maps token to (serial, state, destination) from PLC rows."""
+        self.clock += seconds
+        self.recent = {token: record for token, record in self.recent.items()
+                       if record[0] > self.clock}
         if self.queued and rpm[0] > 0 and (
             not self.packages or
             all(p.outbound or p.position >= self.length + self.spacing
@@ -75,6 +81,10 @@ class PlantModel:
                     actual = 0 if kind == FAILED_CONFIRM else p.target
                     self.pending.append((kind, p.token, p.serial, actual,
                                          int(p.outbound_position * 10)))
+                    self.recent[p.token] = (self.clock + 2.0, p.serial,
+                                            p.outbound + 1,
+                                            int(p.outbound_position * 10),
+                                            kind, actual)
                     self.packages.remove(p)
                 continue
             p.position += seconds * 10 * max(0, rpm[0]) / 1750
@@ -103,7 +113,24 @@ class PlantModel:
             if p.divert_sent and not p.outbound and p.position >= 19:
                 self.pending.append((RECIRC, p.token, p.serial, 0,
                                      int(p.position * 10)))
+                self.recent[p.token] = (self.clock + 2.0, p.serial, 1,
+                                        int(p.position * 10), RECIRC, 0)
                 self.packages.remove(p)
+
+    def telemetry(self, token, serial):
+        """Return belt, position ×10, latest sent sensor, actual; all bounded."""
+        for package in self.packages:
+            if package.token == token and package.serial == serial:
+                kind, actual = self.last_event.get(token, (0, 0))
+                belt = package.outbound + 1 if package.outbound else 1
+                position = (package.outbound_position if package.outbound
+                            else package.position)
+                return belt, min(300, int(position * 10)), kind, actual
+        record = self.recent.get(token)
+        if record and record[1] == serial:
+            _, _, belt, position, kind, actual = record
+            return belt, position, kind, actual
+        return 0, 0, 0, 0
 
 
 def read(client, address, count=1):
@@ -129,6 +156,7 @@ def run(args):
                        fail_confirm_token=args.fail_confirm_token)
     active = None
     sequence = 0
+    telemetry_sequence = [0, 0]
     heartbeat = 0
     last_request = 0
     last = time.monotonic()
@@ -159,6 +187,7 @@ def run(args):
                                    miss_divert_token=args.miss_divert_token,
                                    fail_confirm_token=args.fail_confirm_token)
                 outstanding = None
+                telemetry_sequence = [0, 0]
                 last_request = read(plc, 574)[0]
                 if active:
                     write(plc, 587, [*epoch, nonce])
@@ -181,6 +210,16 @@ def run(args):
             slots = {rows[i]: (rows[i + 1], rows[i + 4], rows[i + 5])
                      for i in (0, 12) if rows[i]}
             model.step(elapsed, rpm, slots)
+            if mode:
+                for index in (0, 1):
+                    offset = index * 12
+                    token, serial = rows[offset:offset + 2]
+                    belt, position, event_type, actual = model.telemetry(token, serial)
+                    telemetry_sequence[index] = telemetry_sequence[index] % 30000 + 1
+                    base = 600 + index * 10
+                    write(plc, base, [*epoch, nonce, token, serial, belt,
+                                      position, event_type, actual])
+                    write(plc, base + 9, [telemetry_sequence[index]])
             if outstanding is not None:
                 if read(plc, 586)[0] == outstanding:
                     outstanding = None
@@ -190,6 +229,7 @@ def run(args):
                 write(plc, 580, list(event))
                 write(plc, 585, [sequence])
                 outstanding = sequence
+                model.last_event[event[1]] = (event[0], event[3])
                 LOG.info("sensor %s", json.dumps(dict(zip(
                     ("type", "token", "serial", "actual", "position"), event))))
             time.sleep(0.1)

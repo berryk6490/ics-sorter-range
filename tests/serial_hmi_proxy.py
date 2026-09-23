@@ -2,7 +2,8 @@
 
 Run on the hypervisor for browser checks. The bridge adds no host address or
 route to the isolated networks and forwards only GET /, GET /api, and the
-scanner/XLe fault button POSTs to the guest's own localhost HMI.
+    scanner/XLe fault button POSTs to the guest's own localhost HMI. The
+    browser test start marker is written through the same serial console.
 """
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -76,6 +77,32 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(self.path)
 
     def do_POST(self):
+        if self.path in ("/test/plant_run/two", "/test/plant_run/failure"):
+            case = self.path.rsplit("/", 1)[1]
+            try:
+                with lock:
+                    console.sendline(
+                        "cd /home/kevin/sorter-services; "
+                        f"nohup /home/kevin/opcua/bin/python live_plant.py {case} "
+                        "--speed 120 --terminal-hold 4 "
+                        "--start-file /tmp/plant-test-start "
+                        f"> /tmp/plant-browser-{case}.out 2>&1 & sleep 1")
+                    console.expect(r"kevin@scada:.*\$ ", timeout=15)
+                self.send_response(204)
+                self.end_headers()
+            except Exception as exc:
+                self.send_error(502, str(exc))
+            return
+        if self.path == "/test/plant_start":
+            try:
+                with lock:
+                    console.sendline("touch /tmp/plant-test-start")
+                    console.expect(r"kevin@scada:.*\$ ", timeout=15)
+                self.send_response(204)
+                self.end_headers()
+            except Exception as exc:
+                self.send_error(502, str(exc))
+            return
         self.respond(self.path, True)
 
 

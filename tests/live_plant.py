@@ -33,7 +33,7 @@ def wait(predicate, seconds, message):
     raise RuntimeError(message)
 
 
-def main(case):
+def main(case, speed=None, start_file=None, terminal_hold=1.0):
     count = 2 if case == "two" else 1
     plc = ModbusTcpClient("10.10.1.10", port=502, timeout=2)
     assert plc.connect()
@@ -46,6 +46,10 @@ def main(case):
     journal = tempfile.TemporaryDirectory(prefix="sorter-plant-")
     result = {}
     try:
+        if start_file:
+            marker = Path(start_file)
+            marker.unlink(missing_ok=True)
+            wait(marker.exists, 180, "browser start marker")
         set_coil(plc, 880, False)
         set_register(plc, 247, 137)
         old_tick = holding(plc, 243)[0]
@@ -67,10 +71,15 @@ def main(case):
         set_coil(plc, 914, True); set_coil(plc, 915, True)
         set_coil(plc, 918, True)
         set_register(plc, 207, 14)
+        if speed is not None:
+            set_register(plc, 200, speed)
+            for address in (203, 204, 205):
+                set_register(plc, address, speed)
         xle = subprocess.Popen([sys.executable, str(ROOT / "xle.py"),
                                 "--multi", "--packages", str(count),
                                 "--deadline", "180", "--journal",
-                                str(Path(journal.name) / "outcomes.sqlite3")],
+                                str(Path(journal.name) / "outcomes.sqlite3"),
+                                "--terminal-hold", str(terminal_hold)],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True)
         wait(lambda: holding(plc, 558, 2) != [0, 0] and holding(plc, 591)[0] == 0,
@@ -80,6 +89,9 @@ def main(case):
         rows = {}
         max_occupied = 0
         sensor_events = []
+        telemetry = {0: [], 1: []}
+        hmi_two_live = False
+        last_hmi_poll = 0.0
         last_sensor_seq = holding(plc, 585)[0]
         until = time.monotonic() + 180
         while time.monotonic() < until:
@@ -92,6 +104,22 @@ def main(case):
             if holding(plc, 220)[0] >= count:
                 set_register(plc, 207, 32000)
             block = holding(plc, 530, 24)
+            view = holding(plc, 620, 24)
+            for slot in (0, 1):
+                row = view[slot * 10:(slot + 1) * 10]
+                if view[20 + slot] == 1 and row[3]:
+                    sample = (row[3], row[4], row[5], row[6], row[7])
+                    if not telemetry[slot] or telemetry[slot][-1] != sample:
+                        telemetry[slot].append(sample)
+            if count == 2 and not hmi_two_live and time.monotonic() - last_hmi_poll > .5:
+                last_hmi_poll = time.monotonic()
+                try:
+                    hmi_live = json.load(urlopen("http://127.0.0.1:8000/api", timeout=1))
+                    hmi_two_live = (hmi_live["plant_mode"] and
+                                    all(status == 1 for status in hmi_live["plant_status"]) and
+                                    all(row[3] for row in hmi_live["plant_rows"]))
+                except (OSError, KeyError):
+                    pass
             max_occupied = max(max_occupied,
                                sum(block[slot * 12 + 4] in (1, 2, 3, 4)
                                    for slot in (0, 1)))
@@ -109,6 +137,7 @@ def main(case):
         assert len(rows) == count, rows
         if case == "two":
             assert max_occupied == 2, max_occupied
+            assert hmi_two_live, "OPC UA/HMI never showed two live plant rows"
         xle_output = xle.communicate(timeout=5)[0]
         assert xle.returncode == 0, xle_output
         xle = None
@@ -127,6 +156,11 @@ def main(case):
             sequence = [e["type"] for e in sensor_events if
                         e["token"] == row["token"] and e["serial"] == row["serial"]]
             assert sequence == ([1, 2, 3, 6] if case == "failure" else [1, 2, 3, 4]), (row, sensor_events)
+            samples = telemetry[row["slot"]]
+            own = [sample for sample in samples if
+                   sample[0] == row["token"] and sample[1] == row["serial"]]
+            assert any(sample[2] == 1 and sample[3] >= 100 for sample in own), (row, own)
+            assert any(sample[2] in (2, 3, 4) and sample[3] >= 20 for sample in own), (row, own)
         assert sum(trailers) == (0 if case == "failure" else count), trailers
         assert holding(plc, 219)[0] == (1 if case == "failure" else 0)
         hmi = json.load(urlopen("http://127.0.0.1:8000/api", timeout=5))
@@ -146,6 +180,7 @@ def main(case):
         result = {"case": case, "epoch": epoch, "rows": rows, "trailers": trailers,
                   "max_occupied_slots": max_occupied,
                   "sensor_events": sensor_events,
+                  "telemetry": telemetry, "hmi_two_live": hmi_two_live,
                   "plant_fault": holding(plc, 591)[0], "hmi_nohome": hmi["alarms"]["nohome"],
                   "xle_events": xe, "asx_events": ae}
         print(json.dumps(result, sort_keys=True), flush=True)
@@ -176,4 +211,8 @@ def main(case):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("case", choices=("one", "two", "failure"))
-    main(parser.parse_args().case)
+    parser.add_argument("--speed", type=int)
+    parser.add_argument("--start-file")
+    parser.add_argument("--terminal-hold", type=float, default=1.0)
+    args = parser.parse_args()
+    main(args.case, args.speed, args.start_file, args.terminal_hold)

@@ -147,7 +147,9 @@ class ModbusLink:
         co = self.plc.read_coils(COIL_BASE, COIL_COUNT, slave=1)
         live = self.plc.read_holding_registers(568, 2, slave=1)
         plant = self.plc.read_holding_registers(591, 2, slave=1)
-        if sp.isError() or ib.isError() or ob.isError() or co.isError() or live.isError() or plant.isError():
+        plant_age = self.plc.read_holding_registers(593, 1, slave=1)
+        plant_view = self.plc.read_holding_registers(620, 24, slave=1)
+        if any(r.isError() for r in (sp, ib, ob, co, live, plant, plant_age, plant_view)):
             raise IOError("plc read")
 
         drives = []
@@ -169,6 +171,8 @@ class ModbusLink:
             "liveness": [s16(v) for v in live.registers],
             "plant_fault": s16(plant.registers[0]),
             "plant_failed_count": s16(plant.registers[1]),
+            "plant_heartbeat_age": s16(plant_age.registers[0]),
+            "plant_view": [s16(v) for v in plant_view.registers],
             "drives": drives,
         }
 
@@ -299,6 +303,7 @@ class Namespace:
         await self._add_ro(status, "xle_liveness", "XLeLivenessState")
         await self._add_ro(status, "plant_fault", "PlantFault")
         await self._add_ro(status, "plant_failed_count", "PlantFailedConfirmationCount")
+        await self._add_ro(status, "plant_heartbeat_age", "PlantHeartbeatAge")
         await self._add_ro(status, "plant_mode", "PlantMode", ua.VariantType.Boolean)
         await self._add_rw_bool(status, "scanner_fault_ack", "ScannerFaultAck",
                                 COIL_ABS["scanner_fault_ack"])
@@ -315,6 +320,14 @@ class Namespace:
                                     COIL_ABS["ob_run"] + i)
 
         belts = await sorter.add_object(self.idx, "Belts")
+        plant = await proc.add_object(self.idx, "Plant")
+        for i in range(2):
+            slot = await plant.add_object(self.idx, f"Slot{i+1}")
+            telemetry = await slot.add_variable(
+                self.idx, "Telemetry", ua.Variant([0] * 10, ua.VariantType.Int16))
+            self.ro[f"plant{i}.telemetry"] = telemetry
+            await self._add_ro(slot, f"plant{i}.status", "Status")
+            await self._add_ro(slot, f"plant{i}.age", "AgeScans")
         for i in range(3):
             o = await belts.add_object(self.idx, f"Induct{i+1}")
             n = await o.add_variable(self.idx, "Cells",
@@ -478,7 +491,14 @@ async def push(ns, handler, snap):
     await w("xle_liveness", snap["liveness"][1])
     await w("plant_fault", snap["plant_fault"])
     await w("plant_failed_count", snap["plant_failed_count"])
+    await w("plant_heartbeat_age", snap["plant_heartbeat_age"])
     await w("plant_mode", bool(co[COIL["plant_mode"]]))
+    for i in range(2):
+        await ns.ro[f"plant{i}.telemetry"].write_value(
+            ua.Variant(snap["plant_view"][i * 10:(i + 1) * 10],
+                       ua.VariantType.Int16))
+        await w(f"plant{i}.status", snap["plant_view"][20 + i])
+        await w(f"plant{i}.age", snap["plant_view"][22 + i])
     for i in range(3):
         await w(f"shift_ct{i}", sp[SP["shift_ct"] + i])
     # reset_cmd is self-clearing in the PLC: it is true for one scan and the
