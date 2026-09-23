@@ -1,0 +1,22 @@
+# /etc/systemd/system/opcua-server.service on scada
+[Unit]
+Description=Level 2 OPC UA supervisory server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=30
+
+[Service]
+Type=exec
+User=kevin
+WorkingDirectory=/home/kevin
+ExecStart=/home/kevin/opcua/bin/python /home/kevin/opcua_server.py
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=10
+StandardOutput=append:/home/kevin/opcua.log
+StandardError=append:/home/kevin/opcua.log
+
+[Install]
+WantedBy=multi-user.target

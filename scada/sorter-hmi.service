@@ -1,0 +1,25 @@
+# /etc/systemd/system/sorter-hmi.service on scada
+# Starts after the UA server, but does not require it: the HMI reconnects on
+# its own, so an ordering hint is enough and a hard dependency would only make
+# a server restart take the screen down with it.
+[Unit]
+Description=Level 2 operator HMI
+After=network-online.target opcua-server.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=30
+
+[Service]
+Type=exec
+User=kevin
+WorkingDirectory=/home/kevin
+ExecStart=/home/kevin/opcua/bin/python /home/kevin/hmi_ua.py
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=10
+StandardOutput=append:/home/kevin/hmi.log
+StandardError=append:/home/kevin/hmi.log
+
+[Install]
+WantedBy=multi-user.target
