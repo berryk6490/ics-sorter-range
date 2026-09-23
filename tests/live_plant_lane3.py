@@ -29,12 +29,14 @@ CASES = {
 }
 
 
-def main(case, start_file=None):
+def main(case, start_file=None, stateful=False):
     config = CASES[case]
     plc = ModbusTcpClient("10.10.1.10", port=502, timeout=2)
     assert plc.connect()
     original = {"enables": coils(plc, 881, 7), "external": coils(plc, 914, 2),
-                "plant": coils(plc, 918)[0], "setpoints": holding(plc, 200, 11),
+                "plant": coils(plc, 918)[0],
+                "photoeye": coils(plc, 919)[0],
+                "setpoints": holding(plc, 200, 11),
                 "seed": holding(plc, 247)[0]}
     asx = xle = None
     journal = tempfile.TemporaryDirectory(prefix="sorter-lane3-")
@@ -64,6 +66,7 @@ def main(case, start_file=None):
             set_coil(plc, 881 + lane, lane in config["lanes"])
         set_coil(plc, 914, True); set_coil(plc, 915, True)
         set_coil(plc, 918, True)
+        set_coil(plc, 919, stateful)
         for address in (200, 201, 202, 203, 204, 205):
             set_register(plc, address, 120)
         for address in (207, 208, 209):
@@ -92,6 +95,7 @@ def main(case, start_file=None):
         set_coil(plc, 880, True)
         rows = {}
         sensor_events = []
+        photoeye_samples = {lane: [] for lane in config["lanes"]}
         telemetry = {lane: [] for lane in config["lanes"]}
         hmi_lanes = set()
         occupied_max = 0
@@ -120,6 +124,14 @@ def main(case, start_file=None):
             view = holding(plc, 620, 26)
             view2 = holding(plc, 670, 12)
             lanes = holding(plc, 644, 2) + holding(plc, 659)
+            if stateful:
+                for slot in range(3):
+                    pe = holding(plc, 720 + slot * 8, 8)
+                    if pe[3] and lanes[slot] in photoeye_samples:
+                        sample = (pe[3], pe[5], pe[6], pe[7])
+                        history = photoeye_samples[lanes[slot]]
+                        if not history or history[-1] != sample:
+                            history.append(sample)
             occupied = sum(block[i + 4] in (1, 2, 3, 4) for i in (0, 12, 24))
             occupied_max = max(occupied_max, occupied)
             assert occupied <= 3
@@ -195,6 +207,12 @@ def main(case, start_file=None):
                      e["token"] == row["token"] and e["serial"] == row["serial"]]
             assert kinds == [1, 2, 3, 6 if failed else 4], (package_id, kinds)
         assert trailer == expected_trailer, (trailer, expected_trailer)
+        if stateful:
+            assert holding(plc, 748, 3) == [0, 0, 0]
+            for lane in config["lanes"]:
+                samples = photoeye_samples[lane]
+                assert samples and all(sample[3] == 0 for sample in samples), samples
+                assert any(sample[1] != 0 for sample in samples), samples
         assert pre_confirmation_counters == [0] * 9
         assert holding(plc, 219)[0] == (1 if case == "failure" else 0)
         if case == "failure":
@@ -210,7 +228,10 @@ def main(case, start_file=None):
         assert len(journal_rows) == count
         assert {v["package_id"] for _, v in journal_rows} == {
             row["package_id"] for row in rows.values()}
-        print(json.dumps({"case": case, "rows": rows, "trailer": trailer,
+        print(json.dumps({"case": case, "stateful": stateful,
+                          "photoeye_samples": photoeye_samples,
+                          "photoeye_fault": holding(plc, 748, 3),
+                          "rows": rows, "trailer": trailer,
                           "sensor_events": sensor_events, "telemetry": telemetry,
                           "hmi_lanes": sorted(hmi_lanes), "merge_wait": merge_wait,
                           "minimum_gap_tenths": min_gap, "max_occupied": occupied_max,
@@ -227,6 +248,7 @@ def main(case, start_file=None):
             [(set_coil, 914, original["external"][0]),
              (set_coil, 915, original["external"][1]),
              (set_coil, 918, original["plant"]),
+             (set_coil, 919, original["photoeye"]),
              (set_register, 247, original["seed"])] +
             [(set_coil, 881 + i, v) for i, v in enumerate(original["enables"])] +
             [(set_register, 200 + i, v) for i, v in enumerate(original["setpoints"])]):
@@ -243,5 +265,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("case", choices=CASES)
     parser.add_argument("--start-file")
+    parser.add_argument("--stateful", action="store_true")
     args = parser.parse_args()
-    main(args.case, args.start_file)
+    main(args.case, args.start_file, args.stateful)

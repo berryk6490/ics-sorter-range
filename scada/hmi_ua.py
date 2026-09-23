@@ -74,9 +74,15 @@ def _tagmap():
     t["plant_failed_lane"] = ["Process", "Status", "PlantFailedLane"]
     t["plant_heartbeat_age"] = ["Process", "Status", "PlantHeartbeatAge"]
     t["plant_mode"] = ["Process", "Status", "PlantMode"]
+    t["photoeye_mode"] = ["Process", "Status", "PhotoeyeMode"]
+    for key, name in (("photoeye_fault_mask", "PhotoeyeFaultMask"),
+                      ("photoeye_fault_sensor", "PhotoeyeFaultSensor"),
+                      ("photoeye_fault_lane", "PhotoeyeFaultLane")):
+        t[key] = ["Process", "Status", name]
     for i in range(3):
         slot = ["Process", "Plant", f"Slot{i+1}"]
         t[f"plant{i}"] = slot + ["Telemetry"]
+        t[f"photoeyes{i}"] = slot + ["Photoeyes"]
         t[f"plant_status{i}"] = slot + ["Status"]
         t[f"plant_age{i}"] = slot + ["AgeScans"]
         t[f"plant_lane{i}"] = slot + ["Lane"]
@@ -103,7 +109,8 @@ def _tagmap():
 TAGS = _tagmap()
 
 state = {k: ([0] * 20 if k.startswith(("ib", "ob")) and len(k) == 3
-             else [0] * 10 if k in ("plant0", "plant1") else 0)
+             else [0] * 10 if k.startswith("plant") and len(k) == 6
+             else [0] * 8 if k.startswith("photoeyes") else 0)
          for k in TAGS}
 state["connected"] = False
 hist = collections.deque(maxlen=int(RATE_WINDOW / RATE_SAMPLE))
@@ -247,6 +254,11 @@ def api():
         "xle_heartbeat_age": s["xle_heartbeat_age"],
         "xle_liveness": s["xle_liveness"],
         "plant_fault": s["plant_fault"], "plant_mode": s["plant_mode"],
+        "photoeye_mode": s["photoeye_mode"],
+        "photoeye_fault_mask": s["photoeye_fault_mask"],
+        "photoeye_fault_sensor": s["photoeye_fault_sensor"],
+        "photoeye_fault_lane": s["photoeye_fault_lane"],
+        "photoeye_rows": [s[f"photoeyes{i}"] for i in range(3)],
         "plant_failed_count": s["plant_failed_count"],
         "plant_failed_lane": s["plant_failed_lane"],
         "plant_heartbeat_age": s["plant_heartbeat_age"],
@@ -585,11 +597,17 @@ function paintPlant(d){
     const identity='l'+lane+'-'+(r[0]+r[1]*30000)+'-'+r[2]+'-'+r[3]+'-'+r[4];
     const belt=r[5], pos=r[6]/10, kind=r[7], actual=r[8];
     const beltId=belt===1?'ib0':belt===5?'ib1':belt===6?'ib2':('ob'+(belt-2));
-    const stale=status!==1 || d.plant_fault!==0;
+    const pe=d.photoeye_mode ? d.photoeye_rows?.[slot] : null;
+    const peValid=!d.photoeye_mode || (pe && pe[0]===r[0] && pe[1]===r[1] &&
+      pe[2]===r[2] && pe[3]===r[3] && pe[4]===r[4]);
+    const stale=status!==1 || d.plant_fault!==0 || (d.photoeye_mode && !peValid);
     const state=stale?'STALE':'LIVE';
     labels.push('<span class="'+(stale?'stale':'')+'">SLOT '+(slot+1)+' '+identity+
       ' '+beltId.toUpperCase()+' '+pos.toFixed(1)+' '+(SENSOR_NAME[kind]||'UNKNOWN')+
-      (actual?' '+actual:'')+' '+state+' ('+age+')</span>');
+      (actual?' '+actual:'')+' '+state+' ('+age+')'+
+      (d.photoeye_mode ? ' PE RAW '+(peValid?pe[5]:'?')+
+       ' FILTERED '+(peValid?pe[6]:'?')+
+       ' QUALITY '+(peValid?pe[7]:'UNAVAILABLE') : '')+'</span>');
     if(!['ib0','ib1','ib2','ob0','ob1','ob2'].includes(beltId)) continue;
     now[identity]=true;
     let el=plantSeen[identity];
@@ -606,6 +624,11 @@ function paintPlant(d){
     el.style.transform='translateX('+(Math.max(0,Math.min(19,pos))*CW+4)+'px)';
     el.dataset.belt=beltId; el.dataset.position=String(pos);
     el.dataset.event=String(kind); el.dataset.status=stale?'stale':'live';
+    if(d.photoeye_mode){
+      el.dataset.photoeyeRaw=peValid?String(pe[5]):'unavailable';
+      el.dataset.photoeyeConditioned=peValid?String(pe[6]):'unavailable';
+      el.dataset.photoeyeQuality=peValid?String(pe[7]):'unavailable';
+    }
   }
   for(const key in plantSeen){if(!now[key]){plantSeen[key].remove();delete plantSeen[key];}}
   line.innerHTML=labels.join(' · ');
@@ -688,6 +711,9 @@ async function tick(){
   if(d.alarms.noread) p+=stat('NO-READ',0,1);
   if(d.alarms.nohome) p+=stat('NO-HOME',0,1);
   if(d.plant_mode && d.plant_fault) p+=stat('PLANT FAULT '+d.plant_fault,0,1);
+  if(d.photoeye_mode && d.photoeye_fault_mask)
+    p+=stat('PHOTOEYE LANE '+d.photoeye_fault_lane+' SENSOR '+d.photoeye_fault_sensor+
+      ' FAULT (SLOTS '+d.photoeye_fault_mask+')',0,1);
   if(d.plant_failed_count) p+=stat('LANE '+(d.plant_failed_lane||'?')+' FAILED CONFIRMATION',0,1);
   if(d.scanner_state===1 || d.scanner_state===2) p+=stat('SCANNER RESET WAIT',1,0);
   if(d.scanner_state===3 || d.scanner_state===4){

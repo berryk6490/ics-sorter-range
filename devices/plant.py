@@ -18,6 +18,20 @@ VFD = ["10.10.1.21", "10.10.1.22", "10.10.1.23",
        "10.10.1.24", "10.10.1.25", "10.10.1.26"]
 ENTRY = {1: 2.0, 2: 5.0, 3: 8.0}
 INDUCT, TUNNEL, DIVERT, TRAILER, RECIRC, FAILED_CONFIRM = range(1, 7)
+PHOTOEYES = ("induction", "tunnel", "divert", "outbound", "trailer")
+
+
+@dataclass(frozen=True)
+class PhotoeyeFixture:
+    """One run-scoped, token-bound fault; normal service passes None."""
+    sensor: str
+    token: int
+    kind: str
+
+    def __post_init__(self):
+        if self.sensor not in PHOTOEYES or self.token <= 0 or self.kind not in (
+                "stuck_clear", "stuck_blocked", "bounce", "missed", "early"):
+            raise ValueError("fixture requires one valid sensor, token and fault kind")
 
 
 @dataclass
@@ -33,6 +47,7 @@ class Package:
     divert_sent: bool = False
     terminal_sent: bool = False
     target: int = 0
+    trailer_position: float = 0.0
 
 
 class PlantModel:
@@ -44,7 +59,8 @@ class PlantModel:
     """
 
     def __init__(self, length_cm=60, spacing_cm=100, cell_cm=50,
-                 miss_divert_token=0, fail_confirm_token=0):
+                 miss_divert_token=0, fail_confirm_token=0,
+                 stateful=False, photoeye_fixture=None):
         self.length = length_cm / cell_cm
         self.spacing = spacing_cm / cell_cm
         self.packages = []
@@ -57,6 +73,10 @@ class PlantModel:
         self.last_event = {}
         self.miss_divert_token = miss_divert_token
         self.fail_confirm_token = fail_confirm_token
+        self.stateful = stateful
+        self.photoeye_fixture = photoeye_fixture
+        self.beam_first_high = {}
+        self.beam_latched = set()
 
     def request(self, token, serial, lane=1):
         if lane not in ENTRY:
@@ -74,6 +94,9 @@ class PlantModel:
         active_tokens = {p.token for p in self.packages} | set(self.recent)
         self.last_event = {token: value for token, value in self.last_event.items()
                            if token in active_tokens}
+        self.lane_by_token = {token: lane for token, lane in self.lane_by_token.items()
+                              if token in active_tokens or token in slots or
+                              any(p.token == token for p in self.queued)}
         for p in list(self.queued):
             if rpm[p.lane - 1] > 0 and all(
                 other.lane != p.lane or other.outbound or
@@ -89,14 +112,23 @@ class PlantModel:
                 p.outbound_position += seconds * 10 * max(0, rpm[p.outbound + 2]) / 1750
                 if not p.terminal_sent and p.outbound_position >= 12 + 3 * ((p.target - 1) % 3):
                     p.terminal_sent = True
+                    p.trailer_position = 12 + 3 * ((p.target - 1) % 3)
                     kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
                     actual = 0 if kind == FAILED_CONFIRM else p.target
                     self.pending.append((kind, p.token, p.serial, actual,
                                          int(p.outbound_position * 10)))
+                    if not self.stateful:
+                        self.recent[p.token] = (self.clock + 2.0, p.serial,
+                                                p.outbound + 1,
+                                                int(p.outbound_position * 10),
+                                                kind, actual)
+                        self.packages.remove(p)
+                if self.stateful and p.terminal_sent and p.outbound_position > p.trailer_position + p.length:
+                    kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
                     self.recent[p.token] = (self.clock + 2.0, p.serial,
                                             p.outbound + 1,
                                             int(p.outbound_position * 10),
-                                            kind, actual)
+                                            kind, 0 if kind == FAILED_CONFIRM else p.target)
                     self.packages.remove(p)
         candidates = []
         for p in list(self.packages):
@@ -165,6 +197,54 @@ class PlantModel:
             return belt, position, kind, actual
         return 0, 0, 0, 0
 
+    def photoeyes(self, token, serial):
+        """Five raw beam bits in path order, derived only from position/length.
+
+        The physical channels are selected by lane and destination; the slot
+        row carries their occupancy beside the PLC's package identity.
+        """
+        if not self.stateful:
+            return 0
+        package = next((p for p in self.packages
+                        if p.token == token and p.serial == serial), None)
+        if package is None:
+            fixture = self.photoeye_fixture
+            if fixture and fixture.token == token and fixture.kind == "stuck_blocked":
+                index = PHOTOEYES.index(fixture.sensor)
+                if (token, index) in self.beam_latched:
+                    return 1 << index
+            return 0
+        p = package
+        if p.outbound:
+            entry = ENTRY[p.lane]
+            natural = [False, False, False,
+                       entry <= p.outbound_position <= entry + p.length,
+                       p.terminal_sent and p.trailer_position <= p.outbound_position <= p.trailer_position + p.length]
+        else:
+            natural = [0 <= p.position <= p.length,
+                       10 <= p.position <= 10 + p.length,
+                       12 <= p.position <= 12 + p.length,
+                       False, False]
+        fixture = self.photoeye_fixture
+        if fixture and fixture.token == token:
+            index = PHOTOEYES.index(fixture.sensor)
+            key = (token, index)
+            if natural[index] and key not in self.beam_first_high:
+                self.beam_first_high[key] = self.clock
+            if fixture.kind in ("stuck_clear", "missed"):
+                natural[index] = False
+            elif fixture.kind == "stuck_blocked":
+                if natural[index]:
+                    self.beam_latched.add(key)
+                natural[index] = key in self.beam_latched
+            elif fixture.kind == "bounce" and key in self.beam_first_high:
+                elapsed = self.clock - self.beam_first_high[key]
+                if elapsed < .35:
+                    natural[index] = int(elapsed / .05) % 2 == 0
+            elif fixture.kind == "early" and not p.outbound:
+                natural[index] = p.position <= 1.0
+        return sum(1 << index for index, blocked in enumerate(natural) if blocked)
+
 
 def read(client, address, count=1):
     result = client.read_holding_registers(address, count, slave=1)
@@ -184,9 +264,13 @@ def run(args):
     from pymodbus.exceptions import ModbusException
     plc = ModbusTcpClient(args.plc, port=502, timeout=1)
     drives = [ModbusTcpClient(ip, port=502, timeout=1) for ip in args.vfd]
+    fixture = (PhotoeyeFixture(args.photoeye_fault_sensor, args.photoeye_fault_token,
+                               args.photoeye_fault_kind)
+               if args.photoeye_fault_sensor else None)
     model = PlantModel(args.length_cm, args.spacing_cm,
                        miss_divert_token=args.miss_divert_token,
-                       fail_confirm_token=args.fail_confirm_token)
+                       fail_confirm_token=args.fail_confirm_token,
+                       photoeye_fixture=fixture)
     active = None
     sequence = 0
     telemetry_sequence = [0, 0, 0]
@@ -201,6 +285,10 @@ def run(args):
             if coils.isError():
                 raise IOError("plant mode coil")
             mode = coils.bits[0]
+            stateful_result = plc.read_coils(919, 1, slave=1)
+            if stateful_result.isError():
+                raise IOError("photoeye mode coil")
+            stateful = bool(stateful_result.bits[0])
             if not mode:
                 armed = True
             if mode and not armed:
@@ -218,7 +306,8 @@ def run(args):
                 active = run_key
                 model = PlantModel(args.length_cm, args.spacing_cm,
                                    miss_divert_token=args.miss_divert_token,
-                                   fail_confirm_token=args.fail_confirm_token)
+                                   fail_confirm_token=args.fail_confirm_token,
+                                   stateful=stateful, photoeye_fixture=fixture)
                 outstanding = None
                 # Reset may have accepted a separately injected event. Continue
                 # after the PLC's committed sequence so its seen-sequence
@@ -257,6 +346,13 @@ def run(args):
                     write(plc, base, [*epoch, nonce, token, serial, belt,
                                       position, event_type, actual])
                     write(plc, base + 9, [telemetry_sequence[index]])
+                    if stateful and token in model.lane_by_token:
+                        raw_base = 690 + index * 8
+                        raw_sequence = telemetry_sequence[index]
+                        write(plc, raw_base, [*epoch, nonce, token, serial,
+                                              model.lane_by_token[token],
+                                              model.photoeyes(token, serial)])
+                        write(plc, raw_base + 7, [raw_sequence])
             if outstanding is not None:
                 if read(plc, 586)[0] == outstanding:
                     outstanding = None
@@ -269,7 +365,7 @@ def run(args):
                 write(plc, 585, [sequence])
                 outstanding = sequence
                 model.last_event[event[1]] = (event[0], event[3])
-                if event[0] in (TRAILER, RECIRC, FAILED_CONFIRM):
+                if event[0] in (TRAILER, RECIRC, FAILED_CONFIRM) and not stateful:
                     model.lane_by_token.pop(event[1], None)
                 LOG.info("sensor %s", json.dumps(dict(zip(
                     ("type", "token", "serial", "actual", "position"), event))))
@@ -287,7 +383,15 @@ def main():
     parser.add_argument("--spacing-cm", type=float, default=100)
     parser.add_argument("--miss-divert-token", type=int, default=0)
     parser.add_argument("--fail-confirm-token", type=int, default=0)
+    parser.add_argument("--photoeye-fault-sensor", choices=PHOTOEYES)
+    parser.add_argument("--photoeye-fault-token", type=int, default=0)
+    parser.add_argument("--photoeye-fault-kind", choices=(
+        "stuck_clear", "stuck_blocked", "bounce", "missed", "early"))
     args = parser.parse_args()
+    if bool(args.photoeye_fault_sensor) != bool(args.photoeye_fault_token) or (
+            args.photoeye_fault_sensor and not args.photoeye_fault_kind) or (
+            args.photoeye_fault_kind and not args.photoeye_fault_sensor):
+        parser.error("photoeye fixture requires sensor, positive token and kind together")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     run(args)
 

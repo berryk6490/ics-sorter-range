@@ -61,8 +61,10 @@ def main(case):
             script = """
             for(let i=1;i<1000;i++) clearInterval(i);
             const row=[1,0,8,41,2,1,83,2,0,3];
-            const d={connected:true,plant_rows:[row,[0,0,0,0,0,0,0,0,0,0]],
-                     plant_status:[1,0],plant_age:[0,0],plant_lane:[1,0],plant_fault:0};
+            const empty=[0,0,0,0,0,0,0,0,0,0];
+            const d={connected:true,plant_rows:[row,empty,empty],
+                     plant_status:[1,0,0],plant_age:[0,0,0],
+                     plant_lane:[1,0,0],plant_fault:0,photoeye_mode:false};
             window.eval('currentPlantMode=true'); paintPlant(d);
             const node=document.querySelector('.pkg.plant');
             const before=node.style.transform;

@@ -44,6 +44,7 @@ VAR
   xle_mode AT %QX114.2 : BOOL;           (* lane 1 external sort decisions *)
   xle_multi AT %QX114.3 : BOOL;          (* bounded two-package external mode *)
   plant_mode AT %QX114.6 : BOOL;          (* lane 1 position comes from drives plant *)
+  photoeye_mode AT %QX114.7 : BOOL;       (* opt-in stateful field inputs; legacy events remain *)
 
   speed_sp_1    AT %QW200      : INT;    (* induct 1 speed setpoint, rpm *)
   speed_sp_2    AT %QW201      : INT;    (* induct 2 speed setpoint, rpm *)
@@ -272,6 +273,61 @@ VAR
   p2_view_seq AT %QW679 : INT;
   p2_view_status AT %QW680 : INT;
   p2_view_age AT %QW681 : INT;
+  pe0_raw_epoch_lo AT %QW690 : INT;
+  pe0_raw_epoch_hi AT %QW691 : INT;
+  pe0_raw_nonce AT %QW692 : INT;
+  pe0_raw_token AT %QW693 : INT;
+  pe0_raw_serial AT %QW694 : INT;
+  pe0_raw_lane AT %QW695 : INT;
+  pe0_raw_mask AT %QW696 : INT;          (* bits 0..4: induct,tunnel,divert,outbound,trailer *)
+  pe0_raw_seq AT %QW697 : INT;           (* plant commits the complete row last *)
+  pe1_raw_epoch_lo AT %QW698 : INT;
+  pe1_raw_epoch_hi AT %QW699 : INT;
+  pe1_raw_nonce AT %QW700 : INT;
+  pe1_raw_token AT %QW701 : INT;
+  pe1_raw_serial AT %QW702 : INT;
+  pe1_raw_lane AT %QW703 : INT;
+  pe1_raw_mask AT %QW704 : INT;
+  pe1_raw_seq AT %QW705 : INT;
+  pe2_raw_epoch_lo AT %QW706 : INT;
+  pe2_raw_epoch_hi AT %QW707 : INT;
+  pe2_raw_nonce AT %QW708 : INT;
+  pe2_raw_token AT %QW709 : INT;
+  pe2_raw_serial AT %QW710 : INT;
+  pe2_raw_lane AT %QW711 : INT;
+  pe2_raw_mask AT %QW712 : INT;
+  pe2_raw_seq AT %QW713 : INT;
+  pe0_view_epoch_lo AT %QW720 : INT;
+  pe0_view_epoch_hi AT %QW721 : INT;
+  pe0_view_nonce AT %QW722 : INT;
+  pe0_view_token AT %QW723 : INT;
+  pe0_view_serial AT %QW724 : INT;
+  pe0_view_raw AT %QW725 : INT;
+  pe0_view_conditioned AT %QW726 : INT;
+  pe0_view_quality AT %QW727 : INT;
+  pe1_view_epoch_lo AT %QW728 : INT;
+  pe1_view_epoch_hi AT %QW729 : INT;
+  pe1_view_nonce AT %QW730 : INT;
+  pe1_view_token AT %QW731 : INT;
+  pe1_view_serial AT %QW732 : INT;
+  pe1_view_raw AT %QW733 : INT;
+  pe1_view_conditioned AT %QW734 : INT;
+  pe1_view_quality AT %QW735 : INT;
+  pe2_view_epoch_lo AT %QW736 : INT;
+  pe2_view_epoch_hi AT %QW737 : INT;
+  pe2_view_nonce AT %QW738 : INT;
+  pe2_view_token AT %QW739 : INT;
+  pe2_view_serial AT %QW740 : INT;
+  pe2_view_raw AT %QW741 : INT;
+  pe2_view_conditioned AT %QW742 : INT;
+  pe2_view_quality AT %QW743 : INT;
+  pe_debounce_sp AT %QW744 : INT;         (* 1..5 PLC scans *)
+  pe_min_block_sp AT %QW745 : INT;       (* 1..30 PLC scans *)
+  pe_max_block_sp AT %QW746 : INT;       (* 2..300 PLC scans *)
+  pe_travel_sp AT %QW747 : INT;          (* 5..1000 PLC scans *)
+  pe_fault_mask AT %QW748 : INT;         (* bit per occupied slot, latched to reset *)
+  pe_fault_sensor AT %QW749 : INT;       (* 1..5 latest failed photoeye *)
+  pe_fault_lane AT %QW750 : INT;
   xle_fault_ack AT %QX114.4 : BOOL;    (* coil 916, operator action *)
   xle_retry AT %QX114.5 : BOOL;        (* coil 917, operator action *)
 
@@ -616,6 +672,15 @@ VAR
   plant_next_lane : INT := 1;
   plant_pick_lane, plant_candidate : INT := 0;
   plant_view_seen0, plant_view_seen1, plant_view_seen2 : INT := 0;
+  pe_bound_token, pe_seen, pe_age, pe_raw, pe_filtered,
+  pe_quality, pe_expected, pe_travel : ARRAY[0..2] OF INT;
+  pe_candidate, pe_duration : ARRAY[0..14] OF INT;
+  pe_stable : ARRAY[0..14] OF BOOL;
+  pe_epoch_lo, pe_epoch_hi, pe_nonce, pe_token,
+  pe_serial, pe_lane, pe_mask, pe_seq : ARRAY[0..2] OF INT;
+  pe_bit, pe_index, pe_sensor, pe_debounce, pe_min_block,
+  pe_max_block, pe_max_travel : INT := 0;
+  pe_is_raw, pe_event_ready : BOOL := FALSE;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -656,6 +721,10 @@ IF NOT init_done THEN
   xle_mode := FALSE;
   xle_multi := FALSE;
   plant_mode := FALSE;
+  photoeye_mode := FALSE;
+  pe_debounce_sp := 2; pe_min_block_sp := 2;
+  pe_max_block_sp := 120; pe_travel_sp := 400;
+  pe_fault_mask := 0; pe_fault_sensor := 0; pe_fault_lane := 0;
   plant_request := 0; plant_request_token := 0; plant_request_serial := 0;
   plant_request_lane := 0;
   plant_seen := plant_event_seq; plant_event_ack := 0;
@@ -687,7 +756,16 @@ IF NOT init_done THEN
     st_state[j] := 0; st_dest[j] := 0; st_actual[j] := 0;
     st_reason[j] := 0; st_scan[j] := 0; st_accept[j] := 0;
     st_divert[j] := 0; st_command[j] := 0;
+    pe_bound_token[j] := 0; pe_seen[j] := 0; pe_age[j] := 0;
+    pe_raw[j] := 0; pe_filtered[j] := 0; pe_quality[j] := 0;
+    pe_expected[j] := 1; pe_travel[j] := 0;
   END_FOR;
+  FOR j := 0 TO 14 DO
+    pe_candidate[j] := 0; pe_duration[j] := 0; pe_stable[j] := FALSE;
+  END_FOR;
+  pe0_view_token := 0; pe0_view_raw := 0; pe0_view_conditioned := 0; pe0_view_quality := 0;
+  pe1_view_token := 0; pe1_view_raw := 0; pe1_view_conditioned := 0; pe1_view_quality := 0;
+  pe2_view_token := 0; pe2_view_raw := 0; pe2_view_conditioned := 0; pe2_view_quality := 0;
   xle_cmd_seen := xle_cmd_id;
   xle_route_dest := 0;
   xle_inducted := FALSE;
@@ -1193,6 +1271,143 @@ ELSE
 END_IF;
 
 
+(* Opt-in stateful field inputs. The plant publishes three committed rows,
+   one for each PLC slot. Only an exact run/lane/token/serial match is
+   conditioned and copied to the supervisory view. Faults latch to reset. *)
+IF plant_mode AND photoeye_mode THEN
+  pe_epoch_lo[0] := pe0_raw_epoch_lo; pe_epoch_hi[0] := pe0_raw_epoch_hi;
+  pe_nonce[0] := pe0_raw_nonce; pe_token[0] := pe0_raw_token;
+  pe_serial[0] := pe0_raw_serial; pe_lane[0] := pe0_raw_lane;
+  pe_mask[0] := pe0_raw_mask; pe_seq[0] := pe0_raw_seq;
+  pe_epoch_lo[1] := pe1_raw_epoch_lo; pe_epoch_hi[1] := pe1_raw_epoch_hi;
+  pe_nonce[1] := pe1_raw_nonce; pe_token[1] := pe1_raw_token;
+  pe_serial[1] := pe1_raw_serial; pe_lane[1] := pe1_raw_lane;
+  pe_mask[1] := pe1_raw_mask; pe_seq[1] := pe1_raw_seq;
+  pe_epoch_lo[2] := pe2_raw_epoch_lo; pe_epoch_hi[2] := pe2_raw_epoch_hi;
+  pe_nonce[2] := pe2_raw_nonce; pe_token[2] := pe2_raw_token;
+  pe_serial[2] := pe2_raw_serial; pe_lane[2] := pe2_raw_lane;
+  pe_mask[2] := pe2_raw_mask; pe_seq[2] := pe2_raw_seq;
+  IF pe_debounce_sp >= 1 AND pe_debounce_sp <= 5 THEN
+    pe_debounce := pe_debounce_sp;
+  ELSE pe_debounce := 2; END_IF;
+  IF pe_min_block_sp >= 1 AND pe_min_block_sp <= 30 THEN
+    pe_min_block := pe_min_block_sp;
+  ELSE pe_min_block := 2; END_IF;
+  IF pe_max_block_sp >= 2 AND pe_max_block_sp <= 300 THEN
+    pe_max_block := pe_max_block_sp;
+  ELSE pe_max_block := 120; END_IF;
+  IF pe_travel_sp >= 5 AND pe_travel_sp <= 1000 THEN
+    pe_max_travel := pe_travel_sp;
+  ELSE pe_max_travel := 400; END_IF;
+  FOR j := 0 TO 2 DO
+    IF st_state[j] = 0 OR st_token[j] = 0 THEN
+      pe_bound_token[j] := 0; pe_seen[j] := pe_seq[j];
+      pe_raw[j] := 0; pe_filtered[j] := 0; pe_age[j] := 0;
+      pe_expected[j] := 1; pe_travel[j] := 0;
+    ELSE
+      IF pe_bound_token[j] <> st_token[j] THEN
+        pe_bound_token[j] := st_token[j]; pe_seen[j] := pe_seq[j];
+        pe_raw[j] := 0; pe_filtered[j] := 0; pe_age[j] := 0;
+        pe_quality[j] := 0; pe_expected[j] := 1; pe_travel[j] := 0;
+        FOR pe_sensor := 0 TO 4 DO
+          pe_index := j * 5 + pe_sensor;
+          pe_candidate[pe_index] := 0; pe_duration[pe_index] := 0;
+          pe_stable[pe_index] := FALSE;
+        END_FOR;
+      END_IF;
+      IF pe_seq[j] <> 0 AND pe_seq[j] <> pe_seen[j] THEN
+        pe_seen[j] := pe_seq[j]; pe_age[j] := 0;
+        IF pe_epoch_lo[j] = epoch_active_lo AND
+           pe_epoch_hi[j] = epoch_active_hi AND
+           pe_nonce[j] = reset_nonce AND pe_token[j] = st_token[j] AND
+           pe_serial[j] = st_serial[j] AND pe_lane[j] = st_lane[j] AND
+           pe_mask[j] >= 0 AND pe_mask[j] <= 31 THEN
+          pe_raw[j] := pe_mask[j];
+        ELSE
+          pe_quality[j] := 1; pe_fault_sensor := pe_expected[j];
+        END_IF;
+      ELSIF pe_age[j] < 32000 THEN
+        pe_age[j] := pe_age[j] + 1;
+      END_IF;
+      IF pe_age[j] > 15 AND pe_quality[j] = 0 THEN
+        pe_quality[j] := 6; pe_fault_sensor := pe_expected[j];
+      END_IF;
+      IF pe_quality[j] = 0 AND pe_seen[j] <> 0 THEN
+        pe_filtered[j] := 0;
+        pe_bit := 1;
+        FOR pe_sensor := 1 TO 5 DO
+          pe_index := j * 5 + pe_sensor - 1;
+          pe_is_raw := ((pe_raw[j] / pe_bit) MOD 2) = 1;
+          IF pe_is_raw <> pe_stable[pe_index] THEN
+            pe_candidate[pe_index] := pe_candidate[pe_index] + 1;
+            IF pe_candidate[pe_index] >= pe_debounce THEN
+              pe_candidate[pe_index] := 0;
+              pe_stable[pe_index] := pe_is_raw;
+              IF pe_is_raw THEN
+                pe_duration[pe_index] := 0;
+                IF pe_sensor <> pe_expected[j] THEN
+                  (* Attribute a skipped transition to the beam that was
+                     expected, rather than the downstream beam that exposed it. *)
+                  pe_quality[j] := 5; pe_fault_sensor := pe_expected[j];
+                ELSE
+                  pe_travel[j] := 0;
+                END_IF;
+              ELSE
+                IF pe_duration[pe_index] < pe_min_block THEN
+                  pe_quality[j] := 4; pe_fault_sensor := pe_sensor;
+                ELSIF pe_sensor = pe_expected[j] THEN
+                  pe_expected[j] := pe_expected[j] + 1;
+                  pe_travel[j] := 0;
+                END_IF;
+                pe_duration[pe_index] := 0;
+              END_IF;
+            END_IF;
+          ELSE
+            pe_candidate[pe_index] := 0;
+          END_IF;
+          IF pe_stable[pe_index] THEN
+            pe_filtered[j] := pe_filtered[j] + pe_bit;
+            IF pe_duration[pe_index] < 32000 THEN
+              pe_duration[pe_index] := pe_duration[pe_index] + 1;
+            END_IF;
+            IF pe_duration[pe_index] > pe_max_block THEN
+              pe_quality[j] := 3; pe_fault_sensor := pe_sensor;
+            END_IF;
+          END_IF;
+          pe_bit := pe_bit * 2;
+        END_FOR;
+        IF pe_expected[j] <= 5 AND pe_travel[j] < 32000 THEN
+          pe_travel[j] := pe_travel[j] + 1;
+          IF pe_travel[j] > pe_max_travel THEN
+            pe_quality[j] := 2; pe_fault_sensor := pe_expected[j];
+          END_IF;
+        END_IF;
+      END_IF;
+      IF pe_quality[j] <> 0 THEN
+        IF j = 0 AND (pe_fault_mask MOD 2) = 0 THEN
+          pe_fault_mask := pe_fault_mask + 1; END_IF;
+        IF j = 1 AND ((pe_fault_mask / 2) MOD 2) = 0 THEN
+          pe_fault_mask := pe_fault_mask + 2; END_IF;
+        IF j = 2 AND ((pe_fault_mask / 4) MOD 2) = 0 THEN
+          pe_fault_mask := pe_fault_mask + 4; END_IF;
+        pe_fault_lane := st_lane[j]; sorter_run := FALSE;
+      END_IF;
+    END_IF;
+  END_FOR;
+  pe0_view_epoch_lo := epoch_active_lo; pe0_view_epoch_hi := epoch_active_hi;
+  pe0_view_nonce := reset_nonce; pe0_view_token := pe_bound_token[0];
+  pe0_view_serial := st_serial[0]; pe0_view_raw := pe_raw[0];
+  pe0_view_conditioned := pe_filtered[0]; pe0_view_quality := pe_quality[0];
+  pe1_view_epoch_lo := epoch_active_lo; pe1_view_epoch_hi := epoch_active_hi;
+  pe1_view_nonce := reset_nonce; pe1_view_token := pe_bound_token[1];
+  pe1_view_serial := st_serial[1]; pe1_view_raw := pe_raw[1];
+  pe1_view_conditioned := pe_filtered[1]; pe1_view_quality := pe_quality[1];
+  pe2_view_epoch_lo := epoch_active_lo; pe2_view_epoch_hi := epoch_active_hi;
+  pe2_view_nonce := reset_nonce; pe2_view_token := pe_bound_token[2];
+  pe2_view_serial := st_serial[2]; pe2_view_raw := pe_raw[2];
+  pe2_view_conditioned := pe_filtered[2]; pe2_view_quality := pe_quality[2];
+END_IF;
+
 (* Plant events are serialized by the event/ack pair. The plant writes
    payload first and sequence last. The PLC accepts only its current run and
    an occupied slot with the exact token and serial. No counter advances on
@@ -1324,7 +1539,20 @@ IF plant_mode THEN
     END_IF;
     IF p2_view_age > 15 AND p2_view_status = 1 THEN p2_view_status := 2; END_IF;
   END_IF;
-  IF plant_event_seq <> 0 AND plant_event_seq <> plant_seen THEN
+  pe_event_ready := TRUE;
+  IF photoeye_mode AND plant_event_seq <> 0 AND plant_event_seq <> plant_seen THEN
+    FOR j := 0 TO 2 DO
+      IF st_token[j] = plant_event_token AND st_serial[j] = plant_event_serial AND
+         st_lane[j] = plant_event_lane THEN
+        IF pe_quality[j] <> 0 THEN pe_event_ready := FALSE; END_IF;
+        IF plant_event_type = 1 AND pe_expected[j] < 2 THEN pe_event_ready := FALSE; END_IF;
+        IF plant_event_type = 2 AND pe_expected[j] < 3 THEN pe_event_ready := FALSE; END_IF;
+        IF plant_event_type = 3 AND pe_expected[j] < 4 THEN pe_event_ready := FALSE; END_IF;
+        IF plant_event_type = 4 AND pe_expected[j] < 6 THEN pe_event_ready := FALSE; END_IF;
+      END_IF;
+    END_FOR;
+  END_IF;
+  IF plant_event_seq <> 0 AND plant_event_seq <> plant_seen AND pe_event_ready THEN
     plant_seen := plant_event_seq;
     plant_event_ack := plant_event_seq;
     slot_index := -1;

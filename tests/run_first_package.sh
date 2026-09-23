@@ -48,3 +48,8 @@ cc -std=c11 -DFAIL_LANE3 -include time.h -include POUS.h -I "$build_dir" -I "$ma
 cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
     "$build_dir/POUS.c" "$repo_dir/tests/plant_three_slots.c" -lm -o "$build_dir/plant_three_slots"
 "$build_dir/plant_three_slots"
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/photoeyes.c" -lm -o "$build_dir/photoeyes"
+for case_name in normal bounce event_gate stuck_clear stuck_blocked order mismatch missing short cleanup; do
+    "$build_dir/photoeyes" "$case_name"
+done
