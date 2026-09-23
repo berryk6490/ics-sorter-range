@@ -1,0 +1,187 @@
+{
+  "baseline_commit": "3cfb61334eb1ce9e14ae3d5c6e6ae03416ddabf3",
+  "hash_algorithm": "sha256",
+  "components": [
+    {
+      "repository_source": "Sorter.st",
+      "guest": "plc",
+      "canonical_destination": "/home/kevin/OpenPLC_v3/webserver/st_files/xle_sorter.st",
+      "associated_service": [
+        "openplc.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "780e4e6c7cba821d23e20a6e873bc87799e2d582e0dec4a2a48aec06a2e54d70",
+      "verification_command": "sha256sum /home/kevin/OpenPLC_v3/webserver/st_files/xle_sorter.st"
+    },
+    {
+      "repository_source": "devices/plant.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/plant.py",
+      "associated_service": [
+        "sorter-plant.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "c2fcbac1a19f788003c565d3510b90dec2e72e670432380009da043393cc1e17",
+      "verification_command": "sha256sum /home/kevin/plant.py"
+    },
+    {
+      "repository_source": "devices/scanner.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/scanner.py",
+      "associated_service": [
+        "scanner@tunnel1.service",
+        "scanner@tunnel2.service",
+        "scanner@tunnel3.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "5f6f2d48b9424327e88b558a67924efe5bfc70fb061c8c13baa76cc18facd402",
+      "verification_command": "sha256sum /home/kevin/scanner.py"
+    },
+    {
+      "repository_source": "devices/vfd.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/vfd.py",
+      "associated_service": [
+        "vfd@induct1.service",
+        "vfd@induct2.service",
+        "vfd@induct3.service",
+        "vfd@outbnd1.service",
+        "vfd@outbnd2.service",
+        "vfd@outbnd3.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "c81fed84ba284eb78cb760331bbf63b79ff1b309fd43945b6f68db9d94d3c62d",
+      "verification_command": "sha256sum /home/kevin/vfd.py"
+    },
+    {
+      "repository_source": "deploy/systemd/scanner@.service",
+      "guest": "drives",
+      "canonical_destination": "/etc/systemd/system/scanner@.service",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "38bac347fbce6e5e7429d31b27ad17a5b6c0d3808ab744ec61356b233a4b084a",
+      "verification_command": "sha256sum /etc/systemd/system/scanner@.service"
+    },
+    {
+      "repository_source": "deploy/systemd/vfd@.service",
+      "guest": "drives",
+      "canonical_destination": "/etc/systemd/system/vfd@.service",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "209bec77d967c4f7cf5a5fdb05d8d8c84eb14cc6f220f3cec1f1de48add5be40",
+      "verification_command": "sha256sum /etc/systemd/system/vfd@.service"
+    },
+    {
+      "repository_source": "deploy/systemd/sorter-plant.service",
+      "guest": "drives",
+      "canonical_destination": "/etc/systemd/system/sorter-plant.service",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "772b9cdd6de3e31cf61c5c6fc22dcb3271507fe1d19e185fc5da7c3d05f6b67f",
+      "verification_command": "sha256sum /etc/systemd/system/sorter-plant.service"
+    },
+    {
+      "repository_source": "services/xle.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/xle.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "e5d50f6b4b5e1844a17414a5e4793484b6c2a0e3da9d4dfcb010a6709fe9d13e",
+      "verification_command": "sha256sum /home/kevin/sorter-services/xle.py"
+    },
+    {
+      "repository_source": "services/asx.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/asx.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "54618623c5b111297f62df7f159db4f9b3c5004e63e736380f2f524a09a97950",
+      "verification_command": "sha256sum /home/kevin/sorter-services/asx.py"
+    },
+    {
+      "repository_source": "tests/lane3_plan.json",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/lane3_plan.json",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "b8ce42bb2a16a47d01f8efb50d981c82e897496477d657ea0aeedf680295bc2b",
+      "verification_command": "sha256sum /home/kevin/sorter-services/lane3_plan.json"
+    },
+    {
+      "repository_source": "scada/opcua_server.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/opcua_server.py",
+      "associated_service": [
+        "opcua-server.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "9a2bc68df4942e9415eebeece8f5ef447a5c43246c052edc0947346f4b943452",
+      "verification_command": "sha256sum /home/kevin/opcua_server.py"
+    },
+    {
+      "repository_source": "scada/hmi_ua.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/hmi_ua.py",
+      "associated_service": [
+        "sorter-hmi.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "1f97cfc8e0e96de8e409eba700ada89e2d8943611ea23dabfe439299817c28da",
+      "verification_command": "sha256sum /home/kevin/hmi_ua.py"
+    },
+    {
+      "repository_source": "scada/opcua-server.service",
+      "guest": "scada",
+      "canonical_destination": "/etc/systemd/system/opcua-server.service",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "a9d64b2674d99ec292cde15793c2bec762830e9dea15b1f9432df74af6a641f9",
+      "verification_command": "sha256sum /etc/systemd/system/opcua-server.service"
+    },
+    {
+      "repository_source": "scada/sorter-hmi.service",
+      "guest": "scada",
+      "canonical_destination": "/etc/systemd/system/sorter-hmi.service",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "d3292f03a46765c0779ad696954f55da306181ff628f47f399ccc5abc5dd4253",
+      "verification_command": "sha256sum /etc/systemd/system/sorter-hmi.service"
+    },
+    {
+      "repository_source": "tests/live_plant_lane3.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/live_plant_lane3.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "e134852c11c6adfe9b1cc4f27c6a58ba1cfa658bbac447de96e9129aafd9598c",
+      "verification_command": "sha256sum /home/kevin/live_plant_lane3.py"
+    },
+    {
+      "repository_source": "tests/live_photoeye_fault.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/live_photoeye_fault.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "91a791372ea716cf7e0de73ce14277c0455f0b492caf6eb0237a3fbf50e988f4",
+      "verification_command": "sha256sum /home/kevin/live_photoeye_fault.py"
+    },
+    {
+      "repository_source": "tests/live_xle_multi.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/live_xle_multi.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "a869f266c68919e7fbd6a14009355154f4ed17094e93d5ac1173aadb962f3834",
+      "verification_command": "sha256sum /home/kevin/live_xle_multi.py"
+    },
+    {
+      "repository_source": "tests/live_plant.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/live_plant.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "ac7363300864d19234753f2047bff1674e2d20acc6ebe61a33297f2f2d7c8995",
+      "verification_command": "sha256sum /home/kevin/live_plant.py"
+    }
+  ]
+}

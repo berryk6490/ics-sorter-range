@@ -97,9 +97,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with lock:
                     console.sendline(
-                        "cd /home/kevin/sorter-services; "
-                        f"nohup /home/kevin/opcua/bin/python live_plant_lane3.py {case} "
-                        "--start-file /tmp/plant-test-start "
+                        f"nohup /home/kevin/opcua/bin/python /home/kevin/live_plant_lane3.py {case} "
+                        "--stateful --start-file /tmp/plant-test-start "
                         f"> /tmp/plant-lane3-browser-{case}.out 2>&1 & sleep 1")
                     console.expect(r"kevin@scada:.*\$ ", timeout=15)
                 self.send_response(204)

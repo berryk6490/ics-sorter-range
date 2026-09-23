@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 import tempfile
 import threading
 import unittest
@@ -219,7 +220,7 @@ class Recovery(unittest.TestCase):
                               journal=journal, terminal_hold=0)
             self.assertEqual(xle.run_multi(plc, "unused", packages=1, deadline=.6,
                                            journal=journal, terminal_hold=0), 0)
-            with sqlite3.connect(journal) as db:
+            with closing(sqlite3.connect(journal)) as db:
                 rows = db.execute("SELECT identity,payload FROM outcomes").fetchall()
         self.assertEqual(plc.releases, 1)
         self.assertEqual(plc.routes, 0)
