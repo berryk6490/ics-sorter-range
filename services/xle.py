@@ -11,7 +11,8 @@ import uuid
 
 
 def event(kind, **fields):
-    print(json.dumps({"event": kind, **fields}, sort_keys=True), flush=True)
+    print(json.dumps({"event": kind, "event_ns": time.monotonic_ns(),
+                      **fields}, sort_keys=True), flush=True)
 
 
 def validate_decision(request, response):
@@ -57,7 +58,7 @@ def run(client, asx_url, deadline=90):
             continue
         seq, serial = read(client, 118, 2)
         result = read(client, 158, 7, inputs=True)
-        barcode, nonce = read(client, 508, 2)
+        barcode, nonce, scan_tick = read(client, 508, 3)
         if (seq == 0 or seq > 30000 or result[0] != seq or
                 result[1] != barcode or result[6] != nonce or
                 result[2] not in (0, 3, 4) or not barcode or
@@ -74,7 +75,9 @@ def run(client, asx_url, deadline=90):
                    "request_id": str(uuid.uuid4()),
                    "barcode": barcode, "scanner_sequence": seq,
                    "scanner_run_nonce": nonce, "lane": 1}
-        event("scan", **request)
+        event("scan", plc_scan_tick=scan_tick, **request)
+        event("asx_lookup", package_id=package_id,
+              request_id=request["request_id"], timeout_ms=800)
         destination, reason = lookup(request, asx_url)
         if destination is None:
             event("safe_fallback", package_id=package_id,
@@ -95,20 +98,27 @@ def run(client, asx_url, deadline=90):
                   command_id=command_id, barcode=barcode,
                   destination=destination, run_nonce=nonce)
         while time.monotonic() < end:
-            ack, state, fault, actual, plc_barcode, plc_nonce = read(client, 504, 6)
+            (ack, state, fault, actual, plc_barcode, plc_nonce,
+             result_tick, accept_tick, divert_tick) = read(client, 504, 9)
             if plc_barcode != barcode or plc_nonce != nonce:
                 raise RuntimeError("PLC changed run or package before outcome")
             if command_id and ack == command_id and state in (4,):
                 event("plc_outcome", package_id=package_id, command_id=command_id,
-                      state="failed", reason=fault, actual_trailer=actual)
+                      state="failed", reason=fault, actual_trailer=actual,
+                      scan_tick=result_tick, accept_tick=accept_tick,
+                      divert_tick=divert_tick)
                 return 1
             if command_id and ack == command_id and state == 3:
                 event("plc_outcome", package_id=package_id, command_id=command_id,
-                      state="loaded", reason=fault, actual_trailer=actual)
+                      state="loaded", reason=fault, actual_trailer=actual,
+                      scan_tick=result_tick, accept_tick=accept_tick,
+                      divert_tick=divert_tick)
                 return 0
             if not command_id and state == 5:
                 event("plc_outcome", package_id=package_id, command_id=0,
-                      state="recirculated", reason=fault, actual_trailer=0)
+                      state="recirculated", reason=fault, actual_trailer=0,
+                      scan_tick=result_tick, accept_tick=accept_tick,
+                      divert_tick=divert_tick)
                 return 0
             time.sleep(0.1)
         raise TimeoutError("PLC outcome timeout")

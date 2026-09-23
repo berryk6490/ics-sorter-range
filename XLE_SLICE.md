@@ -63,6 +63,9 @@ For a valid decision, XLe atomically writes holding registers 500..503:
 | 507 | actual trailer 1..9, or 0 | PLC |
 | 508 | current scanned barcode | PLC |
 | 509 | current run nonce | PLC |
+| 510 | PLC scan counter when tunnel 1 result was accepted | PLC |
+| 511 | PLC scan counter when XLe command was accepted; 0 if none | PLC |
+| 512 | PLC scan counter when this package first reached lane 1 divert cell 14 | PLC |
 
 The PLC accepts a changed command ID only when the barcode and nonce match
 the currently scanned lane 1 package, the destination is in range, and that
@@ -73,6 +76,12 @@ XLe logs the PLC state and failure reason under the same package and command
 IDs. A late command is rejected with state 4/reason 2. The one-package limit
 prevents a second scan from replacing the pending command's identity; a
 production multi-package controller needs per-package command storage.
+
+The three timing registers use the existing 100 ms PLC task as a logical
+clock. Register 510 marks when the PLC consumed the scanner result, which is
+the point at which the controller can act on it; it does not timestamp the
+scanner's internal image acquisition. These differences have one-scan
+resolution.
 
 ## Live browser fault check
 
@@ -156,3 +165,64 @@ and `~/opcua/bin/python ~/sorter-services/xle.py` in separate processes.
 On PLC run `~/OpenPLC_v3/.venv/bin/python3 ~/live_xle_package.py` after
 copying `tests/live_xle_package.py` there. The runner restores the operator
 settings and leaves the sorter stopped even after failure.
+
+## Live decision faults and timing
+
+The next test used the same four VMs and unchanged network rules. The source
+in this repository was copied to the guests before running
+`~/opcua/bin/python ~/live_xle_faults.py` on SCADA. That script is
+`tests/live_xle_faults.py`: it starts an XLe process for each case, starts
+ASX except for the unavailable case, resets the PLC with fixed seed 137,
+enables one-package lane 1 mode, observes the PLC and scanner mapping via
+SCADA-to-PLC Modbus, and restores the initial coils, setpoints, and seed in
+`finally`. Each printed record is written verbatim in
+[`tests/artifacts/xle-live-faults.jsonl`](tests/artifacts/xle-live-faults.jsonl).
+Every record includes the scanner sequence, serial, barcode, and run nonce;
+the XLe and ASX request/response events; and the PLC command, terminal state,
+reason, counters, and timing registers. The test checks the package and
+request IDs across those events. In the unavailable case no ASX process
+exists, so there can be no ASX event; XLe's lookup event and connection error
+carry the package and request IDs that identify the attempted call.
+
+| Case | Package ID | ASX result / XLe action | PLC state, reason | Trailers / recirc | Result to first divert |
+| --- | --- | --- | --- | --- | ---: |
+| Valid | `l1-2-1-3145949f` | route 2; command 1 | loaded 3, reason 0, actual 2 | trailer 1-2 = 1 / 0 | 3300 ms |
+| Unknown barcode | `l1-3-1-2468bedd` | empty plan: no decision; fallback | recirculated 5, reason 1 | all zero / 1 | 3300 ms |
+| ASX unavailable | `l1-4-1-ce140d0d` | no listener: `URLError`; fallback | recirculated 5, reason 1 | all zero / 1 | 3200 ms |
+| Delayed response | `l1-5-1-76d83f60` | ASX delay 1.2 s; XLe timeout 803.5 ms; fallback | recirculated 5, reason 1 | all zero / 1 | 3300 ms |
+| Mismatched response | `l1-6-1-c28221c5` | ASX prefixed the returned request ID; fallback | recirculated 5, reason 1 | all zero / 1 | 3300 ms |
+
+Every case scanned barcode 6001, inducted exactly one package, and recorded
+no wrong-trailer load. The four fallback cases had no PLC command ACK, no
+command-accept tick, actual trailer 0, and all nine trailer counters zero.
+The delayed ASX response was logged after XLe's timeout; its attempted socket
+delivery found the connection closed. The mismatched response carried a
+valid route but was rejected before any PLC command. Unknown was a genuine
+lookup against an empty editable plan, rather than a barcode-digit rule.
+
+For the valid case, PLC ticks were scan 221, command accepted 222, and first
+divert 254. At the configured 100 ms task interval, result to command was
+**100 ms**, leaving **3200 ms** before the first divert. Across all five runs,
+result to first divert was 3200–3300 ms. The current **0.8 s ASX timeout fits
+that observed window** at the tested 200 rpm setpoint, leaving roughly
+2.4–2.5 s between the timeout and first divert. It is a conservative policy:
+the deliberately delayed 1.2 s answer would still have arrived within the
+physical divert window, but XLe safely discarded it once the 0.8 s deadline
+expired. These figures are PLC scan-time measurements for this speed and load;
+they are not a guarantee for faster belts or a stalled PLC task.
+
+The ASX `--scenario delay` and `--scenario mismatch` switches exist to inject
+these faults in the simulated service. They do not give ASX PLC access. The
+only new PLC behavior is publishing the three timing registers; external
+mode still permits one package per reset. All cases passed live. The test
+stopped its temporary XLe/ASX processes and restored operator settings after
+each case; the sorter was left stopped. No physical diverter or real ASX was
+tested.
+
+The final Modbus read showed run false; coils 881..887 all true; external mode
+false; setpoints 200..210 equal to
+`[200,200,200,233,233,233,2,14,14,14,30]`; seed 137; scanner reset state
+`[0,0,7,0]`; and the last fallback outcome
+`[ack=0,state=5,reason=1,actual=0,barcode=6001,nonce=6,scan=224,accept=0,divert=257]`.
+SCADA HMI and OPC UA services and all nine drive/scanner instances remained
+active. No XLe or ASX test process remained.

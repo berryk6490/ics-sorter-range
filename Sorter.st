@@ -112,6 +112,9 @@ VAR
   xle_actual AT %QW507 : INT;            (* physical trailer, 1..9 *)
   xle_package AT %QW508 : INT;           (* scanner barcode identity *)
   xle_run_nonce AT %QW509 : INT;
+  xle_scan_tick AT %QW510 : INT;          (* PLC scan accepting tunnel 1 result *)
+  xle_accept_tick AT %QW511 : INT;        (* PLC scan accepting XLe command *)
+  xle_divert_tick AT %QW512 : INT;        (* first arrival at lane 1 cell 14 *)
 
   ib1_c0          AT %QW260      : INT;
   ib1_c1          AT %QW261      : INT;
@@ -481,6 +484,7 @@ IF NOT init_done THEN
   xle_inducted := FALSE;
   xle_ack_id := 0; xle_state := 0; xle_reason := 0;
   xle_actual := 0; xle_package := 0;
+  xle_scan_tick := 0; xle_accept_tick := 0; xle_divert_tick := 0;
   acc_i1 := 0.0; tmr1 := 0; jam_lat_1 := FALSE;
   acc_o1 := 0.0;
   scan_code_2 := 0;
@@ -712,6 +716,8 @@ ELSIF tun_wait_1 AND scan1_result = tun_seq_1 AND scan1_nonce = reset_nonce THEN
       xle_package := bc;
       xle_state := 0; xle_reason := 0; xle_actual := 0;
       xle_route_dest := 0;
+      xle_scan_tick := scan_ct;
+      xle_accept_tick := 0; xle_divert_tick := 0;
       rt1[10] := 0;
     ELSE
       dest  := bc / 1000;
@@ -863,6 +869,7 @@ IF xle_mode AND xle_cmd_id <> 0 AND xle_cmd_id <> xle_cmd_seen THEN
         ELSE rt1[i] := 18;
         END_IF;
         xle_state := 1; xle_reason := 0;
+        xle_accept_tick := scan_ct;
       END_IF;
     END_FOR;
   END_IF;
@@ -906,6 +913,10 @@ IF acc_i1 >= 1.0 THEN
   END_FOR;
   ib1[0] := 0;
   rt1[0] := 0;
+  IF xle_mode AND xle_package <> 0 AND ib1[14] = xle_package AND
+     xle_divert_tick = 0 THEN
+    xle_divert_tick := scan_ct;
+  END_IF;
 
   (* induct if the interval expired and the gap is clear *)
   tmr1 := tmr1 + 1;

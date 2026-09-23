@@ -37,13 +37,16 @@ int main(int argc, char **argv) {
     INPUT(158) = 1; INPUT(159) = 6001; INPUT(160) = 0; INPUT(164) = 1;
     scan();
     assert(WORD(508) == 6001 && WORD(330) == 0);
+    assert(WORD(510) > 0 && WORD(511) == 0 && WORD(512) == 0);
 
     if (!strcmp(argv[1], "valid") || !strcmp(argv[1], "failed")) {
         WORD(500) = 1; WORD(501) = 6001; WORD(502) = 2; WORD(503) = 1;
         scan();
         assert(WORD(504) == 1 && WORD(505) == 1 && WORD(332) == 14);
+        assert(WORD(511) >= WORD(510));
         for (int i = 0; i < 4; ++i) scan();
         assert(WORD(505) == 2);
+        assert(WORD(512) > WORD(511));
         if (!strcmp(argv[1], "failed")) BIT(110, 1) = 0;
         for (int i = 0; i < 25; ++i) scan();
         assert(WORD(220) == 1);
@@ -63,6 +66,7 @@ int main(int argc, char **argv) {
         assert(!strcmp(argv[1], "unknown"));
         for (int i = 0; i < 10; ++i) scan();
         assert(WORD(218) == 1 && WORD(505) == 5 && WORD(506) == 1);
+        assert(WORD(511) == 0 && WORD(512) > WORD(510));
         printf("unknown: no command, explicit recirculation reason 1\n");
     }
     return 0;
