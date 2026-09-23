@@ -1,0 +1,21 @@
+[Unit]
+Description=VFD emulator %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/kevin
+EnvironmentFile=/etc/vfd/%i.conf
+ExecStart=/home/kevin/venv/bin/python /home/kevin/vfd.py ${ADDR} %i
+Restart=always
+RestartSec=5
+KillMode=mixed
+StandardOutput=append:/var/log/vfd-%i.log
+StandardError=append:/var/log/vfd-%i.log
+
+[Install]
+WantedBy=multi-user.target

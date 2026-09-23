@@ -4,10 +4,9 @@
 identical copy of Structured Text despite its historical `.py` name;
 `sorter.st` is an older version with scanner behavior still inside the PLC.
 The nearby `../sorter_project/plc.xml` is an older one-lane Beremiz project.
-The repository does not contain the drive, scanner, firewall, or HMI service
-source. The inspected `drives` guest runs `/home/kevin/vfd.py` and
-`/home/kevin/scanner.py`; service units launch six VFD instances and three
-tunnel instances.
+The repository includes copies of the deployed drive and scanner sources in
+`devices/`, plus their nine instance configurations and register maps in
+`deploy/README.md`. Firewall and HMI service sources have not been copied.
 
 ## Data path visible in the PLC source
 
@@ -69,9 +68,20 @@ OpenPLC's `compile_program.sh` succeeded and `active_program` now names
 Copy `tests/live_first_package.py` to the PLC guest's home directory and run
 `~/OpenPLC_v3/.venv/bin/python3 ~/live_first_package.py` there. The script
 reads the PLC, induct drive 1, and camera 1 over Modbus, then checks the first
-serial from induction through barcode and trailer load. It stops the sorter
-and restores the lane-enable bits after the run. On 2026-09-23, the live run
+serial from induction through barcode and trailer load. It records the initial
+lane 2 and lane 3 enable bits before reset, stops the sorter, and restores
+those exact bits even if the check fails. It also changes the scanner seed
+before reset and restores the previous seed afterward, because a same-seed
+PLC reset alone does not reseed the deployed scanner. On 2026-09-23, a live run
 exited 0: first barcode `2001` reached trailer 1-2, with drive feedback,
 belt-cell occupancy, trigger sequence 1, and a matching camera result all
 observed. Only `plc` and `drives` were running. The HMI path through `scada`
-remains untested.
+remains untested. `deploy/README.md` explains the scanner replay gap and the
+duplicate result observed on a later same-seed reset.
+
+The updated live test was run again on the same two guests. After its explicit
+seed transition, serial 1 received barcode `6001` and loaded at trailer 2-3;
+the script exited 0. A post-run read showed sorter run off, all three lane
+enables on as they were before the test, and `master_seed` restored to 137.
+Two local cleanup checks also force a measurement failure and a partial setup
+failure, and verify that the initial lane values are restored in both cases.

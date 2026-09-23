@@ -1,0 +1,22 @@
+[Unit]
+Description=Camera tunnel emulator %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=30
+
+[Service]
+Type=exec
+User=root
+WorkingDirectory=/home/kevin
+EnvironmentFile=/etc/scanner/%i.conf
+ExecStart=/home/kevin/venv/bin/python /home/kevin/scanner.py ${ADDR} %i ${LANE}
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=10
+StandardOutput=append:/var/log/scanner-%i.log
+StandardError=append:/var/log/scanner-%i.log
+
+[Install]
+WantedBy=multi-user.target
