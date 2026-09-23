@@ -61,7 +61,7 @@ TRUSTLIST = "certs/trusted"
 # zero everywhere and looks like a dead process.
 
 SP_BASE, IB_BASE, OB_BASE, COIL_BASE = 200, 260, 380, 880
-SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 38
+SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 39
 
 # Offsets into the SP block (absolute address = SP_BASE + offset).
 SP = {
@@ -111,7 +111,7 @@ COIL = {"run": 0, "auto": 1, "lane_run": 2, "ob_run": 5,
         "noread_alarm": 28, "nohome_alarm": 29,
         "reset_cmd": 30, "fault_reset": 31,
         "scanner_fault_ack": 32, "scanner_retry": 33,
-        "xle_fault_ack": 36, "xle_retry": 37}
+        "xle_fault_ack": 36, "xle_retry": 37, "plant_mode": 38}
 COIL_ABS = {k: COIL_BASE + v for k, v in COIL.items()}
 
 log = logging.getLogger("opcua_server")
@@ -146,7 +146,8 @@ class ModbusLink:
         ob = self.plc.read_holding_registers(OB_BASE, CELL_COUNT, slave=1)
         co = self.plc.read_coils(COIL_BASE, COIL_COUNT, slave=1)
         live = self.plc.read_holding_registers(568, 2, slave=1)
-        if sp.isError() or ib.isError() or ob.isError() or co.isError() or live.isError():
+        plant = self.plc.read_holding_registers(591, 2, slave=1)
+        if sp.isError() or ib.isError() or ob.isError() or co.isError() or live.isError() or plant.isError():
             raise IOError("plc read")
 
         drives = []
@@ -166,6 +167,8 @@ class ModbusLink:
             "ob": [s16(v) for v in ob.registers],
             "coils": list(co.bits[:COIL_COUNT]),
             "liveness": [s16(v) for v in live.registers],
+            "plant_fault": s16(plant.registers[0]),
+            "plant_failed_count": s16(plant.registers[1]),
             "drives": drives,
         }
 
@@ -294,6 +297,9 @@ class Namespace:
             await self._add_ro(status, key, name)
         await self._add_ro(status, "xle_heartbeat_age", "XLeHeartbeatAge")
         await self._add_ro(status, "xle_liveness", "XLeLivenessState")
+        await self._add_ro(status, "plant_fault", "PlantFault")
+        await self._add_ro(status, "plant_failed_count", "PlantFailedConfirmationCount")
+        await self._add_ro(status, "plant_mode", "PlantMode", ua.VariantType.Boolean)
         await self._add_rw_bool(status, "scanner_fault_ack", "ScannerFaultAck",
                                 COIL_ABS["scanner_fault_ack"])
         await self._add_rw_bool(status, "scanner_retry", "ScannerRetry",
@@ -470,6 +476,9 @@ async def push(ns, handler, snap):
         await w(key, sp[SP[key]])
     await w("xle_heartbeat_age", snap["liveness"][0])
     await w("xle_liveness", snap["liveness"][1])
+    await w("plant_fault", snap["plant_fault"])
+    await w("plant_failed_count", snap["plant_failed_count"])
+    await w("plant_mode", bool(co[COIL["plant_mode"]]))
     for i in range(3):
         await w(f"shift_ct{i}", sp[SP["shift_ct"] + i])
     # reset_cmd is self-clearing in the PLC: it is true for one scan and the

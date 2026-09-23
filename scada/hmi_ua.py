@@ -69,6 +69,9 @@ def _tagmap():
                       ("xle_fault_ack", "XLeFaultAck"),
                       ("xle_retry", "XLeRetry")):
         t[key] = ["Process", "Status", name]
+    t["plant_fault"] = ["Process", "Status", "PlantFault"]
+    t["plant_failed_count"] = ["Process", "Status", "PlantFailedConfirmationCount"]
+    t["plant_mode"] = ["Process", "Status", "PlantMode"]
     for i in range(3):
         t[f"lane_run{i}"] = ["Process", "Status", f"Induct{i+1}Running"]
         t[f"ob_run{i}"] = ["Process", "Status", f"Outbound{i+1}Running"]
@@ -234,6 +237,8 @@ def api():
         "scanner_wait": s["scanner_wait"],
         "xle_heartbeat_age": s["xle_heartbeat_age"],
         "xle_liveness": s["xle_liveness"],
+        "plant_fault": s["plant_fault"], "plant_mode": s["plant_mode"],
+        "plant_failed_count": s["plant_failed_count"],
         "lane_run": [s[f"lane_run{i}"] for i in range(3)],
         "ob_run": [s[f"ob_run{i}"] for i in range(3)],
         "alarms": {"jam": s["a_jam"], "coll": s["a_coll"],
@@ -595,6 +600,8 @@ async function tick(){
   if(d.alarms.coll) p+=stat('COLLISION',0,1);
   if(d.alarms.noread) p+=stat('NO-READ',0,1);
   if(d.alarms.nohome) p+=stat('NO-HOME',0,1);
+  if(d.plant_mode && d.plant_fault) p+=stat('LANE 1 PLANT FAULT '+d.plant_fault,0,1);
+  if(d.plant_failed_count) p+=stat('LANE 1 FAILED CONFIRMATION',0,1);
   if(d.scanner_state===1 || d.scanner_state===2) p+=stat('SCANNER RESET WAIT',1,0);
   if(d.scanner_state===3 || d.scanner_state===4){
     const failed=[1,2,3].filter(i=>d.scanner_fault_mask & (1<<(i-1))).join(', ');

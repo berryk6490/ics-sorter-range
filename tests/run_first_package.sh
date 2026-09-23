@@ -30,3 +30,6 @@ done
 cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
     "$build_dir/POUS.c" "$repo_dir/tests/xle_heartbeat.c" -lm -o "$build_dir/xle_heartbeat"
 "$build_dir/xle_heartbeat"
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/plant_mode.c" -lm -o "$build_dir/plant_mode"
+"$build_dir/plant_mode"
