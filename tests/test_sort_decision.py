@@ -51,6 +51,35 @@ class Decisions(unittest.TestCase):
         plan = json.loads((ROOT / "services/sort_plan.json").read_text())["barcodes"]
         self.assertEqual(asx.decide(REQUEST, plan)["destination"], 2)
 
+    def test_same_barcode_can_have_distinct_package_decisions(self):
+        plan = json.loads((ROOT / "services/sort_plan.json").read_text())
+        first = {**REQUEST, "package_serial": 1}
+        second = {**REQUEST, "package_serial": 2,
+                  "package_id": "l1-1-2-2", "request_id": "req-2"}
+        self.assertEqual(asx.decide(first, plan)["destination"], 2)
+        self.assertEqual(asx.decide(second, plan)["destination"], 5)
+        self.assertEqual(xle.validate_decision(first, asx.decide(second, plan)),
+                         (None, "stale_or_mismatched_response"))
+
+    def test_multi_command_carries_full_identity_and_commits_last(self):
+        class Reply:
+            def isError(self): return False
+        class Client:
+            def __init__(self): self.writes = []
+            def read_holding_registers(self, address, count, slave):
+                self.writes.append(("read", address, count))
+                r = Reply(); r.registers = [12 if address == 554 else
+                                           1 if address == 529 else 17]; return r
+            def write_registers(self, address, values, slave):
+                self.writes.append(("payload", address, values)); return Reply()
+            def write_register(self, address, value, slave):
+                self.writes.append(("commit", address, value)); return Reply()
+        client = Client()
+        self.assertEqual(xle.write_multi(client, 12, 1, 1, [4, 2, 8, 6001], 5), 1)
+        self.assertEqual(client.writes[1], ("payload", 520,
+                         [1, 1, 4, 2, 8, 6001, 5, 17]))
+        self.assertEqual(client.writes[2], ("commit", 528, 12))
+
 
 if __name__ == "__main__":
     unittest.main()

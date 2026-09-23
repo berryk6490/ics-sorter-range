@@ -3,7 +3,7 @@
 This process has no PLC client. Bind it to loopback on the SCADA guest.
 """
 import argparse
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import time
@@ -13,7 +13,11 @@ def decide(request, plan):
     package_id = request["package_id"]
     request_id = request["request_id"]
     barcode = str(request["barcode"])
-    destination = plan.get(barcode)
+    # A parcel-specific override can distinguish two parcels bearing one label.
+    # The default barcode plan remains editable and backward compatible.
+    serial_key = f"{barcode}:{request.get('package_serial', 0)}"
+    destination = plan.get("barcode_serial", {}).get(serial_key,
+                   plan.get("barcodes", plan).get(barcode))
     if type(destination) is int and 1 <= destination <= 9:
         return {"request_id": request_id, "package_id": package_id,
                 "decision": "route", "destination": destination}
@@ -36,10 +40,12 @@ def serve(plan_path, port, scenario="normal", delay=0.0):
                                   "package_id": request["package_id"],
                                   "request_id": request["request_id"],
                                   "barcode": request["barcode"]}), flush=True)
-                plan = json.loads(Path(plan_path).read_text())["barcodes"]
+                plan = json.loads(Path(plan_path).read_text())
                 response = decide(request, plan)
-                if scenario == "delay":
-                    time.sleep(delay)
+                serial_key = f"{request['barcode']}:{request.get('package_serial', 0)}"
+                request_delay = plan.get("delays_ms", {}).get(serial_key, 0) / 1000
+                if scenario == "delay" or request_delay:
+                    time.sleep(delay if scenario == "delay" else request_delay)
                 elif scenario == "mismatch":
                     response["request_id"] = "stale-" + response["request_id"]
                 print(json.dumps({"event": "asx_response", "event_ns": time.monotonic_ns(),
@@ -62,7 +68,7 @@ def serve(plan_path, port, scenario="normal", delay=0.0):
                                   "package_id": request["package_id"],
                                   "request_id": request["request_id"]}), flush=True)
 
-    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

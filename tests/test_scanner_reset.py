@@ -1,9 +1,11 @@
 """Pure state tests for the deployed scanner's Modbus exchange."""
 import importlib.util
+import os
 from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 
 # The host test needs no TCP server or installed pymodbus package.
@@ -91,6 +93,16 @@ class ScannerResetTest(unittest.TestCase):
         self.reg.values[:4] = [scanner_module.RESET_SEQ, 1, 137, 30]
         self.device.step()
         self.assertEqual(self.reg.values[4:11], [0] * 7)
+
+    def test_opt_in_repeat_fixture_preserves_distinct_requests(self):
+        with patch.dict(os.environ, {"SORTER_REPEAT_BARCODE": "1"}):
+            self.device = scanner_module.Scanner({0: self.reg}, "test", 1)
+        self.reset(1)
+        first = self.request(1, 1)
+        second = self.request(2, 2)
+        self.assertEqual((first[1], second[1]), (6001, 6001))
+        self.assertEqual((first[0], second[0]), (1, 2))
+        self.assertEqual(second[2], scanner_module.ST_DUPLICATE)
 
 
 if __name__ == "__main__":

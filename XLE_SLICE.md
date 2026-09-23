@@ -1,5 +1,9 @@
 # One-package sort decision slice
 
+The subsequent two-slot extension, register contract, and live results are
+documented in [MULTI_PACKAGE.md](MULTI_PACKAGE.md). This page records the
+earlier one-package milestone.
+
 ## Placement and boundaries
 
 The existing isolated networks remain unchanged. `plc` and `drives` are on

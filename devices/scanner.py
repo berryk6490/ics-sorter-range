@@ -45,8 +45,13 @@ following trig_seq=32767 with the same nonce reseeds even when the seed is
 unchanged, clears history and the previous response, and acknowledges with
 status=6. Normal replies carry the nonce too. Prepare makes a cold PLC restart
 safe when its private nonce starts again at 1 and the scanner still holds 1.
+
+Only a manually launched test fixture with SORTER_REPEAT_BARCODE=1 forces the
+second and later parcels to reuse the first recent barcode, returning duplicate
+status. The deployed systemd service does not set this option.
 """
 import sys
+import os
 import threading
 import time
 
@@ -114,6 +119,9 @@ class Scanner:
         self.prepared_nonce = 0
         self.recent = []
         self.scan_count = 0
+        # Test fixture only: a manually launched scanner can present the same
+        # physical label on consecutive parcels. The packaged unit omits it.
+        self.repeat_barcode = os.environ.get("SORTER_REPEAT_BARCODE") == "1"
 
     def step(self):
         ctx, tag = self.ctx, self.tag
@@ -180,6 +188,10 @@ class Scanner:
             barcode = 99000 + self.s_dest.next(999)
         else:
             status = ST_GOOD
+
+        if self.repeat_barcode and trig_serial > 1 and self.recent:
+            barcode = self.recent[0]
+            status = ST_DUPLICATE
 
         if barcode and status in (ST_GOOD, ST_OVERSIZE):
             self.recent.append(barcode)

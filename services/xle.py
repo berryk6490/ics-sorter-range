@@ -1,13 +1,14 @@
-"""One-lane XLe slice: correlate a scanner read, ask ASX, command PLC, log outcome.
+"""Lane 1 XLe: correlate scanner reads, ask ASX, command PLC, log outcomes.
 
 Run on SCADA with pymodbus 3.6.9. Events are JSON lines on stdout. The
-single-package runner exits after one terminal PLC outcome.
+The legacy one-package runner and bounded two-slot multi runner share this file.
 """
 import argparse
 import json
 import time
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 
 def event(kind, **fields):
@@ -41,10 +42,13 @@ def lookup(request, url, timeout=0.8):
 
 def read(client, address, count=1, inputs=False):
     method = client.read_input_registers if inputs else client.read_holding_registers
-    reply = method(address, count, slave=1)
-    if reply.isError():
-        raise RuntimeError(f"PLC read {address}: {reply}")
-    return reply.registers
+    for attempt in range(3):
+        reply = method(address, count, slave=1)
+        if not reply.isError():
+            return reply.registers
+        if attempt < 2:
+            time.sleep(.1)
+    raise RuntimeError(f"PLC read {address}: {reply}")
 
 
 def run(client, asx_url, deadline=90):
@@ -125,15 +129,145 @@ def run(client, asx_url, deadline=90):
     raise TimeoutError("scanner result timeout")
 
 
+SLOT_BASE = 530
+SLOT_WIDTH = 12
+TERMINAL = {5: "loaded", 6: "recirculated", 7: "failed"}
+
+
+def slot_rows(client):
+    words = read(client, SLOT_BASE, 2 * SLOT_WIDTH)
+    return [words[i:i + SLOT_WIDTH] for i in (0, SLOT_WIDTH)]
+
+
+def multi_enabled(client):
+    for attempt in range(3):
+        reply = client.read_coils(914, 2, slave=1)
+        if not reply.isError():
+            return bool(reply.bits[0] and reply.bits[1])
+        if attempt < 2:
+            time.sleep(.1)
+    raise RuntimeError(f"PLC mode read: {reply}")
+
+
+def write_multi(client, command_id, op, slot, row, destination=0):
+    token, serial, seq, barcode = row[:4]
+    nonce = read(client, 509)[0]
+    payload = [op, slot, token, serial, seq, barcode, destination, nonce]
+    reply = client.write_registers(520, payload, slave=1)
+    if reply.isError():
+        raise RuntimeError(f"PLC payload write: {reply}")
+    reply = client.write_register(528, command_id, slave=1)
+    if reply.isError():
+        raise RuntimeError(f"PLC command commit: {reply}")
+    end = time.monotonic() + 1.5
+    while time.monotonic() < end:
+        if read(client, 554)[0] == command_id:
+            return read(client, 529)[0]
+        time.sleep(.05)
+    raise TimeoutError(f"PLC did not acknowledge command {command_id}")
+
+
+def run_multi(client, asx_url, packages=2, deadline=120):
+    """Run over two bounded PLC slots; packages=0 keeps serving future parcels."""
+    if not client.connect():
+        raise RuntimeError("PLC Modbus unavailable")
+    pending = {}
+    completed = 0
+    command_id = read(client, 528)[0]
+    end = float("inf") if packages == 0 else time.monotonic() + deadline
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        while time.monotonic() < end:
+            if not multi_enabled(client):
+                time.sleep(.05)
+                continue
+            nonce = read(client, 509)[0]
+            for slot, row in enumerate(slot_rows(client)):
+                token, serial, seq, barcode, state, dest, actual, reason, scan_tick, accept_tick, divert_tick, plc_cmd = row
+                if not token or not state:
+                    continue
+                key = (nonce, token, serial, seq)
+                # A slot can be observed at induction before it has a usable read.
+                if state == 2 and key not in pending and len(pending) < 2 and \
+                   (packages == 0 or completed + len(pending) < packages):
+                    package_id = f"l1-{nonce}-{token}-{serial}"
+                    request = {"package_id": package_id, "request_id": str(uuid.uuid4()),
+                               "barcode": barcode, "package_serial": serial,
+                               "slot_token": token, "scanner_sequence": seq,
+                               "scanner_run_nonce": nonce, "lane": 1}
+                    pending[key] = {"slot": slot, "request": request,
+                                    "future": pool.submit(lookup, request, asx_url) if barcode else None,
+                                    "command": 0, "decided": not bool(barcode), "terminal_at": None}
+                    event("scan", plc_scan_tick=scan_tick, **request)
+                    if barcode:
+                        event("asx_lookup", package_id=package_id,
+                              request_id=request["request_id"], timeout_ms=800)
+                    else:
+                        event("safe_fallback", package_id=package_id,
+                              request_id=request["request_id"], action="recirculate",
+                              reason="scanner_no_read")
+                task = pending.get(key)
+                if task is None:
+                    continue
+                package_id = task["request"]["package_id"]
+                if state == 2 and not task["decided"] and task["future"].done():
+                    destination, fault = task["future"].result()
+                    task["decided"] = True
+                    if destination is None:
+                        event("safe_fallback", package_id=package_id,
+                              request_id=task["request"]["request_id"],
+                              action="recirculate", reason=fault)
+                    else:
+                        event("asx_decision", package_id=package_id,
+                              request_id=task["request"]["request_id"], destination=destination)
+                        command_id = command_id % 30000 + 1
+                        result = write_multi(client, command_id, 1, slot, row, destination)
+                        if result == 1:
+                            task["command"] = command_id
+                            event("plc_command", package_id=package_id,
+                                  command_id=command_id, slot=slot, slot_token=token,
+                                  destination=destination, run_nonce=nonce)
+                        else:
+                            event("safe_fallback", package_id=package_id,
+                                  request_id=task["request"]["request_id"],
+                                  action="recirculate", reason="plc_rejected_command")
+                if state in TERMINAL:
+                    if task["terminal_at"] is None:
+                        task["terminal_at"] = time.monotonic()
+                        event("plc_outcome", package_id=package_id,
+                              command_id=plc_cmd, state=TERMINAL[state],
+                              reason=reason, actual_trailer=actual,
+                              scanner_sequence=seq, slot_token=token,
+                              scan_tick=scan_tick, accept_tick=accept_tick,
+                              divert_tick=divert_tick,
+                              scanner_to_divert_ms=(divert_tick - scan_tick) * 100,
+                              acceptance_margin_ms=(divert_tick - accept_tick) * 100 if accept_tick else None)
+                    # Keep the terminal row visible to a Modbus observer for a second.
+                    if time.monotonic() - task["terminal_at"] >= 1:
+                        command_id = command_id % 30000 + 1
+                        if write_multi(client, command_id, 2, slot, row) != 3:
+                            raise RuntimeError(f"PLC rejected terminal release for {package_id}")
+                        event("plc_release", package_id=package_id, command_id=command_id)
+                        completed += 1
+                        del pending[key]
+            if packages and completed >= packages:
+                return 0
+            time.sleep(.1)
+    raise TimeoutError(f"multi outcome timeout: {completed}/{packages}")
+
+
 if __name__ == "__main__":
     from pymodbus.client import ModbusTcpClient
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--plc", default="10.10.1.10")
     parser.add_argument("--asx", default="http://127.0.0.1:8089/sort-plan")
+    parser.add_argument("--packages", type=int, default=1)
     args = parser.parse_args()
     plc = ModbusTcpClient(args.plc, port=502, timeout=2)
     try:
-        raise SystemExit(run(plc, args.asx))
+        if not 0 <= args.packages <= 2:
+            parser.error("--packages must be 0 (continuous), 1, or 2")
+        raise SystemExit(run_multi(plc, args.asx, args.packages) if args.packages != 1
+                         else run(plc, args.asx))
     finally:
         plc.close()
