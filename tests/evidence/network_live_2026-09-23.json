@@ -1,0 +1,247 @@
+{
+  "case": "all",
+  "hmi_lanes": [
+    1,
+    2,
+    3
+  ],
+  "journal": [
+    [
+      "1:20:1:1:1",
+      {
+        "accept_tick": 172,
+        "acceptance_margin_ms": 5300,
+        "actual_trailer": 2,
+        "command_id": 56,
+        "divert_tick": 225,
+        "lane": 1,
+        "package_id": "l1-1-20-1-1",
+        "reason": 0,
+        "scan_tick": 169,
+        "scanner_sequence": 1,
+        "scanner_to_divert_ms": 5600,
+        "slot_token": 1,
+        "state": "loaded"
+      }
+    ],
+    [
+      "1:20:2:2:1",
+      {
+        "accept_tick": 173,
+        "acceptance_margin_ms": 8100,
+        "actual_trailer": 5,
+        "command_id": 57,
+        "divert_tick": 254,
+        "lane": 2,
+        "package_id": "l2-1-20-2-2",
+        "reason": 0,
+        "scan_tick": 170,
+        "scanner_sequence": 1,
+        "scanner_to_divert_ms": 8400,
+        "slot_token": 2,
+        "state": "loaded"
+      }
+    ],
+    [
+      "1:20:3:3:1",
+      {
+        "accept_tick": 175,
+        "acceptance_margin_ms": 11000,
+        "actual_trailer": 8,
+        "command_id": 58,
+        "divert_tick": 285,
+        "lane": 3,
+        "package_id": "l3-1-20-3-3",
+        "reason": 0,
+        "scan_tick": 171,
+        "scanner_sequence": 1,
+        "scanner_to_divert_ms": 11400,
+        "slot_token": 3,
+        "state": "loaded"
+      }
+    ]
+  ],
+  "max_occupied": 3,
+  "pre_confirmation_counters": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "rows": {
+    "1": {
+      "accept_tick": 172,
+      "actual": 2,
+      "barcode": 6001,
+      "destination": 2,
+      "divert_tick": 225,
+      "lane": 1,
+      "package_id": "l1-1-20-1-1",
+      "reason": 0,
+      "scan_tick": 169,
+      "seq": 1,
+      "serial": 1,
+      "slot": 0,
+      "state": 5,
+      "token": 1
+    },
+    "2": {
+      "accept_tick": 173,
+      "actual": 5,
+      "barcode": 5002,
+      "destination": 5,
+      "divert_tick": 254,
+      "lane": 2,
+      "package_id": "l2-1-20-2-2",
+      "reason": 0,
+      "scan_tick": 170,
+      "seq": 1,
+      "serial": 2,
+      "slot": 1,
+      "state": 5,
+      "token": 2
+    },
+    "3": {
+      "accept_tick": 175,
+      "actual": 8,
+      "barcode": 3003,
+      "destination": 8,
+      "divert_tick": 285,
+      "lane": 3,
+      "package_id": "l3-1-20-3-3",
+      "reason": 0,
+      "scan_tick": 171,
+      "seq": 1,
+      "serial": 3,
+      "slot": 2,
+      "state": 5,
+      "token": 3
+    }
+  },
+  "sensor_events": [
+    {
+      "actual": 0,
+      "lane": 1,
+      "position": 0,
+      "seq": 132,
+      "serial": 1,
+      "token": 1,
+      "type": 1
+    },
+    {
+      "actual": 0,
+      "lane": 2,
+      "position": 0,
+      "seq": 133,
+      "serial": 2,
+      "token": 2,
+      "type": 1
+    },
+    {
+      "actual": 0,
+      "lane": 3,
+      "position": 0,
+      "seq": 134,
+      "serial": 3,
+      "token": 3,
+      "type": 1
+    },
+    {
+      "actual": 0,
+      "lane": 1,
+      "position": 100,
+      "seq": 135,
+      "serial": 1,
+      "token": 1,
+      "type": 2
+    },
+    {
+      "actual": 0,
+      "lane": 2,
+      "position": 100,
+      "seq": 136,
+      "serial": 2,
+      "token": 2,
+      "type": 2
+    },
+    {
+      "actual": 0,
+      "lane": 3,
+      "position": 100,
+      "seq": 137,
+      "serial": 3,
+      "token": 3,
+      "type": 2
+    },
+    {
+      "actual": 1,
+      "lane": 1,
+      "position": 140,
+      "seq": 138,
+      "serial": 1,
+      "token": 1,
+      "type": 3
+    },
+    {
+      "actual": 2,
+      "lane": 2,
+      "position": 160,
+      "seq": 139,
+      "serial": 2,
+      "token": 2,
+      "type": 3
+    },
+    {
+      "actual": 3,
+      "lane": 3,
+      "position": 180,
+      "seq": 140,
+      "serial": 3,
+      "token": 3,
+      "type": 3
+    },
+    {
+      "actual": 8,
+      "lane": 3,
+      "position": 150,
+      "seq": 141,
+      "serial": 3,
+      "token": 3,
+      "type": 4
+    },
+    {
+      "actual": 5,
+      "lane": 2,
+      "position": 150,
+      "seq": 142,
+      "serial": 2,
+      "token": 2,
+      "type": 4
+    },
+    {
+      "actual": 2,
+      "lane": 1,
+      "position": 150,
+      "seq": 143,
+      "serial": 1,
+      "token": 1,
+      "type": 4
+    }
+  ],
+  "trailer": [
+    0,
+    1,
+    0,
+    0,
+    1,
+    0,
+    0,
+    1,
+    0
+  ]
+}

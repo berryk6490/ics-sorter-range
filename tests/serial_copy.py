@@ -48,7 +48,7 @@ def copy(vm, pairs):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("vm", choices=("plc", "drives", "scada"))
+    parser.add_argument("vm", choices=("plc", "drives", "scada", "fw", "analyst"))
     parser.add_argument("paths", nargs="+", help="source:guest-destination")
     args = parser.parse_args()
     copy(args.vm, [item.split(":", 1) for item in args.paths])

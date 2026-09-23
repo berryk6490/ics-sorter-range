@@ -1,0 +1,254 @@
+[
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-induct1",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-induct2",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-induct3",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-outbound1",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-outbound2",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-outbound3",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-tunnel1",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-tunnel2",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-tunnel3",
+    "observed": "allow"
+  },
+  {
+    "detail": "timeout",
+    "elapsed_ms": 1201,
+    "expected": "deny",
+    "id": "plc-opcua-block",
+    "observed": "deny"
+  },
+  {
+    "detail": "timeout",
+    "elapsed_ms": 1201,
+    "expected": "deny",
+    "id": "plc-analyst-block",
+    "observed": "deny"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plc-fw-ssh",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "plant-plc",
+    "observed": "allow"
+  },
+  {
+    "detail": "timeout",
+    "elapsed_ms": 1201,
+    "expected": "deny",
+    "id": "plant-hmi-block",
+    "observed": "deny"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-plc",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-induct1",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-induct2",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-induct3",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-outbound1",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-outbound2",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-outbound3",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 1,
+    "expected": "allow",
+    "id": "scada-opcua",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-hmi",
+    "observed": "allow"
+  },
+  {
+    "detail": "timeout",
+    "elapsed_ms": 1201,
+    "expected": "deny",
+    "id": "scada-scanner-block",
+    "observed": "deny"
+  },
+  {
+    "detail": "timeout",
+    "elapsed_ms": 1201,
+    "expected": "deny",
+    "id": "scada-analyst-block",
+    "observed": "deny"
+  },
+  {
+    "detail": "timeout",
+    "elapsed_ms": 1201,
+    "expected": "deny",
+    "id": "scada-plc-admin-block",
+    "observed": "deny"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "scada-fw-ssh",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-fw-ssh",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-plc",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-scanner",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-plc-ssh",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-plc-admin",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-drives-ssh",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-scada-ssh",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-opcua",
+    "observed": "allow"
+  },
+  {
+    "detail": "connected",
+    "elapsed_ms": 0,
+    "expected": "allow",
+    "id": "analyst-hmi",
+    "observed": "allow"
+  }
+]

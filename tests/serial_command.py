@@ -29,7 +29,7 @@ def run(vm, command, timeout=120):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("vm", choices=("plc", "drives", "scada"))
+    parser.add_argument("vm", choices=("plc", "drives", "scada", "fw", "analyst"))
     parser.add_argument("command")
     parser.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
