@@ -117,6 +117,34 @@ class PlantModelTest(unittest.TestCase):
                          [INDUCT, TUNNEL, DIVERT, FAILED_CONFIRM])
         self.assertFalse(any(e[0] == TRAILER for e in events))
 
+    def test_three_lanes_share_one_outbound_with_order_and_clearance(self):
+        model = PlantModel(length_cm=60, spacing_cm=100)
+        slots = {token: (10 + token, 3, token)
+                 for token in (1, 2, 3)}
+        for token in (1, 2, 3):
+            model.request(token, 10 + token, lane=token)
+        waited = set()
+        for _ in range(250):
+            model.step(.1, [1750] * 6, slots)
+            outbound = [p for p in model.packages if p.outbound == 1]
+            for left in outbound:
+                for right in outbound:
+                    if left is not right:
+                        self.assertGreaterEqual(
+                            abs(left.outbound_position - right.outbound_position),
+                            model.length + model.spacing)
+            waited.update(p.lane for p in model.packages
+                          if p.position == 14 and not p.divert_sent)
+        self.assertTrue(waited)
+        self.assertEqual(sorted((e[1], e[3]) for e in model.pending
+                                if e[0] == TRAILER),
+                         [(1, 1), (2, 2), (3, 3)])
+        self.assertEqual([e[1] for e in model.pending if e[0] == DIVERT],
+                         [1, 3, 2])
+        for token in (1, 2, 3):
+            self.assertEqual([e[0] for e in model.pending if e[1] == token],
+                             [INDUCT, TUNNEL, DIVERT, TRAILER])
+
 
 if __name__ == "__main__":
     unittest.main()

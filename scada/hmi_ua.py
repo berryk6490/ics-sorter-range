@@ -74,7 +74,7 @@ def _tagmap():
     t["plant_failed_lane"] = ["Process", "Status", "PlantFailedLane"]
     t["plant_heartbeat_age"] = ["Process", "Status", "PlantHeartbeatAge"]
     t["plant_mode"] = ["Process", "Status", "PlantMode"]
-    for i in range(2):
+    for i in range(3):
         slot = ["Process", "Plant", f"Slot{i+1}"]
         t[f"plant{i}"] = slot + ["Telemetry"]
         t[f"plant_status{i}"] = slot + ["Status"]
@@ -250,10 +250,10 @@ def api():
         "plant_failed_count": s["plant_failed_count"],
         "plant_failed_lane": s["plant_failed_lane"],
         "plant_heartbeat_age": s["plant_heartbeat_age"],
-        "plant_rows": [s[f"plant{i}"] for i in range(2)],
-        "plant_status": [s[f"plant_status{i}"] for i in range(2)],
-        "plant_age": [s[f"plant_age{i}"] for i in range(2)],
-        "plant_lane": [s[f"plant_lane{i}"] for i in range(2)],
+        "plant_rows": [s[f"plant{i}"] for i in range(3)],
+        "plant_status": [s[f"plant_status{i}"] for i in range(3)],
+        "plant_age": [s[f"plant_age{i}"] for i in range(3)],
+        "plant_lane": [s[f"plant_lane{i}"] for i in range(3)],
         "lane_run": [s[f"lane_run{i}"] for i in range(3)],
         "ob_run": [s[f"ob_run{i}"] for i in range(3)],
         "alarms": {"jam": s["a_jam"], "coll": s["a_coll"],
@@ -576,7 +576,7 @@ function paintPlant(d){
   if(!d.connected){freezePlant('PLANT TELEMETRY UNAVAILABLE — UA DISCONNECTED');return;}
   const now={};
   const labels=[];
-  for(let slot=0;slot<2;slot++){
+  for(let slot=0;slot<3;slot++){
     const r=d.plant_rows[slot], status=d.plant_status[slot], age=d.plant_age[slot];
     if(status===0){labels.push('SLOT '+(slot+1)+' EMPTY');continue;}
     if(status===3 || !r[3]){labels.push('<span class="unavailable">SLOT '+(slot+1)+' TELEMETRY UNAVAILABLE</span>');continue;}

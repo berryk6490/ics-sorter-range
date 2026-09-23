@@ -1,5 +1,6 @@
-"""Process-restart behavior at the existing PLC two-slot Modbus boundary."""
+"""Process-restart behavior at the PLC three-slot Modbus boundary."""
 import importlib.util
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -29,6 +30,8 @@ class PLC:
         self.row = [41, 2, 9, 6001, state, 2, 2 if state == 5 else 0,
                     0, 100, 102, 133, 10]
         self.other = [0] * 12
+        self.third = [0] * 12
+        self.lanes = [1, 0, 0]
         self.command_id = 10
         self.ack_id = 10
         self.ack = 1
@@ -74,7 +77,9 @@ class PLC:
         if address == 569: return Reply([self.liveness])
         if address == 572: return Reply([self.recovery_sequence])
         if address == 573: return Reply([self.heartbeat_sequence])
-        if address == 644: return Reply([1, 0])
+        if address == 644: return Reply(self.lanes[:2])
+        if address == 659: return Reply([self.lanes[2]])
+        if address == 647: return Reply(self.third)
         if address == 530:
             self.polls += 1
             if self.recirc_after and self.row[4] == 2 and self.polls >= 3:
@@ -116,23 +121,24 @@ class PLC:
             return Reply([])
         assert address == 528
         self.command_id = self.ack_id = value
+        row = (self.row, self.other, self.third)[self.payload[1]]
         if self.payload[0] == 2:
             if self.fail_release_once:
                 self.fail_release_once = False
                 raise RuntimeError("simulated process crash before release ACK")
             self.releases += 1
-            self.row[0] = self.row[4] = 0
+            row[0] = row[4] = 0
             self.ack = 3
         else:
             valid = (self.command_epoch == self.epoch and
-                     self.payload[2:6] == self.row[:4] and
-                     self.payload[7] == self.nonce and self.row[4] == 2)
+                     self.payload[2:6] == row[:4] and
+                     self.payload[7] == self.nonce and row[4] == 2)
             if valid:
                 self.routes += 1
-                self.route_keys.append((self.nonce, *self.row[:4]))
-                self.row[4] = 3
-                self.row[5] = self.payload[6]
-                self.row[11] = value
+                self.route_keys.append((self.nonce, *row[:4]))
+                row[4] = 3
+                row[5] = self.payload[6]
+                row[11] = value
                 self.ack = 1
             else:
                 self.ack = 2
@@ -198,6 +204,28 @@ class Recovery(unittest.TestCase):
             self.assertEqual(xle.run_multi(plc, "unused", packages=1, deadline=.6,
                                            journal=journal, terminal_hold=0), 0)
         self.assertEqual(plc.releases, 1)
+        self.assertEqual(sum(c.args[0] == "plc_outcome" for c in emit.call_args_list), 1)
+
+    def test_third_slot_terminal_recovery_journals_once(self):
+        plc = PLC(0)
+        plc.row = [0] * 12
+        plc.third = [43, 3, 11, 3003, 5, 3, 3, 0, 110, 113, 150, 12]
+        plc.lanes = [0, 0, 3]
+        plc.fail_release_once = True
+        with tempfile.TemporaryDirectory() as directory, patch.object(xle, "event") as emit:
+            journal = str(Path(directory) / "outcomes.sqlite3")
+            with self.assertRaisesRegex(RuntimeError, "simulated process crash"):
+                xle.run_multi(plc, "unused", packages=1, deadline=.6,
+                              journal=journal, terminal_hold=0)
+            self.assertEqual(xle.run_multi(plc, "unused", packages=1, deadline=.6,
+                                           journal=journal, terminal_hold=0), 0)
+            with sqlite3.connect(journal) as db:
+                rows = db.execute("SELECT identity,payload FROM outcomes").fetchall()
+        self.assertEqual(plc.releases, 1)
+        self.assertEqual(plc.routes, 0)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows[0][1])["package_id"],
+                         "l3-1-7-43-3")
         self.assertEqual(sum(c.args[0] == "plc_outcome" for c in emit.call_args_list), 1)
 
     def test_nonce_change_discards_in_flight_asx_answer(self):

@@ -47,6 +47,7 @@ int main(void) {
     WORD(555) = 77; WORD(556) = 0; WORD(557) = 1; scan();
     WORD(587) = 77; WORD(588) = 0; WORD(589) = 1;
     BIT(114, 2) = BIT(114, 3) = BIT(114, 6) = 1;
+    BIT(110, 4) = 0; /* retain the historical two-lane slot-reuse case */
     for (int i = 0; i < 10; ++i) scan();
     assert(WORD(561) == 0 && WORD(569) == 0 && WORD(591) == 0);
     BIT(110, 0) = 1;
@@ -56,6 +57,7 @@ int main(void) {
     event(1, 1, 0, 0);
     scan();
     assert(WORD(574) == 2 && WORD(577) == 2 && WORD(645) == 2);
+    BIT(110, 2) = BIT(110, 3) = 0;
     event(2, 1, 1, 0);
     assert(WORD(220) == 2 && WORD(574) == 2);
     event(3, 2, 0, 0); event(4, 2, 1, 0);
@@ -67,6 +69,7 @@ int main(void) {
     assert(WORD(223) == 0 && WORD(226) == 0); /* decisions do not load */
     event(7, 4, 0, 2);
     assert(WORD(223) == 1 && WORD(226) == 0);
+    BIT(110, 4) = 1;
     command(3, 2, 0, 0); /* free slot zero while lane 2 stays occupied */
     scan();
     assert(WORD(574) == 3 && WORD(577) == 3 && WORD(644) == 3);

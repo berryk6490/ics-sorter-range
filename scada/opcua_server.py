@@ -149,9 +149,12 @@ class ModbusLink:
         plant = self.plc.read_holding_registers(591, 2, slave=1)
         plant_age = self.plc.read_holding_registers(593, 1, slave=1)
         plant_view = self.plc.read_holding_registers(620, 26, slave=1)
+        plant_view2 = self.plc.read_holding_registers(670, 12, slave=1)
+        plant_lane2 = self.plc.read_holding_registers(659, 1, slave=1)
         plant_failed_lane = self.plc.read_holding_registers(646, 1, slave=1)
         if any(r.isError() for r in (sp, ib, ob, co, live, plant, plant_age,
-                                     plant_view, plant_failed_lane)):
+                                     plant_view, plant_view2, plant_lane2,
+                                     plant_failed_lane)):
             raise IOError("plc read")
 
         drives = []
@@ -176,6 +179,8 @@ class ModbusLink:
             "plant_failed_lane": s16(plant_failed_lane.registers[0]),
             "plant_heartbeat_age": s16(plant_age.registers[0]),
             "plant_view": [s16(v) for v in plant_view.registers],
+            "plant_view2": [s16(v) for v in plant_view2.registers],
+            "plant_lane2": s16(plant_lane2.registers[0]),
             "drives": drives,
         }
 
@@ -325,7 +330,7 @@ class Namespace:
 
         belts = await sorter.add_object(self.idx, "Belts")
         plant = await proc.add_object(self.idx, "Plant")
-        for i in range(2):
+        for i in range(3):
             slot = await plant.add_object(self.idx, f"Slot{i+1}")
             telemetry = await slot.add_variable(
                 self.idx, "Telemetry", ua.Variant([0] * 10, ua.VariantType.Int16))
@@ -499,13 +504,17 @@ async def push(ns, handler, snap):
     await w("plant_failed_lane", snap["plant_failed_lane"])
     await w("plant_heartbeat_age", snap["plant_heartbeat_age"])
     await w("plant_mode", bool(co[COIL["plant_mode"]]))
-    for i in range(2):
+    for i in range(3):
+        view = (snap["plant_view"][i * 10:(i + 1) * 10]
+                if i < 2 else snap["plant_view2"][:10])
         await ns.ro[f"plant{i}.telemetry"].write_value(
-            ua.Variant(snap["plant_view"][i * 10:(i + 1) * 10],
-                       ua.VariantType.Int16))
-        await w(f"plant{i}.status", snap["plant_view"][20 + i])
-        await w(f"plant{i}.age", snap["plant_view"][22 + i])
-        await w(f"plant{i}.lane", snap["plant_view"][24 + i])
+            ua.Variant(view, ua.VariantType.Int16))
+        await w(f"plant{i}.status", snap["plant_view"][20 + i]
+                if i < 2 else snap["plant_view2"][10])
+        await w(f"plant{i}.age", snap["plant_view"][22 + i]
+                if i < 2 else snap["plant_view2"][11])
+        await w(f"plant{i}.lane", snap["plant_view"][24 + i]
+                if i < 2 else snap["plant_lane2"])
     for i in range(3):
         await w(f"shift_ct{i}", sp[SP["shift_ct"] + i])
     # reset_cmd is self-clearing in the PLC: it is true for one scan and the

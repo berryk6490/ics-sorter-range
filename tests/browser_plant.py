@@ -84,19 +84,67 @@ def main(case):
             capture(session, "plant-stale-unavailable.png")
             print(json.dumps(result, sort_keys=True), flush=True)
             return
-        if case == "fault":
+        if case in ("fault", "fault_three"):
             first = snapshot(session)
-            assert len(first["nodes"]) == 2, first
-            assert {n["id"].split("-")[0] for n in first["nodes"]} == {"l1", "l2"}
+            expected = {"l1", "l2", "l3"} if case == "fault_three" else {"l1", "l2"}
+            assert len(first["nodes"]) == len(expected), first
+            assert {n["id"].split("-")[0] for n in first["nodes"]} == expected
             assert all(n["status"] == "stale" for n in first["nodes"]), first
             assert "PLANT FAULT 1" in first["body"].upper(), first["body"][-1000:]
             time.sleep(2)
             second = snapshot(session)
             assert [(n["id"], n["position"], n["transform"]) for n in first["nodes"]] == [
                 (n["id"], n["position"], n["transform"]) for n in second["nodes"]]
-            capture(session, "plant-lanes-service-stopped.png")
+            capture(session, "plant-three-service-stopped.png" if case == "fault_three"
+                    else "plant-lanes-service-stopped.png")
             print(json.dumps({"first": first["nodes"], "second": second["nodes"],
                               "state": second["state"]}, sort_keys=True), flush=True)
+            return
+        if case == "three_shared_four":
+            old_ids = {node["id"] for node in snapshot(session)["nodes"]}
+            request(HMI + "/test/three_slot_run/shared_four", "POST")
+            request(HMI + "/test/plant_start", "POST")
+            deadline = time.monotonic() + 195
+            started = False
+            concurrent = False
+            waited = False
+            outbound = False
+            fourth = False
+            while time.monotonic() < deadline:
+                state = snapshot(session)
+                nodes = state["nodes"]
+                if not started:
+                    started = any(node["id"] not in old_ids for node in nodes)
+                    if not started:
+                        time.sleep(.35)
+                        continue
+                for node in nodes:
+                    history = observations.setdefault(node["id"], [])
+                    entry = (node["belt"], node["position"], node["event"], node["status"])
+                    if not history or history[-1] != entry:
+                        history.append(entry)
+                first_three = {n["id"].split("-")[0] for n in nodes}
+                if len(nodes) == 3 and first_three == {"l1", "l2", "l3"} and not concurrent:
+                    capture(session, "plant-three-concurrent.png")
+                    concurrent = True
+                if len(nodes) == 3 and any(n["belt"].startswith("ib") and
+                                           n["position"] == 14 for n in nodes) and not waited:
+                    capture(session, "plant-three-shared-wait.png")
+                    waited = True
+                if sum(n["belt"] == "ob0" for n in nodes) >= 2 and not outbound:
+                    capture(session, "plant-three-shared-outbound.png")
+                    outbound = True
+                if any(n["id"].split("-")[4] == "4" for n in nodes) and not fourth:
+                    capture(session, "plant-three-fourth-token.png")
+                    fourth = True
+                if concurrent and waited and outbound and fourth and all(
+                        any(item[2] == 4 for item in h) for h in observations.values()):
+                    break
+                time.sleep(.35)
+            assert concurrent and waited and outbound and fourth, (concurrent, waited, outbound, fourth)
+            print(json.dumps({"case": case, "packages": observations,
+                              "screenshots": sorted(p.name for p in Path(__file__).resolve().parent.joinpath("artifacts").glob("plant-three-*.png"))},
+                             sort_keys=True), flush=True)
             return
         if case.startswith("lane3_"):
             scenario = case.removeprefix("lane3_")
@@ -219,7 +267,7 @@ def main(case):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("case", choices=("two", "failure", "stale", "fault", "shared",
+    parser.add_argument("case", choices=("two", "failure", "stale", "fault", "fault_three", "shared",
                                          "lane2_failure", "lane3_all", "lane3_shared",
-                                         "lane3_failure"))
+                                         "lane3_failure", "three_shared_four"))
     main(parser.parse_args().case)

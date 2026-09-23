@@ -77,6 +77,20 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(self.path)
 
     def do_POST(self):
+        if self.path == "/test/three_slot_run/shared_four":
+            try:
+                with lock:
+                    console.sendline(
+                        "cd /home/kevin/sorter-services; "
+                        "nohup /home/kevin/opcua/bin/python live_plant_three_slots.py shared_four "
+                        "--start-file /tmp/plant-test-start "
+                        "> /tmp/plant-three-browser.out 2>&1 & sleep 1")
+                    console.expect(r"kevin@scada:.*\$ ", timeout=15)
+                self.send_response(204)
+                self.end_headers()
+            except Exception as exc:
+                self.send_error(502, str(exc))
+            return
         if self.path in ("/test/lane3_run/all", "/test/lane3_run/shared",
                          "/test/lane3_run/failure"):
             case = self.path.rsplit("/", 1)[1]

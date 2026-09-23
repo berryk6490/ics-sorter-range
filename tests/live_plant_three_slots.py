@@ -1,8 +1,4 @@
-"""Live three-lane plant proof through PLC Modbus, XLe/ASX and HMI API.
-
-Run on SCADA. The failure case requires a temporary drives plant process with
---fail-confirm-token 1. Each case restores settings and stops master.
-"""
+"""Live three-slot plant proof over the existing PLC Modbus path."""
 import argparse
 import json
 from pathlib import Path
@@ -20,13 +16,20 @@ from live_plant import wait
 
 ROOT = Path.home() / "sorter-services"
 CASES = {
-    "all": {"lanes": [1, 2, 3], "barcodes": {1: 6001, 2: 5002, 3: 3003},
-            "destinations": {1: 2, 2: 5, 3: 8}},
-    "shared": {"lanes": [2, 3], "barcodes": {2: 5001, 3: 3002},
-               "destinations": {2: 3, 3: 2}},
-    "failure": {"lanes": [3], "barcodes": {3: 3001},
-                "destinations": {3: 8}},
+    "shared_four": {"lanes": [1, 2, 3], "count": 4,
+                    "barcodes": {1: 6001, 2: 5002, 3: 3003},
+                    "destinations": {1: 1, 2: 2, 3: 3}},
+    "late": {"lanes": [1, 2, 3], "count": 3,
+             "barcodes": {1: 6001, 2: 5002, 3: 3003},
+             "destinations": {1: 1, 2: 2, 3: 0}},
+    "failure": {"lanes": [1, 2, 3], "count": 3,
+                "barcodes": {1: 6001, 2: 5002, 3: 3003},
+                "destinations": {1: 1, 2: 2, 3: 3}},
+    "repeat_restart": {"lanes": [1, 2, 3], "count": 4,
+                       "barcodes": {1: 6001, 2: 5002, 3: 3003},
+                       "destinations": {1: 1, 2: 2, 3: 3}},
 }
+
 
 
 def main(case, start_file=None):
@@ -37,7 +40,7 @@ def main(case, start_file=None):
                 "plant": coils(plc, 918)[0], "setpoints": holding(plc, 200, 11),
                 "seed": holding(plc, 247)[0]}
     asx = xle = None
-    journal = tempfile.TemporaryDirectory(prefix="sorter-lane3-")
+    journal = tempfile.TemporaryDirectory(prefix="sorter-three-slot-")
     try:
         if start_file:
             marker = Path(start_file)
@@ -55,7 +58,8 @@ def main(case, start_file=None):
             return seen and state == 0
         wait(reset_complete, 25, "scanner reset")
         asx = subprocess.Popen([sys.executable, str(ROOT / "asx.py"),
-                                "--plan", str(ROOT / "lane3_plan.json")],
+                                "--plan", str(ROOT / ("three_slot_late_plan.json"
+                                                         if case == "late" else "three_slot_plan.json"))],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True)
         wait(lambda: socket.create_connection(("127.0.0.1", 8089), .2).close() or True,
@@ -68,7 +72,7 @@ def main(case, start_file=None):
             set_register(plc, address, 120)
         for address in (207, 208, 209):
             set_register(plc, address, 14)
-        count = len(config["lanes"])
+        count = config["count"]
         db_path = str(Path(journal.name) / "outcomes.sqlite3")
         xle = subprocess.Popen([sys.executable, str(ROOT / "xle.py"),
                                 "--multi", "--packages", str(count),
@@ -95,6 +99,11 @@ def main(case, start_file=None):
         telemetry = {lane: [] for lane in config["lanes"]}
         hmi_lanes = set()
         occupied_max = 0
+        full_wait_samples = 0
+        other_lanes_limited = False
+        all_lanes_limited = False
+        restart_done = False
+        xle_before_restart = ""
         merge_wait = False
         min_gap = None
         pre_confirmation_counters = None
@@ -108,14 +117,21 @@ def main(case, start_file=None):
                 sensor_events.append({"type": sensor[0], "token": sensor[1],
                                       "serial": sensor[2], "actual": sensor[3],
                                       "position": sensor[4], "seq": sensor[5],
-                                      "lane": holding(plc, 578)[0]})
+                                      "lane": holding(plc, 578)[0],
+                                      "event_ns": time.monotonic_ns()})
                 if sensor[0] == 3 and not any(e["type"] in (4, 6)
                                               for e in sensor_events):
                     pre_confirmation_counters = holding(plc, 222, 9)
                     assert pre_confirmation_counters == [0] * 9
-            if holding(plc, 220)[0] >= count:
+            inducted = holding(plc, 220)[0]
+            if inducted >= 3 and not other_lanes_limited:
+                set_register(plc, 208, 32000)
+                set_register(plc, 209, 32000)
+                other_lanes_limited = True
+            if inducted >= count and not all_lanes_limited:
                 for address in (207, 208, 209):
                     set_register(plc, address, 32000)
+                all_lanes_limited = True
             block = holding(plc, 530, 24) + holding(plc, 647, 12)
             view = holding(plc, 620, 26)
             view2 = holding(plc, 670, 12)
@@ -123,19 +139,22 @@ def main(case, start_file=None):
             occupied = sum(block[i + 4] in (1, 2, 3, 4) for i in (0, 12, 24))
             occupied_max = max(occupied_max, occupied)
             assert occupied <= 3
+            if occupied == 3 and holding(plc, 220)[0] == 3:
+                full_wait_samples += 1
             on_outbound = []
             for slot in (0, 1, 2):
                 row = block[slot * 12:(slot + 1) * 12]
                 lane = lanes[slot]
-                tele = view[slot * 10:(slot + 1) * 10] if slot < 2 else view2[:10]
+                tele = (view[slot * 10:(slot + 1) * 10]
+                        if slot < 2 else view2[:10])
                 status = view[20 + slot] if slot < 2 else view2[10]
                 if row[0] and lane in telemetry and status == 1:
                     sample = (row[0], tele[5], tele[6], tele[7])
                     if not telemetry[lane] or telemetry[lane][-1] != sample:
                         telemetry[lane].append(sample)
-                    if tele[5] == 2 and tele[7] not in (4, 5, 6) and row[4] in (1, 2, 3, 4):
+                    if tele[5] == 2 and row[4] in (1, 2, 3, 4):
                         on_outbound.append((tele[6], tele[9]))
-                    if case == "shared" and lane == 3 and row[4] == 3 and tele[5] == 6 and tele[6] == 140:
+                    if lane in (2, 3) and row[4] == 3 and tele[5] in (5, 6) and tele[6] == 140:
                         merge_wait = True
                 if row[0] and row[4] in (5, 6, 7):
                     rows[row[0]] = {"lane": lane, "slot": slot, "token": row[0],
@@ -144,10 +163,23 @@ def main(case, start_file=None):
                                     "destination": row[5], "actual": row[6],
                                     "reason": row[7], "scan_tick": row[8],
                                     "accept_tick": row[9], "divert_tick": row[10]}
-            if len(on_outbound) == 2 and on_outbound[0][1] == on_outbound[1][1]:
-                gap = abs(on_outbound[0][0] - on_outbound[1][0])
-                min_gap = gap if min_gap is None else min(min_gap, gap)
-                assert gap >= 32, on_outbound
+            for a in range(len(on_outbound)):
+                for b in range(a + 1, len(on_outbound)):
+                    gap = abs(on_outbound[a][0] - on_outbound[b][0])
+                    min_gap = gap if min_gap is None else min(min_gap, gap)
+                    assert gap >= 32, on_outbound
+            if case == "repeat_restart" and not restart_done and rows:
+                with sqlite3.connect(db_path) as db:
+                    journal_count = db.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0]
+                if journal_count and any(row[4] in (5, 6, 7) for row in
+                                         (block[i:i + 12] for i in (0, 12, 24))):
+                    xle_before_restart = stop(xle)
+                    xle = subprocess.Popen(
+                        [sys.executable, str(ROOT / "xle.py"), "--multi",
+                         "--packages", "0", "--deadline", "200",
+                         "--journal", db_path, "--terminal-hold", "4"],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    restart_done = True
             if time.monotonic() - last_hmi > .5:
                 last_hmi = time.monotonic()
                 try:
@@ -157,13 +189,26 @@ def main(case, start_file=None):
                             hmi["plant_lane"], hmi["plant_status"]) if status == 1)
                 except (OSError, KeyError):
                     pass
-            if len(rows) == count and xle.poll() is not None:
-                break
+            if len(rows) == count:
+                if case == "repeat_restart":
+                    with sqlite3.connect(db_path) as db:
+                        journal_count = db.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0]
+                    if journal_count == count and all(
+                            block[i + 4] == 0 for i in (0, 12, 24)):
+                        break
+                elif xle.poll() is not None:
+                    break
             time.sleep(.1)
-        assert len(rows) == count and occupied_max <= 3, (rows, occupied_max)
+        assert len(rows) == count and occupied_max == 3 and (case != "shared_four" or full_wait_samples >= 5), \
+            (rows, occupied_max, full_wait_samples)
+        assert holding(plc, 220)[0] == count
         assert set(config["lanes"]) <= hmi_lanes, hmi_lanes
-        xle_output = xle.communicate(timeout=5)[0]
-        assert xle.returncode == 0, xle_output
+        if case == "repeat_restart":
+            assert restart_done
+            xle_output = xle_before_restart + stop(xle)
+        else:
+            xle_output = xle.communicate(timeout=5)[0]
+            assert xle.returncode == 0, xle_output
         xle = None
         asx_output = stop(asx); asx = None
         xe, ae = events(xle_output), events(asx_output)
@@ -174,36 +219,70 @@ def main(case, start_file=None):
             assert lane in config["lanes"], row
             package_id = f"l{lane}-{epoch[0]+epoch[1]*30000}-{nonce}-{row['token']}-{row['serial']}"
             row["package_id"] = package_id
-            assert row["barcode"] == config["barcodes"][lane], row
-            assert row["destination"] == config["destinations"][lane], row
-            failed = case == "failure"
-            assert row["state"] == (7 if failed else 5), row
-            assert row["actual"] == (0 if failed else row["destination"]), row
-            assert row["reason"] == (4 if failed else 0), row
-            assert row["scan_tick"] and row["accept_tick"] >= row["scan_tick"]
-            assert row["divert_tick"] > row["accept_tick"]
-            if not failed:
+            if row["serial"] <= 3:
+                assert row["barcode"] == config["barcodes"][lane], row
+            if row["serial"] <= 3:
+                assert row["destination"] == config["destinations"][lane], row
+            if case == "repeat_restart" and row["serial"] == 4:
+                assert row["barcode"] == 6001 and row["destination"] == 1
+            failed = case == "failure" and lane == 3
+            late = case == "late" and lane == 3
+            assert row["state"] == (7 if failed else 6 if late else 5), row
+            assert row["actual"] == (0 if failed or late else row["destination"]), row
+            assert row["reason"] == (4 if failed else 1 if late else 0), row
+            assert row["scan_tick"]
+            if late:
+                assert row["accept_tick"] == 0 and row["destination"] == 0
+            else:
+                assert row["accept_tick"] >= row["scan_tick"]
+            assert row["divert_tick"] > row["scan_tick"]
+            if not failed and not late:
                 expected_trailer[row["destination"] - 1] += 1
-            for source, name in ((xe, "scan"), (xe, "plc_command"),
-                                 (xe, "plc_outcome"), (ae, "asx_request")):
+            expected_events = [(xe, "scan"), (xe, "plc_outcome"),
+                               (ae, "asx_request")]
+            if not late:
+                expected_events.append((xe, "plc_command"))
+            for source, name in expected_events:
                 assert any(e.get("event") == name and e.get("package_id") == package_id
                            for e in source), (name, package_id)
+            if late:
+                assert any(e.get("event") == "safe_fallback" and
+                           e.get("package_id") == package_id and
+                           e.get("reason", "").startswith("decision_timeout_or_error:")
+                           for e in xe)
             samples = telemetry[lane]
             assert any(s[1] == {1: 1, 2: 5, 3: 6}[lane] and s[2] >= 100 for s in samples)
-            assert any(s[1] == (row["destination"] - 1) // 3 + 2 for s in samples)
+            if not late:
+                assert any(s[1] == (row["destination"] - 1) // 3 + 2 for s in samples)
             kinds = [e["type"] for e in sensor_events if
                      e["token"] == row["token"] and e["serial"] == row["serial"]]
-            assert kinds == [1, 2, 3, 6 if failed else 4], (package_id, kinds)
+            expected_kind = 6 if failed else 5 if late else 4
+            assert kinds[-3:] == [2, 3, expected_kind], (package_id, kinds)
         assert trailer == expected_trailer, (trailer, expected_trailer)
         assert pre_confirmation_counters == [0] * 9
         assert holding(plc, 219)[0] == (1 if case == "failure" else 0)
         if case == "failure":
             assert holding(plc, 646)[0] == 3
-        if case == "shared":
+        if case == "shared_four":
+            assert [rows[token]["lane"] for token in (1, 2, 3)] == [1, 2, 3]
+            previous = next(row for token, row in rows.items() if token in (1, 2, 3)
+                            and row["slot"] == rows[4]["slot"])
+            release = next(e for e in xe if e["event"] == "plc_release" and
+                           e["package_id"] == previous["package_id"])
+            third_scan = next(e for e in xe if e["event"] == "scan" and
+                              e["package_id"] == rows[4]["package_id"])
+            assert release["event_ns"] < third_scan["event_ns"]
+            fourth_induct = next(e for e in sensor_events if
+                                 e["type"] == 1 and e["token"] == 4)
+            assert release["event_ns"] < fourth_induct["event_ns"]
             assert merge_wait and min_gap is not None, (merge_wait, min_gap)
-        if case == "all":
-            assert [rows[token]["lane"] for token in sorted(rows)] == [1, 2, 3]
-            assert [rows[token]["slot"] for token in sorted(rows)] == [0, 1, 2]
+        if case == "repeat_restart":
+            assert rows[1]["barcode"] == rows[4]["barcode"] == 6001
+            for row in rows.values():
+                assert sum(e.get("event") == "plc_command" and
+                           e.get("package_id") == row["package_id"] for e in xe) == 1
+                assert sum(e.get("event") == "plc_outcome" and
+                           e.get("package_id") == row["package_id"] for e in xe) == 1
         with sqlite3.connect(db_path) as db:
             journal_rows = [(k, json.loads(v)) for k, v in
                             db.execute("SELECT identity,payload FROM outcomes ORDER BY identity")]
@@ -214,6 +293,8 @@ def main(case, start_file=None):
                           "sensor_events": sensor_events, "telemetry": telemetry,
                           "hmi_lanes": sorted(hmi_lanes), "merge_wait": merge_wait,
                           "minimum_gap_tenths": min_gap, "max_occupied": occupied_max,
+                          "full_wait_samples": full_wait_samples,
+                          "xle_restarted": restart_done,
                           "pre_confirmation_counters": pre_confirmation_counters,
                           "journal": journal_rows, "xle_events": xe,
                           "asx_events": ae}, sort_keys=True), flush=True)

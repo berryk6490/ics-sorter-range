@@ -1,7 +1,7 @@
 """XLe: correlate lane 1/2/3 scanner reads, ask ASX, command PLC, log outcomes.
 
 Run on SCADA with pymodbus 3.6.9. Events are JSON lines on stdout. The
-The legacy one-package runner and bounded two-slot multi runner share this file.
+The legacy one-package runner and bounded three-slot multi runner share this file.
 """
 import argparse
 import json
@@ -133,12 +133,21 @@ def run(client, asx_url, deadline=90):
 
 SLOT_BASE = 530
 SLOT_WIDTH = 12
+SLOT_ADDRESSES = (530, 542, 647)
+SLOT_LANE_ADDRESSES = (644, 645, 659)
+SLOT_COUNT = len(SLOT_ADDRESSES)
 TERMINAL = {5: "loaded", 6: "recirculated", 7: "failed"}
 
 
 def slot_rows(client):
-    words = read(client, SLOT_BASE, 2 * SLOT_WIDTH)
-    return [words[i:i + SLOT_WIDTH] for i in (0, SLOT_WIDTH)]
+    legacy = read(client, SLOT_BASE, 2 * SLOT_WIDTH)
+    return [legacy[:SLOT_WIDTH], legacy[SLOT_WIDTH:],
+            read(client, SLOT_ADDRESSES[2], SLOT_WIDTH)]
+
+
+def slot_lanes(client):
+    return [*read(client, SLOT_LANE_ADDRESSES[0], 2),
+            read(client, SLOT_LANE_ADDRESSES[2])[0]]
 
 
 def multi_enabled(client):
@@ -340,7 +349,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                     recovery_proved = False
                 nonce = read(client, 509)[0]
                 rows = slot_rows(client)
-                lanes = read(client, 644, 2)
+                lanes = slot_lanes(client)
                 if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch:
                     continue  # reset raced the row read
                 if any(row[0] and row[4] >= 2 and lane not in (1, 2, 3)
@@ -372,7 +381,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                                                     and liveness == 0):
                         continue
                     key = (current_epoch, nonce, token, serial, seq)
-                    if key not in pending and len(pending) < 2 and \
+                    if key not in pending and len(pending) < SLOT_COUNT and \
                        (packages == 0 or completed + len(pending) < packages):
                         request = package_request(current_epoch, nonce, row, lane)
                         future = (pool.submit(lookup, request, asx_url)
@@ -423,7 +432,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                             fresh_epoch = plc_epoch(client)
                             fresh_row = slot_rows(client)[slot]
                             if (fresh_nonce != nonce or fresh_epoch != current_epoch or
-                                fresh_row[:5] != row[:5] or read(client, 644, 2)[slot] != lane):
+                                fresh_row[:5] != row[:5] or slot_lanes(client)[slot] != lane):
                                 event("decision_discarded", package_id=package_id,
                                       reason="run_or_slot_changed")
                                 continue
@@ -470,7 +479,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                         if time.monotonic() - task["terminal_at"] >= terminal_hold:
                             if (read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch or
                                 slot_rows(client)[slot][:5] != row[:5] or
-                                read(client, 644, 2)[slot] != lane):
+                                slot_lanes(client)[slot] != lane):
                                 continue
                             command_id = command_id % 30000 + 1
                             if write_multi(client, command_id, 2, slot, row, nonce=nonce,
@@ -496,7 +505,7 @@ if __name__ == "__main__":
     parser.add_argument("--asx", default="http://127.0.0.1:8089/sort-plan")
     parser.add_argument("--packages", type=int, default=1)
     parser.add_argument("--multi", action="store_true",
-                        help="use the two-slot protocol even for one package")
+                        help="use the multi-slot protocol even for one package")
     parser.add_argument("--journal", help="durable multi-package outcome journal")
     parser.add_argument("--terminal-hold", type=float, default=1.0,
                         help="seconds to retain a terminal row before release")

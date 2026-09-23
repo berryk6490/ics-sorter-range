@@ -118,7 +118,7 @@ VAR
   xle_accept_tick AT %QW511 : INT;        (* PLC scan accepting XLe command *)
   xle_divert_tick AT %QW512 : INT;        (* first arrival at lane 1 cell 14 *)
   multi_op AT %QW520 : INT;              (* 1 route, 2 release terminal slot *)
-  multi_slot AT %QW521 : INT;            (* slot index 0..1 *)
+  multi_slot AT %QW521 : INT;            (* slot index 0..2 *)
   multi_token AT %QW522 : INT;
   multi_serial AT %QW523 : INT;
   multi_seq AT %QW524 : INT;
@@ -237,6 +237,41 @@ VAR
   slot0_lane AT %QW644 : INT;           (* stable lane identity beside slot row *)
   slot1_lane AT %QW645 : INT;
   plant_failed_lane AT %QW646 : INT;    (* lane of latest failed confirmation *)
+  slot2_token AT %QW647 : INT;
+  slot2_serial AT %QW648 : INT;
+  slot2_seq AT %QW649 : INT;
+  slot2_bc AT %QW650 : INT;
+  slot2_state AT %QW651 : INT;
+  slot2_dest AT %QW652 : INT;
+  slot2_actual AT %QW653 : INT;
+  slot2_reason AT %QW654 : INT;
+  slot2_scan AT %QW655 : INT;
+  slot2_accept AT %QW656 : INT;
+  slot2_divert AT %QW657 : INT;
+  slot2_command AT %QW658 : INT;
+  slot2_lane AT %QW659 : INT;
+  p2_raw_epoch_lo AT %QW660 : INT;
+  p2_raw_epoch_hi AT %QW661 : INT;
+  p2_raw_nonce AT %QW662 : INT;
+  p2_raw_token AT %QW663 : INT;
+  p2_raw_serial AT %QW664 : INT;
+  p2_raw_belt AT %QW665 : INT;
+  p2_raw_pos AT %QW666 : INT;
+  p2_raw_event AT %QW667 : INT;
+  p2_raw_actual AT %QW668 : INT;
+  p2_raw_seq AT %QW669 : INT;
+  p2_view_epoch_lo AT %QW670 : INT;
+  p2_view_epoch_hi AT %QW671 : INT;
+  p2_view_nonce AT %QW672 : INT;
+  p2_view_token AT %QW673 : INT;
+  p2_view_serial AT %QW674 : INT;
+  p2_view_belt AT %QW675 : INT;
+  p2_view_pos AT %QW676 : INT;
+  p2_view_event AT %QW677 : INT;
+  p2_view_actual AT %QW678 : INT;
+  p2_view_seq AT %QW679 : INT;
+  p2_view_status AT %QW680 : INT;
+  p2_view_age AT %QW681 : INT;
   xle_fault_ack AT %QX114.4 : BOOL;    (* coil 916, operator action *)
   xle_retry AT %QX114.5 : BOOL;        (* coil 917, operator action *)
 
@@ -551,10 +586,10 @@ VAR
   ort2 : BELT_T;
   ort3 : BELT_T;
   tok1, otok1, otok2, otok3 : BELT_T;
-  st_token, st_serial, st_seq, st_bc : ARRAY[0..1] OF INT;
-  st_lane : ARRAY[0..1] OF INT;
-  st_state, st_dest, st_actual, st_reason : ARRAY[0..1] OF INT;
-  st_scan, st_accept, st_divert, st_command : ARRAY[0..1] OF INT;
+  st_token, st_serial, st_seq, st_bc : ARRAY[0..2] OF INT;
+  st_lane : ARRAY[0..2] OF INT;
+  st_state, st_dest, st_actual, st_reason : ARRAY[0..2] OF INT;
+  st_scan, st_accept, st_divert, st_command : ARRAY[0..2] OF INT;
   acc_i1, acc_i2, acc_i3 : REAL := 0.0;
   acc_o1, acc_o2, acc_o3 : REAL := 0.0;
   tmr1, tmr2, tmr3 : INT := 0;
@@ -580,7 +615,7 @@ VAR
   plant_lane_match : BOOL := FALSE;
   plant_next_lane : INT := 1;
   plant_pick_lane, plant_candidate : INT := 0;
-  plant_view_seen0, plant_view_seen1 : INT := 0;
+  plant_view_seen0, plant_view_seen1, plant_view_seen2 : INT := 0;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -632,11 +667,12 @@ IF NOT init_done THEN
   plant_failed_lane := 0;
   plant_heartbeat_age := 0;
   plant_view_seen0 := p0_raw_seq; plant_view_seen1 := p1_raw_seq;
-  p0_view_status := 0; p1_view_status := 0;
-  p0_view_age := 0; p1_view_age := 0;
-  p0_view_token := 0; p1_view_token := 0;
-  p0_view_belt := 0; p1_view_belt := 0;
-  slot0_lane := 0; slot1_lane := 0;
+  plant_view_seen2 := p2_raw_seq;
+  p0_view_status := 0; p1_view_status := 0; p2_view_status := 0;
+  p0_view_age := 0; p1_view_age := 0; p2_view_age := 0;
+  p0_view_token := 0; p1_view_token := 0; p2_view_token := 0;
+  p0_view_belt := 0; p1_view_belt := 0; p2_view_belt := 0;
+  slot0_lane := 0; slot1_lane := 0; slot2_lane := 0;
   multi_seen := multi_cmd_id; multi_ack := 0; multi_ack_id := 0; token_next := 0;
   epoch_offer_seen := epoch_offer_id; epoch_ack_id := 0;
   epoch_active_lo := 0; epoch_active_hi := 0; epoch_fault := 1;
@@ -645,7 +681,7 @@ IF NOT init_done THEN
   hb_age := 0; hb_ready := FALSE; xle_liveness := 0;
   recovery_seen := recovery_sequence;
   xle_fault_ack := FALSE; xle_retry := FALSE;
-  FOR j := 0 TO 1 DO
+  FOR j := 0 TO 2 DO
     st_token[j] := 0; st_serial[j] := 0; st_seq[j] := 0; st_bc[j] := 0;
     st_lane[j] := 0;
     st_state[j] := 0; st_dest[j] := 0; st_actual[j] := 0;
@@ -937,7 +973,7 @@ ELSIF tun_wait_1 AND scan1_result = tun_seq_1 AND scan1_nonce = reset_nonce THEN
   sts := scan1_status;
   scan_code_1 := bc;
   IF xle_mode AND xle_multi THEN
-    FOR j := 0 TO 1 DO
+    FOR j := 0 TO 2 DO
       IF st_state[j] = 1 AND st_token[j] = tok1[10] THEN
         st_seq[j] := tun_seq_1;
         st_bc[j] := bc;
@@ -990,7 +1026,7 @@ ELSE
   IF tun_wait_1 AND scan1_result = tun_seq_1 AND scan1_nonce = reset_nonce THEN
     tun_wait_1 := FALSE;
     scan_code_1 := scan1_bc;
-    FOR j := 0 TO 1 DO
+    FOR j := 0 TO 2 DO
       IF st_state[j] = 1 AND st_lane[j] = 1 AND st_token[j] = plant_scan_token THEN
         st_seq[j] := tun_seq_1;
         st_bc[j] := scan1_bc;
@@ -1064,7 +1100,7 @@ ELSE
   IF tun_wait_2 AND scan2_result = tun_seq_2 AND scan2_nonce = reset_nonce THEN
     tun_wait_2 := FALSE;
     scan_code_2 := scan2_bc;
-    FOR j := 0 TO 1 DO
+    FOR j := 0 TO 2 DO
       IF st_state[j] = 1 AND st_lane[j] = 2 AND
          st_token[j] = plant_scan_token_2 THEN
         st_seq[j] := tun_seq_2;
@@ -1139,7 +1175,7 @@ ELSE
   IF tun_wait_3 AND scan3_result = tun_seq_3 AND scan3_nonce = reset_nonce THEN
     tun_wait_3 := FALSE;
     scan_code_3 := scan3_bc;
-    FOR j := 0 TO 1 DO
+    FOR j := 0 TO 2 DO
       IF st_state[j] = 1 AND st_lane[j] = 3 AND
          st_token[j] = plant_scan_token_3 THEN
         st_seq[j] := tun_seq_3;
@@ -1252,12 +1288,48 @@ IF plant_mode THEN
     END_IF;
     IF p1_view_age > 15 AND p1_view_status = 1 THEN p1_view_status := 2; END_IF;
   END_IF;
+  IF st_state[2] = 0 OR st_token[2] = 0 THEN
+    p2_view_status := 0; p2_view_age := 0;
+    p2_view_token := 0; p2_view_belt := 0;
+    plant_view_seen2 := p2_raw_seq;
+  ELSE
+    IF p2_view_token <> 0 AND
+       (p2_view_token <> st_token[2] OR p2_view_serial <> st_serial[2]) THEN
+      p2_view_status := 3; p2_view_token := 0; p2_view_belt := 0;
+      p2_view_age := 0;
+    END_IF;
+    IF p2_raw_seq <> 0 AND p2_raw_seq <> plant_view_seen2 THEN
+      plant_view_seen2 := p2_raw_seq;
+      IF p2_raw_epoch_lo = epoch_active_lo AND p2_raw_epoch_hi = epoch_active_hi AND
+         p2_raw_nonce = reset_nonce AND p2_raw_token = st_token[2] AND
+         p2_raw_serial = st_serial[2] AND
+         ((st_lane[2] = 1 AND p2_raw_belt = 1) OR
+          (st_lane[2] = 2 AND p2_raw_belt = 5) OR
+          (st_lane[2] = 3 AND p2_raw_belt = 6) OR
+          (p2_raw_belt >= 2 AND p2_raw_belt <= 4)) AND
+         p2_raw_pos >= 0 AND p2_raw_pos <= 300 AND
+         p2_raw_event >= 0 AND p2_raw_event <= 6 AND
+         p2_raw_actual >= 0 AND p2_raw_actual <= 9 THEN
+        p2_view_epoch_lo := p2_raw_epoch_lo; p2_view_epoch_hi := p2_raw_epoch_hi;
+        p2_view_nonce := p2_raw_nonce; p2_view_token := p2_raw_token;
+        p2_view_serial := p2_raw_serial; p2_view_belt := p2_raw_belt;
+        p2_view_pos := p2_raw_pos; p2_view_event := p2_raw_event;
+        p2_view_actual := p2_raw_actual; p2_view_seq := p2_raw_seq;
+        p2_view_age := 0; p2_view_status := 1;
+      ELSE
+        p2_view_status := 3; p2_view_token := 0; p2_view_belt := 0;
+      END_IF;
+    ELSIF p2_view_age < 32000 THEN
+      p2_view_age := p2_view_age + 1;
+    END_IF;
+    IF p2_view_age > 15 AND p2_view_status = 1 THEN p2_view_status := 2; END_IF;
+  END_IF;
   IF plant_event_seq <> 0 AND plant_event_seq <> plant_seen THEN
     plant_seen := plant_event_seq;
     plant_event_ack := plant_event_seq;
     slot_index := -1;
     plant_lane_match := FALSE;
-    FOR j := 0 TO 1 DO
+    FOR j := 0 TO 2 DO
       IF st_state[j] <> 0 AND st_token[j] = plant_event_token AND
          st_serial[j] = plant_event_serial THEN
         slot_index := j;
@@ -1373,11 +1445,11 @@ IF plant_mode THEN
 END_IF;
 plant_heartbeat_age := plant_hb_age;
 IF NOT plant_mode THEN
-  p0_view_status := 0; p1_view_status := 0;
-  p0_view_token := 0; p1_view_token := 0;
-  p0_view_belt := 0; p1_view_belt := 0;
+  p0_view_status := 0; p1_view_status := 0; p2_view_status := 0;
+  p0_view_token := 0; p1_view_token := 0; p2_view_token := 0;
+  p0_view_belt := 0; p1_view_belt := 0; p2_view_belt := 0;
 END_IF;
-slot0_lane := st_lane[0]; slot1_lane := st_lane[1];
+slot0_lane := st_lane[0]; slot1_lane := st_lane[1]; slot2_lane := st_lane[2];
 
 (* Accept one command for the current scanned package before cell 14.
    A package without a valid command retains route zero and recirculates. *)
@@ -1410,7 +1482,7 @@ IF xle_mode AND xle_multi AND multi_cmd_id <> 0 AND multi_cmd_id <> multi_seen T
   multi_ack := 2;
   multi_ack_id := multi_cmd_id;
   j := multi_slot;
-  IF j >= 0 AND j <= 1 THEN
+  IF j >= 0 AND j <= 2 THEN
     IF epoch_fault = 0 AND cmd_epoch_lo = epoch_active_lo AND
        cmd_epoch_hi = epoch_active_hi AND multi_nonce = reset_nonce AND st_state[j] <> 0 AND
        multi_token = st_token[j] AND multi_serial = st_serial[j] AND
@@ -1441,7 +1513,7 @@ IF xle_mode AND xle_multi AND multi_cmd_id <> 0 AND multi_cmd_id <> multi_seen T
   END_IF;
 END_IF;
 
-(* Two global slots are shared by the three inducts. At each free slot, scan
+(* Three global slots are shared by the three inducts. At each free slot, scan
    ready lanes starting at plant_next_lane and wrap 3 -> 1. A successful
    request advances the pointer. The INDUCT event completes the request
    before another slot may be assigned. *)
@@ -1452,7 +1524,7 @@ IF plant_mode THEN
   IF NOT plant_request_pending AND sorter_run AND plant_fault = 0 AND
      epoch_fault = 0 AND xle_liveness = 0 AND hb_ready AND hb_age <= 50 THEN
     slot_index := -1;
-    FOR j := 0 TO 1 DO
+    FOR j := 0 TO 2 DO
       IF st_state[j] = 0 AND slot_index = -1 THEN slot_index := j; END_IF;
     END_FOR;
     IF slot_index >= 0 THEN
@@ -1508,7 +1580,7 @@ IF acc_i1 >= 1.0 THEN
   IF ib1[19] <> 0 THEN
     recirc_ct := recirc_ct + 1;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = tok1[19] THEN
           st_state[j] := 6; st_reason[j] := 1;
         END_IF;
@@ -1542,7 +1614,7 @@ IF acc_i1 >= 1.0 THEN
   rt1[0] := 0;
   tok1[0] := 0;
   IF xle_mode AND xle_multi THEN
-    FOR j := 0 TO 1 DO
+    FOR j := 0 TO 2 DO
       IF st_token[j] <> 0 AND st_token[j] = tok1[14] AND st_divert[j] = 0 THEN
         st_divert[j] := scan_ct;
       END_IF;
@@ -1603,7 +1675,7 @@ IF acc_i1 >= 1.0 THEN
       coll_alarm := TRUE;
       IF xle_mode AND NOT xle_multi AND ib1[14] = xle_package THEN xle_state := 4; xle_reason := 3; END_IF;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = tok1[14] THEN
             st_state[j] := 7; st_reason[j] := 3;
           END_IF;
@@ -1616,7 +1688,7 @@ IF acc_i1 >= 1.0 THEN
       dest := ib1[14] / 1000;
       IF xle_mode AND NOT xle_multi AND ib1[14] = xle_package THEN dest := xle_route_dest; END_IF;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = tok1[14] THEN
             dest := st_dest[j]; st_state[j] := 4;
           END_IF;
@@ -1643,7 +1715,7 @@ IF acc_i1 >= 1.0 THEN
       coll_alarm := TRUE;
       IF xle_mode AND NOT xle_multi AND ib1[16] = xle_package THEN xle_state := 4; xle_reason := 3; END_IF;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = tok1[16] THEN
             st_state[j] := 7; st_reason[j] := 3;
           END_IF;
@@ -1656,7 +1728,7 @@ IF acc_i1 >= 1.0 THEN
       dest := ib1[16] / 1000;
       IF xle_mode AND NOT xle_multi AND ib1[16] = xle_package THEN dest := xle_route_dest; END_IF;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = tok1[16] THEN
             dest := st_dest[j]; st_state[j] := 4;
           END_IF;
@@ -1683,7 +1755,7 @@ IF acc_i1 >= 1.0 THEN
       coll_alarm := TRUE;
       IF xle_mode AND NOT xle_multi AND ib1[18] = xle_package THEN xle_state := 4; xle_reason := 3; END_IF;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = tok1[18] THEN
             st_state[j] := 7; st_reason[j] := 3;
           END_IF;
@@ -1696,7 +1768,7 @@ IF acc_i1 >= 1.0 THEN
       dest := ib1[18] / 1000;
       IF xle_mode AND NOT xle_multi AND ib1[18] = xle_package THEN dest := xle_route_dest; END_IF;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = tok1[18] THEN
             dest := st_dest[j]; st_state[j] := 4;
           END_IF;
@@ -2000,7 +2072,7 @@ IF acc_o1 >= 1.0 THEN
     nohome_ct := nohome_ct + 1;
     nohome_alarm := TRUE;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok1[19] THEN
           st_state[j] := 7; st_reason[j] := 4;
         END_IF;
@@ -2027,7 +2099,7 @@ IF acc_o1 >= 1.0 THEN
     bc := ob1[12];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok1[12] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 1; st_reason[j] := 0;
@@ -2043,7 +2115,7 @@ IF acc_o1 >= 1.0 THEN
       tr11_bad := tr11_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok1[12] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2061,7 +2133,7 @@ IF acc_o1 >= 1.0 THEN
     bc := ob1[15];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok1[15] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 2; st_reason[j] := 0;
@@ -2077,7 +2149,7 @@ IF acc_o1 >= 1.0 THEN
       tr12_bad := tr12_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok1[15] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2095,7 +2167,7 @@ IF acc_o1 >= 1.0 THEN
     bc := ob1[18];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok1[18] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 3; st_reason[j] := 0;
@@ -2111,7 +2183,7 @@ IF acc_o1 >= 1.0 THEN
       tr13_bad := tr13_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok1[18] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2135,7 +2207,7 @@ IF acc_o2 >= 1.0 THEN
     nohome_ct := nohome_ct + 1;
     nohome_alarm := TRUE;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok2[19] THEN
           st_state[j] := 7; st_reason[j] := 4;
         END_IF;
@@ -2162,7 +2234,7 @@ IF acc_o2 >= 1.0 THEN
     bc := ob2[12];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok2[12] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 4; st_reason[j] := 0;
@@ -2178,7 +2250,7 @@ IF acc_o2 >= 1.0 THEN
       tr21_bad := tr21_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok2[12] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2196,7 +2268,7 @@ IF acc_o2 >= 1.0 THEN
     bc := ob2[15];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok2[15] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 5; st_reason[j] := 0;
@@ -2212,7 +2284,7 @@ IF acc_o2 >= 1.0 THEN
       tr22_bad := tr22_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok2[15] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2230,7 +2302,7 @@ IF acc_o2 >= 1.0 THEN
     bc := ob2[18];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok2[18] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 6; st_reason[j] := 0;
@@ -2246,7 +2318,7 @@ IF acc_o2 >= 1.0 THEN
       tr23_bad := tr23_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok2[18] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2270,7 +2342,7 @@ IF acc_o3 >= 1.0 THEN
     nohome_ct := nohome_ct + 1;
     nohome_alarm := TRUE;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok3[19] THEN
           st_state[j] := 7; st_reason[j] := 4;
         END_IF;
@@ -2297,7 +2369,7 @@ IF acc_o3 >= 1.0 THEN
     bc := ob3[12];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok3[12] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 7; st_reason[j] := 0;
@@ -2313,7 +2385,7 @@ IF acc_o3 >= 1.0 THEN
       tr31_bad := tr31_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok3[12] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2331,7 +2403,7 @@ IF acc_o3 >= 1.0 THEN
     bc := ob3[15];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok3[15] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 8; st_reason[j] := 0;
@@ -2347,7 +2419,7 @@ IF acc_o3 >= 1.0 THEN
       tr32_bad := tr32_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok3[15] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2365,7 +2437,7 @@ IF acc_o3 >= 1.0 THEN
     bc := ob3[18];
     dest := bc / 1000;
     IF xle_mode AND xle_multi THEN
-      FOR j := 0 TO 1 DO
+      FOR j := 0 TO 2 DO
         IF st_token[j] <> 0 AND st_token[j] = otok3[18] THEN
           dest := st_dest[j]; st_state[j] := 5;
           st_actual[j] := 9; st_reason[j] := 0;
@@ -2381,7 +2453,7 @@ IF acc_o3 >= 1.0 THEN
       tr33_bad := tr33_bad + 1;
       missort_ct := missort_ct + 1;
       IF xle_mode AND xle_multi THEN
-        FOR j := 0 TO 1 DO
+        FOR j := 0 TO 2 DO
           IF st_token[j] <> 0 AND st_token[j] = otok3[18] THEN
             st_state[j] := 7; st_reason[j] := 5;
           END_IF;
@@ -2666,6 +2738,18 @@ slot1_scan := st_scan[1];
 slot1_accept := st_accept[1];
 slot1_divert := st_divert[1];
 slot1_command := st_command[1];
+slot2_token := st_token[2];
+slot2_serial := st_serial[2];
+slot2_seq := st_seq[2];
+slot2_bc := st_bc[2];
+slot2_state := st_state[2];
+slot2_dest := st_dest[2];
+slot2_actual := st_actual[2];
+slot2_reason := st_reason[2];
+slot2_scan := st_scan[2];
+slot2_accept := st_accept[2];
+slot2_divert := st_divert[2];
+slot2_command := st_command[2];
 
 END_PROGRAM
 

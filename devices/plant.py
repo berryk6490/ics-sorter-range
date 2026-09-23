@@ -131,7 +131,7 @@ class PlantModel:
 
         # First arrival wins; a simultaneous arrival is lower lane first.
         # One waiting package per lane can accumulate at its divert gate.
-        # Capacity is the two PLC slots, and no outbound pair may be closer
+        # Capacity is the three PLC slots, and no outbound pair may be closer
         # than one package length plus the configured clear spacing.
         candidates.sort(key=lambda item: (item[2] - item[0].position, item[0].lane))
         for p, belt, target_cell in candidates:
@@ -189,7 +189,7 @@ def run(args):
                        fail_confirm_token=args.fail_confirm_token)
     active = None
     sequence = 0
-    telemetry_sequence = [0, 0]
+    telemetry_sequence = [0, 0, 0]
     heartbeat = 0
     last_request = 0
     last = time.monotonic()
@@ -224,7 +224,7 @@ def run(args):
                 # after the PLC's committed sequence so its seen-sequence
                 # guard cannot discard this run's first INDUCT photoeye.
                 sequence = read(plc, 585)[0]
-                telemetry_sequence = [0, 0]
+                telemetry_sequence = [0, 0, 0]
                 last_request = read(plc, 574)[0]
                 if active:
                     write(plc, 587, [*epoch, nonce])
@@ -243,17 +243,17 @@ def run(args):
                 model.request(token, serial, lane)
                 LOG.info("request lane=%s token=%s serial=%s", lane, token, serial)
             rpm = [read(client, 5)[0] for client in drives]
-            rows = read(plc, 530, 24)
-            slots = {rows[i]: (rows[i + 1], rows[i + 4], rows[i + 5])
-                     for i in (0, 12) if rows[i]}
+            rows = [read(plc, 530, 12), read(plc, 542, 12),
+                    read(plc, 647, 12)]
+            slots = {row[0]: (row[1], row[4], row[5])
+                     for row in rows if row[0]}
             model.step(elapsed, rpm, slots)
             if mode:
-                for index in (0, 1):
-                    offset = index * 12
-                    token, serial = rows[offset:offset + 2]
+                for index, row in enumerate(rows):
+                    token, serial = row[:2]
                     belt, position, event_type, actual = model.telemetry(token, serial)
                     telemetry_sequence[index] = telemetry_sequence[index] % 30000 + 1
-                    base = 600 + index * 10
+                    base = 600 + index * 10 if index < 2 else 660
                     write(plc, base, [*epoch, nonce, token, serial, belt,
                                       position, event_type, actual])
                     write(plc, base + 9, [telemetry_sequence[index]])
