@@ -23,13 +23,18 @@ static int scan_tick(int slot) { return slot ? WORD(550) : WORD(538); }
 static int accept_tick(int slot) { return slot ? WORD(551) : WORD(539); }
 static int divert_tick(int slot) { return slot ? WORD(552) : WORD(540); }
 
-static void command(int id, int op, int slot, int wrong_token, int dest) {
+static void command_epoch(int id, int op, int slot, int wrong_token, int dest,
+                          int wrong_epoch) {
     WORD(520) = op; WORD(521) = slot;
     WORD(522) = token(slot) + wrong_token;
     WORD(523) = serial(slot); WORD(524) = seq(slot);
     WORD(525) = barcode(slot); WORD(526) = dest;
+    WORD(562) = WORD(558) + wrong_epoch; WORD(563) = WORD(559);
     WORD(527) = WORD(509); WORD(528) = id;
     scan();
+}
+static void command(int id, int op, int slot, int wrong_token, int dest) {
+    command_epoch(id, op, slot, wrong_token, dest, 0);
 }
 
 int main(int argc, char **argv) {
@@ -52,6 +57,13 @@ int main(int argc, char **argv) {
     BIT(110, 0) = 1;
     INPUT(105) = INPUT(132) = INPUT(141) = INPUT(150) = 1750;
     WORD(207) = 14;
+    for (int step = 0; step < 15; ++step) scan();
+    assert(WORD(561) == 1 && WORD(220) == 0); /* no identity: no movement */
+    BIT(110, 0) = 0;
+    WORD(555) = 73; WORD(556) = 0; WORD(557) = 1; scan();
+    assert(WORD(558) == 73 && WORD(559) == 0 && WORD(560) == 1);
+    assert(WORD(561) == 0);
+    BIT(110, 0) = 1;
     int last_trigger = 0, commanded[2] = {0, 0};
     for (int step = 0; step < 100; ++step) {
         scan();
@@ -67,7 +79,7 @@ int main(int argc, char **argv) {
             if (state(slot) != 2 || commanded[slot]) continue;
             commanded[slot] = 1;
             if (slot == 1) {
-                command(10, 1, slot, 1, 9);
+                command_epoch(10, 1, slot, 0, 9, 1);
                 assert(WORD(529) == 2 && WORD(554) == 10 && state(slot) == 2);
             }
             if (!timeout || slot == 0) {

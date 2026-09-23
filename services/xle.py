@@ -151,10 +151,16 @@ def multi_enabled(client):
     raise RuntimeError(f"PLC mode read: {reply}")
 
 
-def write_multi(client, command_id, op, slot, row, destination=0, nonce=None):
+def write_multi(client, command_id, op, slot, row, destination=0, nonce=None,
+                epoch=None):
     token, serial, seq, barcode = row[:4]
     if nonce is None:
         nonce = read(client, 509)[0]
+    if epoch is None:
+        epoch = plc_epoch(client)
+    reply = client.write_registers(562, [epoch % 30000, epoch // 30000], slave=1)
+    if reply.isError():
+        raise RuntimeError(f"PLC epoch write: {reply}")
     payload = [op, slot, token, serial, seq, barcode, destination, nonce]
     reply = client.write_registers(520, payload, slave=1)
     if reply.isError():
@@ -178,7 +184,22 @@ class OutcomeJournal:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("CREATE TABLE IF NOT EXISTS outcomes "
                         "(identity TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS run_epochs "
+                        "(identity INTEGER PRIMARY KEY)")
         self.db.commit()
+
+    def allocate_epoch(self):
+        # A monotonically allocated, committed ID survives an XLe restart and
+        # cannot alias an earlier journal entry after a cold PLC restart.
+        value = self.db.execute("SELECT COALESCE(MAX(identity), 0) + 1 FROM run_epochs").fetchone()[0]
+        if value >= 30000 * 30000:
+            raise RuntimeError("run identity space exhausted")
+        self.db.execute("INSERT INTO run_epochs VALUES (?)", (value,))
+        self.db.commit()
+        return value
+
+    def has_epoch(self, value):
+        return self.db.execute("SELECT 1 FROM run_epochs WHERE identity=?", (value,)).fetchone() is not None
 
     def record(self, identity, payload):
         key = ":".join(map(str, identity))
@@ -191,12 +212,56 @@ class OutcomeJournal:
         self.db.close()
 
 
-def package_request(nonce, row):
+def package_request(epoch, nonce, row):
     token, serial, seq, barcode = row[:4]
-    return {"package_id": f"l1-{nonce}-{token}-{serial}",
+    return {"package_id": f"l1-{epoch}-{nonce}-{token}-{serial}",
             "request_id": str(uuid.uuid4()), "barcode": barcode,
             "package_serial": serial, "slot_token": token,
-            "scanner_sequence": seq, "scanner_run_nonce": nonce, "lane": 1}
+            "scanner_sequence": seq, "scanner_run_nonce": nonce,
+            "run_epoch": epoch, "lane": 1}
+
+
+def plc_epoch(client):
+    lo, hi = read(client, 558, 2)
+    return hi * 30000 + lo
+
+
+def fail_closed(client, reason):
+    event("external_sort_fault", reason=reason, action="sorter_stopped")
+    client.write_coil(880, False, slave=1)
+    client.write_register(564, 2, slave=1)
+    raise RuntimeError(reason)
+
+
+def ensure_epoch(client, journal):
+    value = plc_epoch(client)
+    if value:
+        if not journal.has_epoch(value):
+            fail_closed(client, f"PLC run identity {value} absent from XLe journal")
+        if read(client, 564)[0] == 2:
+            fail_closed(client, "external sort fault requires operator review")
+        return value
+    # The PLC inhibits multi-package induction until this handshake completes.
+    if read(client, 255)[0] != 0:
+        return None
+    client.write_coil(880, False, slave=1)
+    value = journal.allocate_epoch()
+    offer_id = read(client, 557)[0] % 30000 + 1
+    reply = client.write_registers(555, [value % 30000, value // 30000], slave=1)
+    if reply.isError():
+        fail_closed(client, "run identity offer write failed")
+    reply = client.write_register(557, offer_id, slave=1)
+    if reply.isError():
+        fail_closed(client, "run identity offer commit failed")
+    until = time.monotonic() + 2
+    while time.monotonic() < until:
+        if read(client, 560)[0] == offer_id:
+            if plc_epoch(client) == value:
+                event("run_identity_established", run_epoch=value)
+                return value
+            break
+        time.sleep(.05)
+    fail_closed(client, f"PLC rejected run identity {value}")
 
 
 def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
@@ -205,10 +270,13 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
     if not client.connect():
         raise RuntimeError("PLC Modbus unavailable")
     journal_path = journal or str(Path.home() / "sorter-services" / "xle-outcomes.sqlite3")
-    log = OutcomeJournal(journal_path)
+    try:
+        log = OutcomeJournal(journal_path)
+    except (sqlite3.Error, OSError) as exc:
+        fail_closed(client, f"XLe journal unavailable: {exc}")
     pending = {}
     completed = 0
-    epoch = None
+    run_identity = None
     startup_slots = None
     command_id = read(client, 528)[0]
     end = float("inf") if packages == 0 else time.monotonic() + deadline
@@ -218,22 +286,30 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                 if not multi_enabled(client):
                     time.sleep(.05)
                     continue
+                try:
+                    current_epoch = ensure_epoch(client, log)
+                except (sqlite3.Error, OSError) as exc:
+                    fail_closed(client, f"XLe journal identity check failed: {exc}")
+                if current_epoch is None:
+                    time.sleep(.05)
+                    continue
                 nonce = read(client, 509)[0]
                 rows = slot_rows(client)
-                if read(client, 509)[0] != nonce:
+                if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch:
                     continue  # reset raced the row read
                 if startup_slots is None:
-                    startup_slots = {(nonce, r[0], r[1], r[2])
+                    startup_slots = {(current_epoch, nonce, r[0], r[1], r[2])
                                      for r in rows if r[0] and r[4] >= 2}
-                if epoch is not None and nonce != epoch:
+                if run_identity is not None and (current_epoch, nonce) != run_identity:
                     for task in pending.values():
                         if task["future"] is not None:
                             task["future"].cancel()
                         event("run_abandoned", package_id=task["request"]["package_id"],
-                              old_nonce=epoch, new_nonce=nonce)
+                              old_run=run_identity, new_run=(current_epoch, nonce))
                     pending.clear()
-                epoch = nonce
-                present = {(nonce, r[0], r[1], r[2]) for r in rows if r[0] and r[4]}
+                    startup_slots = set()
+                run_identity = (current_epoch, nonce)
+                present = {(current_epoch, nonce, r[0], r[1], r[2]) for r in rows if r[0] and r[4]}
                 for key in list(pending):
                     if key not in present:
                         task = pending.pop(key)
@@ -244,10 +320,10 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                     token, serial, seq, barcode, state, dest, actual, reason, scan_tick, accept_tick, divert_tick, plc_cmd = row
                     if not token or state < 2:
                         continue
-                    key = (nonce, token, serial, seq)
+                    key = (current_epoch, nonce, token, serial, seq)
                     if key not in pending and len(pending) < 2 and \
                        (packages == 0 or completed + len(pending) < packages):
-                        request = package_request(nonce, row)
+                        request = package_request(current_epoch, nonce, row)
                         future = pool.submit(lookup, request, asx_url) if state == 2 and barcode else None
                         pending[key] = {"slot": slot, "request": request,
                                         "future": future, "decided": state != 2 or not barcode,
@@ -284,17 +360,19 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                             # The nonce and slot are re-read immediately before
                             # committing the old ASX answer. The PLC checks them again.
                             fresh_nonce = read(client, 509)[0]
+                            fresh_epoch = plc_epoch(client)
                             fresh_row = slot_rows(client)[slot]
-                            if fresh_nonce != nonce or fresh_row[:5] != row[:5]:
+                            if fresh_nonce != nonce or fresh_epoch != current_epoch or fresh_row[:5] != row[:5]:
                                 event("decision_discarded", package_id=package_id,
                                       reason="run_or_slot_changed")
                                 continue
                             command_id = command_id % 30000 + 1
                             try:
                                 result = write_multi(client, command_id, 1, slot, row,
-                                                     destination, nonce=nonce)
+                                                     destination, nonce=nonce,
+                                                     epoch=current_epoch)
                             except TimeoutError:
-                                if read(client, 509)[0] != nonce:
+                                if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch:
                                     event("decision_discarded", package_id=package_id,
                                           reason="run_changed_during_command")
                                     continue
@@ -303,7 +381,7 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                                 event("plc_command", package_id=package_id,
                                       command_id=command_id, slot=slot,
                                       slot_token=token, destination=destination,
-                                      run_nonce=nonce)
+                                      run_nonce=nonce, run_epoch=current_epoch)
                             else:
                                 event("safe_fallback", package_id=package_id,
                                       request_id=task["request"]["request_id"],
@@ -319,15 +397,20 @@ def run_multi(client, asx_url, packages=2, deadline=120, journal=None,
                                        "scanner_to_divert_ms": (divert_tick - scan_tick) * 100,
                                        "acceptance_margin_ms": (divert_tick - accept_tick) * 100
                                        if accept_tick else None}
-                            if log.record(key, outcome):
+                            try:
+                                recorded = log.record(key, outcome)
+                            except (sqlite3.Error, OSError) as exc:
+                                fail_closed(client, f"XLe outcome journal write failed: {exc}")
+                            if recorded:
                                 event("plc_outcome", **outcome)
                             else:
                                 event("plc_outcome_already_recorded", package_id=package_id)
                         if time.monotonic() - task["terminal_at"] >= terminal_hold:
-                            if read(client, 509)[0] != nonce or slot_rows(client)[slot][:5] != row[:5]:
+                            if read(client, 509)[0] != nonce or plc_epoch(client) != current_epoch or slot_rows(client)[slot][:5] != row[:5]:
                                 continue
                             command_id = command_id % 30000 + 1
-                            if write_multi(client, command_id, 2, slot, row, nonce=nonce) != 3:
+                            if write_multi(client, command_id, 2, slot, row, nonce=nonce,
+                                           epoch=current_epoch) != 3:
                                 raise RuntimeError(f"PLC rejected terminal release for {package_id}")
                             event("plc_release", package_id=package_id,
                                   command_id=command_id)

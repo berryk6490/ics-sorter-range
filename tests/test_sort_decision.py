@@ -75,10 +75,12 @@ class Decisions(unittest.TestCase):
             def write_register(self, address, value, slave):
                 self.writes.append(("commit", address, value)); return Reply()
         client = Client()
-        self.assertEqual(xle.write_multi(client, 12, 1, 1, [4, 2, 8, 6001], 5), 1)
-        self.assertEqual(client.writes[1], ("payload", 520,
+        self.assertEqual(xle.write_multi(client, 12, 1, 1, [4, 2, 8, 6001], 5,
+                                         epoch=17), 1)
+        self.assertEqual(client.writes[1], ("payload", 562, [17, 0]))
+        self.assertEqual(client.writes[2], ("payload", 520,
                          [1, 1, 4, 2, 8, 6001, 5, 17]))
-        self.assertEqual(client.writes[2], ("commit", 528, 12))
+        self.assertEqual(client.writes[3], ("commit", 528, 12))
 
 
 if __name__ == "__main__":

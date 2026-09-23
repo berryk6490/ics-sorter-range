@@ -3,8 +3,8 @@
 ## Contract and limits
 
 The PLC's two slot rows remain authoritative. At startup XLe reconstructs
-`(run nonce, token, serial, scanner sequence)` and the stable package ID
-`l1-NONCE-TOKEN-SERIAL` from each occupied row. A scanned row (state 2) gets
+`(run epoch, run nonce, token, serial, scanner sequence)` and the stable package ID
+`l1-EPOCH-NONCE-TOKEN-SERIAL` from each occupied row. A scanned row (state 2) gets
 a fresh ASX request ID. XLe re-reads the nonce and complete slot identity
 before committing a decision; the PLC checks them again. An accepted route
 (state 3 or 4) is **not commanded again**. XLe waits for the physical outcome.
@@ -13,7 +13,7 @@ process never observed its scan.
 
 The canonical outcome log is SQLite at
 `~/sorter-services/xle-outcomes.sqlite3` on SCADA by default. A unique key
-on the four-part PLC identity gives one durable outcome row across XLe
+on the five-part PLC identity gives one durable outcome row across XLe
 restarts. XLe commits the row with SQLite synchronous FULL before printing
 `plc_outcome`. If it crashes between commit and stdout, the journal still
 contains the outcome, though stdout can miss it. On restart XLe emits
@@ -39,12 +39,11 @@ Recovery has these boundaries:
 - A PLC reset clears occupied slots and modeled packages. XLe can discard
   stale requests but cannot recover package state erased by that reset.
 - A cold PLC process restart can reuse its private nonce and token counters.
-  The protocol has no persistent PLC boot identity, so a same-seed replay
-  could collide with an old journal key. Archive and rotate the journal while
-  stopped after a cold PLC restart. Cross-boot identity needs a persistent
-  PLC epoch and is outside this change.
+  XLe now commits a new run epoch in the same SQLite journal before the PLC
+  accepts external multi mode. See [RUN_IDENTITY.md](RUN_IDENTITY.md) for the
+  handshake, fail-closed behavior, and live cold-restart evidence.
 
-## Verification
+## Verification before the run-epoch change
 
 Before the fix, focused host reproductions starting XLe against a state 3
 slot and a state 5 slot both ended with `multi outcome timeout: 0/1` and no

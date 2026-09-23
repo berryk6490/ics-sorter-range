@@ -1,6 +1,7 @@
 """Process-restart behavior at the existing PLC two-slot Modbus boundary."""
 import importlib.util
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -37,6 +38,12 @@ class PLC:
         self.route_keys = []
         self.polls = 0
         self.fail_release_once = False
+        self.epoch = 0
+        self.offer_id = 0
+        self.ack_offer_id = 0
+        self.fault_request = 0
+        self.command_epoch = 0
+        self.stopped = True
 
     def connect(self):
         return True
@@ -44,11 +51,21 @@ class PLC:
     def read_coils(self, address, count, slave):
         return Reply([True, True])
 
+    def write_coil(self, address, value, slave):
+        assert address == 880 and value is False
+        self.stopped = True
+        return Reply([])
+
     def read_holding_registers(self, address, count, slave):
         if address == 528: return Reply([self.command_id])
         if address == 509: return Reply([self.nonce])
         if address == 554: return Reply([self.ack_id])
         if address == 529: return Reply([self.ack])
+        if address == 558: return Reply([self.epoch % 30000, self.epoch // 30000])
+        if address == 557: return Reply([self.offer_id])
+        if address == 560: return Reply([self.ack_offer_id])
+        if address == 564: return Reply([self.fault_request])
+        if address == 255: return Reply([0])
         if address == 530:
             self.polls += 1
             if self.row[4] == 3 and self.polls >= 3:
@@ -58,11 +75,24 @@ class PLC:
         raise AssertionError((address, count))
 
     def write_registers(self, address, values, slave):
+        if address == 555:
+            self.offer = values
+            return Reply([])
+        if address == 562:
+            self.command_epoch = values[0] + values[1] * 30000
+            return Reply([])
         assert address == 520
         self.payload = values
         return Reply([])
 
     def write_register(self, address, value, slave):
+        if address == 557:
+            self.offer_id = self.ack_offer_id = value
+            self.epoch = self.offer[0] + self.offer[1] * 30000
+            return Reply([])
+        if address == 564:
+            self.fault_request = value
+            return Reply([])
         assert address == 528
         self.command_id = self.ack_id = value
         if self.payload[0] == 2:
@@ -73,7 +103,8 @@ class PLC:
             self.row[0] = self.row[4] = 0
             self.ack = 3
         else:
-            valid = (self.payload[2:6] == self.row[:4] and
+            valid = (self.command_epoch == self.epoch and
+                     self.payload[2:6] == self.row[:4] and
                      self.payload[7] == self.nonce and self.row[4] == 2)
             if valid:
                 self.routes += 1
@@ -166,6 +197,77 @@ class Recovery(unittest.TestCase):
         self.assertEqual(plc.route_keys, [(8, 42, 1, 1, 6001)])
         self.assertEqual(plc.releases, 1)
         self.assertTrue(any(c.args[0] == "run_abandoned" for c in emit.call_args_list))
+
+    def test_same_seed_cold_restart_keeps_distinct_journal_outcomes(self):
+        plc = PLC(5)
+        with tempfile.TemporaryDirectory() as directory:
+            journal = str(Path(directory) / "outcomes.sqlite3")
+            self.assertEqual(xle.run_multi(plc, "unused", packages=1, deadline=1,
+                                           journal=journal, terminal_hold=0), 0)
+            first_epoch = plc.epoch
+            # A cold PLC restart repeats nonce, token, serial, and scan sequence.
+            plc.epoch = 0
+            plc.row = [41, 2, 9, 6001, 5, 5, 5, 0, 100, 102, 133, 10]
+            with patch.object(xle, "event") as emit:
+                self.assertEqual(xle.run_multi(plc, "unused", packages=1, deadline=1,
+                                               journal=journal, terminal_hold=0), 0)
+            self.assertNotEqual(first_epoch, plc.epoch)
+            self.assertEqual(sum(c.args[0] == "plc_outcome" for c in emit.call_args_list), 1)
+            db = xle.OutcomeJournal(journal)
+            self.assertEqual(db.db.execute("SELECT count(*) FROM outcomes").fetchone()[0], 2)
+            db.close()
+
+    def test_unknown_active_epoch_fails_closed(self):
+        plc = PLC(2)
+        plc.epoch = 17
+        with tempfile.TemporaryDirectory() as directory, patch.object(xle, "event") as emit:
+            with self.assertRaisesRegex(RuntimeError, "absent from XLe journal"):
+                xle.run_multi(plc, "unused", packages=1, deadline=.5,
+                              journal=str(Path(directory) / "outcomes.sqlite3"))
+        self.assertTrue(plc.stopped)
+        self.assertEqual(plc.fault_request, 2)
+        self.assertTrue(any(c.args[0] == "external_sort_fault" for c in emit.call_args_list))
+
+    def test_unreadable_identity_journal_fails_closed(self):
+        plc = PLC(2)
+        plc.epoch = 17
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(xle.OutcomeJournal, "has_epoch", side_effect=sqlite3.DatabaseError("corrupt")):
+            with self.assertRaisesRegex(RuntimeError, "journal identity check failed"):
+                xle.run_multi(plc, "unused", packages=1, deadline=.5,
+                              journal=str(Path(directory) / "outcomes.sqlite3"))
+        self.assertTrue(plc.stopped)
+        self.assertEqual(plc.fault_request, 2)
+
+    def test_old_asx_answer_cannot_route_reused_slot_after_cold_restart(self):
+        plc = PLC(2)
+        started = threading.Event()
+        release_old = threading.Event()
+        result = []
+
+        def lookup(request, url):
+            if request["run_epoch"] == 1:
+                started.set()
+                release_old.wait(2)
+            return 2, None
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(xle, "lookup", side_effect=lookup):
+            journal = str(Path(directory) / "outcomes.sqlite3")
+            def serve():
+                result.append(xle.run_multi(plc, "unused", packages=1, deadline=2,
+                                            journal=journal, terminal_hold=0))
+            thread = threading.Thread(target=serve)
+            thread.start()
+            self.assertTrue(started.wait(1))
+            plc.epoch = 0
+            plc.row = [41, 2, 9, 6001, 2, 0, 0, 0, 5, 0, 0, 0]
+            plc.polls = 0
+            release_old.set()
+            thread.join(3)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(result, [0])
+        self.assertEqual(plc.routes, 1)
+        self.assertEqual(plc.command_epoch, 2)
 
 
 if __name__ == "__main__":

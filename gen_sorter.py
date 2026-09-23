@@ -151,6 +151,16 @@ VAR
   slot1_divert AT %QW552 : INT;
   slot1_command AT %QW553 : INT;
   multi_ack_id AT %QW554 : INT;         (* PLC echoes processed command ID *)
+  epoch_offer_lo AT %QW555 : INT;       (* XLe durable run ID, base 30000 *)
+  epoch_offer_hi AT %QW556 : INT;
+  epoch_offer_id AT %QW557 : INT;       (* write last to commit offer *)
+  epoch_active_lo AT %QW558 : INT;      (* PLC accepted run ID *)
+  epoch_active_hi AT %QW559 : INT;
+  epoch_ack_id AT %QW560 : INT;
+  epoch_fault AT %QW561 : INT;          (* 0 ready, 1 no identity, 2 XLe fault *)
+  cmd_epoch_lo AT %QW562 : INT;
+  cmd_epoch_hi AT %QW563 : INT;
+  epoch_fault_request AT %QW564 : INT;  (* XLe 2 = fail closed *)
 
   ib1_c0          AT %QW260      : INT;
   ib1_c1          AT %QW261      : INT;
@@ -482,6 +492,7 @@ VAR
   xle_cmd_seen, xle_route_dest : INT := 0;
   xle_inducted : BOOL := FALSE;
   token_next, multi_seen, slot_index, j : INT := 0;
+  epoch_offer_seen : INT := 0;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -522,6 +533,9 @@ IF NOT init_done THEN
   xle_mode := FALSE;
   xle_multi := FALSE;
   multi_seen := multi_cmd_id; multi_ack := 0; multi_ack_id := 0; token_next := 0;
+  epoch_offer_seen := epoch_offer_id; epoch_ack_id := 0;
+  epoch_active_lo := 0; epoch_active_hi := 0; epoch_fault := 1;
+  epoch_fault_request := 0;
   FOR j := 0 TO 1 DO
     st_token[j] := 0; st_serial[j] := 0; st_seq[j] := 0; st_bc[j] := 0;
     st_state[j] := 0; st_dest[j] := 0; st_actual[j] := 0;
@@ -593,6 +607,27 @@ IF scan_ct < 32000 THEN
   scan_ct := scan_ct + 1;
 ELSE
   scan_ct := 0;
+END_IF;
+
+(* XLe must provision a journal-backed identity while stopped. A stale offer
+   present at PLC startup is ignored until its commit ID changes. *)
+IF epoch_offer_id <> 0 AND epoch_offer_id <> epoch_offer_seen THEN
+  epoch_offer_seen := epoch_offer_id;
+  epoch_ack_id := epoch_offer_id;
+  IF NOT sorter_run AND scanner_state = 0 AND
+     epoch_active_lo = 0 AND epoch_active_hi = 0 AND
+     epoch_offer_lo >= 0 AND epoch_offer_lo < 30000 AND
+     epoch_offer_hi >= 0 AND epoch_offer_hi < 30000 AND
+     (epoch_offer_lo <> 0 OR epoch_offer_hi <> 0) THEN
+    epoch_active_lo := epoch_offer_lo; epoch_active_hi := epoch_offer_hi;
+  END_IF;
+END_IF;
+IF epoch_fault_request = 2 THEN
+  epoch_fault := 2;
+ELSIF epoch_active_lo = 0 AND epoch_active_hi = 0 THEN
+  epoch_fault := 1;
+ELSE
+  epoch_fault := 0;
 END_IF;
 
 (* operator fault reset: latch the request into a held countdown so the
@@ -943,7 +978,8 @@ IF xle_mode AND xle_multi AND multi_cmd_id <> 0 AND multi_cmd_id <> multi_seen T
   multi_ack_id := multi_cmd_id;
   j := multi_slot;
   IF j >= 0 AND j <= 1 THEN
-    IF multi_nonce = reset_nonce AND st_state[j] <> 0 AND
+    IF epoch_fault = 0 AND cmd_epoch_lo = epoch_active_lo AND
+       cmd_epoch_hi = epoch_active_hi AND multi_nonce = reset_nonce AND st_state[j] <> 0 AND
        multi_token = st_token[j] AND multi_serial = st_serial[j] AND
        multi_seq = st_seq[j] AND multi_bc = st_bc[j] THEN
       IF multi_op = 1 AND st_state[j] = 2 AND st_bc[j] <> 0 AND
@@ -1036,7 +1072,8 @@ IF acc_i1 >= 1.0 THEN
     FOR i := 0 TO min_gap_sp DO
       IF ib1[i] <> 0 THEN occ := occ + 1; END_IF;
     END_FOR;
-    IF occ = 0 AND (NOT xle_mode OR NOT xle_inducted OR xle_multi) THEN
+    IF occ = 0 AND (NOT xle_mode OR NOT xle_inducted OR xle_multi) AND
+       (NOT xle_mode OR NOT xle_multi OR epoch_fault = 0) THEN
       slot_index := -1;
       IF xle_mode AND xle_multi THEN
         FOR j := 0 TO 1 DO
