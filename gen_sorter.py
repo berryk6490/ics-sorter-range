@@ -45,6 +45,7 @@ VAR
   xle_multi AT %QX114.3 : BOOL;          (* bounded two-package external mode *)
   plant_mode AT %QX114.6 : BOOL;          (* lane 1 position comes from drives plant *)
   photoeye_mode AT %QX114.7 : BOOL;       (* opt-in stateful field inputs; legacy events remain *)
+  accumulation_mode AT %QX115.0 : BOOL;   (* opt-in finite plant zones; coil 920 *)
 
   speed_sp_1    AT %QW200      : INT;    (* induct 1 speed setpoint, rpm *)
   speed_sp_2    AT %QW201      : INT;    (* induct 2 speed setpoint, rpm *)
@@ -328,6 +329,44 @@ VAR
   pe_fault_mask AT %QW748 : INT;         (* bit per occupied slot, latched to reset *)
   pe_fault_sensor AT %QW749 : INT;       (* 1..5 latest failed photoeye *)
   pe_fault_lane AT %QW750 : INT;
+  z0_raw_zone AT %QW751 : INT;
+  z0_raw_motion AT %QW752 : INT;
+  z0_raw_hold AT %QW753 : INT;
+  z0_raw_dwell AT %QW754 : INT;
+  z0_raw_seq AT %QW755 : INT;
+  z1_raw_zone AT %QW756 : INT;
+  z1_raw_motion AT %QW757 : INT;
+  z1_raw_hold AT %QW758 : INT;
+  z1_raw_dwell AT %QW759 : INT;
+  z1_raw_seq AT %QW760 : INT;
+  z2_raw_zone AT %QW761 : INT;
+  z2_raw_motion AT %QW762 : INT;
+  z2_raw_hold AT %QW763 : INT;
+  z2_raw_dwell AT %QW764 : INT;
+  z2_raw_seq AT %QW765 : INT;
+  z0_view_zone AT %QW766 : INT;
+  z0_view_motion AT %QW767 : INT;
+  z0_view_hold AT %QW768 : INT;
+  z0_view_dwell AT %QW769 : INT;
+  z0_view_seq AT %QW770 : INT;
+  z1_view_zone AT %QW771 : INT;
+  z1_view_motion AT %QW772 : INT;
+  z1_view_hold AT %QW773 : INT;
+  z1_view_dwell AT %QW774 : INT;
+  z1_view_seq AT %QW775 : INT;
+  z2_view_zone AT %QW776 : INT;
+  z2_view_motion AT %QW777 : INT;
+  z2_view_hold AT %QW778 : INT;
+  z2_view_dwell AT %QW779 : INT;
+  z2_view_seq AT %QW780 : INT;
+  z0_quality AT %QW781 : INT;          (* 0 empty, 1 valid, 2 stale, 3 rejected *)
+  z1_quality AT %QW782 : INT;
+  z2_quality AT %QW783 : INT;
+  z_raw_ready AT %QW784 : INT;         (* plant capacity mask, bits 0..2 *)
+  z_raw_commit AT %QW785 : INT;        (* plant heartbeat, written after all rows *)
+  z_view_ready AT %QW786 : INT;        (* PLC-accepted capacity mask *)
+  z_view_age AT %QW787 : INT;
+  z_fault AT %QW788 : INT;             (* 0 ready, 1 identity/sequence, 2 bounds/order, 3 overlap *)
   xle_fault_ack AT %QX114.4 : BOOL;    (* coil 916, operator action *)
   xle_retry AT %QX114.5 : BOOL;        (* coil 917, operator action *)
 
@@ -681,6 +720,12 @@ VAR
   pe_bit, pe_index, pe_sensor, pe_debounce, pe_min_block,
   pe_max_block, pe_max_travel : INT := 0;
   pe_is_raw, pe_event_ready : BOOL := FALSE;
+  z_raw_zone, z_raw_motion, z_raw_hold, z_raw_dwell, z_raw_seq : ARRAY[0..2] OF INT;
+  z_view_zone, z_view_motion, z_view_hold, z_view_dwell,
+  z_view_seq, z_quality, z_bound_token : ARRAY[0..2] OF INT;
+  z_belt, z_pos : ARRAY[0..2] OF INT;
+  z_seen_commit, z_lane, z_difference : INT := 0;
+  z_valid : BOOL := FALSE;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -696,7 +741,7 @@ IF NOT init_done THEN
   rate_sp_1  := 14; rate_sp_2 := 14; rate_sp_3 := 14;
   noread_sp  := 30;
   serial_next := 1;
-  prog_hash := 24112;
+  prog_hash := 24113;
 
   (* master_seed is the root of the run. The controller no longer draws
      destinations or no-reads itself: both moved to the camera tunnels,
@@ -722,6 +767,9 @@ IF NOT init_done THEN
   xle_multi := FALSE;
   plant_mode := FALSE;
   photoeye_mode := FALSE;
+  accumulation_mode := FALSE;
+  z_raw_ready := 0; z_view_ready := 0; z_view_age := 0;
+  z_seen_commit := z_raw_commit; z_fault := 0;
   pe_debounce_sp := 2; pe_min_block_sp := 2;
   pe_max_block_sp := 120; pe_travel_sp := 400;
   pe_fault_mask := 0; pe_fault_sensor := 0; pe_fault_lane := 0;
@@ -759,6 +807,10 @@ IF NOT init_done THEN
     pe_bound_token[j] := 0; pe_seen[j] := 0; pe_age[j] := 0;
     pe_raw[j] := 0; pe_filtered[j] := 0; pe_quality[j] := 0;
     pe_expected[j] := 1; pe_travel[j] := 0;
+    z_bound_token[j] := 0; z_view_zone[j] := 0;
+    z_view_motion[j] := 0; z_view_hold[j] := 0;
+    z_view_dwell[j] := 0; z_view_seq[j] := 0;
+    z_quality[j] := 0;
   END_FOR;
   FOR j := 0 TO 14 DO
     pe_candidate[j] := 0; pe_duration[j] := 0; pe_stable[j] := FALSE;
@@ -1270,6 +1322,132 @@ ELSE
   END_IF;
 END_IF;
 
+(* A plant commit is a seqlock over all three zone rows. Only the PLC may
+   publish these bounded states. The rows cannot create route or outcome. *)
+IF plant_mode AND accumulation_mode THEN
+  z_raw_zone[0] := z0_raw_zone; z_raw_motion[0] := z0_raw_motion;
+  z_raw_hold[0] := z0_raw_hold; z_raw_dwell[0] := z0_raw_dwell;
+  z_raw_seq[0] := z0_raw_seq;
+  z_raw_zone[1] := z1_raw_zone; z_raw_motion[1] := z1_raw_motion;
+  z_raw_hold[1] := z1_raw_hold; z_raw_dwell[1] := z1_raw_dwell;
+  z_raw_seq[1] := z1_raw_seq;
+  z_raw_zone[2] := z2_raw_zone; z_raw_motion[2] := z2_raw_motion;
+  z_raw_hold[2] := z2_raw_hold; z_raw_dwell[2] := z2_raw_dwell;
+  z_raw_seq[2] := z2_raw_seq;
+  z_belt[0] := p0_raw_belt; z_pos[0] := p0_raw_pos;
+  z_belt[1] := p1_raw_belt; z_pos[1] := p1_raw_pos;
+  z_belt[2] := p2_raw_belt; z_pos[2] := p2_raw_pos;
+  IF z_raw_commit <> 0 AND z_raw_commit <> z_seen_commit THEN
+    z_seen_commit := z_raw_commit;
+    z_view_age := 0;
+    IF z_raw_ready >= 0 AND z_raw_ready <= 7 AND
+       plant_epoch_lo = epoch_active_lo AND plant_epoch_hi = epoch_active_hi AND
+       plant_nonce = reset_nonce THEN
+      z_view_ready := z_raw_ready;
+    ELSE
+      z_view_ready := 0; z_fault := 1;
+    END_IF;
+    FOR j := 0 TO 2 DO
+      IF st_state[j] = 0 OR st_token[j] = 0 THEN
+        z_quality[j] := 0; z_bound_token[j] := 0;
+        z_view_zone[j] := 0; z_view_motion[j] := 0;
+        z_view_hold[j] := 0; z_view_dwell[j] := 0;
+      ELSIF z_bound_token[j] <> st_token[j] THEN
+        (* A new PLC slot may appear after the plant read this cycle. Bind
+           first and wait for the next complete plant commit. *)
+        z_bound_token[j] := st_token[j]; z_view_zone[j] := 0;
+        z_view_seq[j] := 0; z_quality[j] := 0;
+      ELSIF st_state[j] = 1 AND z_raw_zone[j] = 0 THEN
+        z_quality[j] := 0;
+      ELSIF st_state[j] >= 5 AND z_raw_zone[j] = 0 THEN
+        (* The plant's short terminal-history cache may expire before XLe
+           releases a PLC slot. Keep the last validated coordinate stale. *)
+        z_quality[j] := 2;
+      ELSE
+        z_valid := z_raw_seq[j] <> 0 AND z_raw_seq[j] <> z_view_seq[j] AND
+          z_raw_zone[j] >= 1 AND z_raw_zone[j] <= 6 AND
+          z_raw_motion[j] >= 1 AND z_raw_motion[j] <= 7 AND
+          z_raw_hold[j] >= 0 AND z_raw_hold[j] <= 4 AND
+          z_raw_dwell[j] >= 0 AND z_raw_dwell[j] <= 32000 AND
+          z_pos[j] >= 0 AND z_pos[j] <= 300;
+        IF j = 0 THEN
+          z_valid := z_valid AND z_raw_seq[j] = p0_raw_seq AND
+            p0_raw_epoch_lo = epoch_active_lo AND p0_raw_epoch_hi = epoch_active_hi AND
+            p0_raw_nonce = reset_nonce AND p0_raw_token = st_token[j] AND
+            p0_raw_serial = st_serial[j];
+        ELSIF j = 1 THEN
+          z_valid := z_valid AND z_raw_seq[j] = p1_raw_seq AND
+            p1_raw_epoch_lo = epoch_active_lo AND p1_raw_epoch_hi = epoch_active_hi AND
+            p1_raw_nonce = reset_nonce AND p1_raw_token = st_token[j] AND
+            p1_raw_serial = st_serial[j];
+        ELSE
+          z_valid := z_valid AND z_raw_seq[j] = p2_raw_seq AND
+            p2_raw_epoch_lo = epoch_active_lo AND p2_raw_epoch_hi = epoch_active_hi AND
+            p2_raw_nonce = reset_nonce AND p2_raw_token = st_token[j] AND
+            p2_raw_serial = st_serial[j];
+        END_IF;
+        IF NOT z_valid THEN
+          z_quality[j] := 3; z_fault := 1;
+        ELSE
+          IF (z_view_zone[j] <> 0 AND
+              (z_raw_zone[j] < z_view_zone[j] OR
+               z_raw_zone[j] > z_view_zone[j] + 1 AND
+               NOT (z_view_zone[j] = 3 AND z_raw_zone[j] = 5))) OR
+             (z_raw_zone[j] = 1 AND z_pos[j] > 95) OR
+             (z_raw_zone[j] = 2 AND (z_pos[j] < 85 OR z_pos[j] > 123)) OR
+             (z_raw_zone[j] = 3 AND (z_pos[j] < 113 OR z_pos[j] > 140)) OR
+             (z_raw_zone[j] = 4 AND (z_pos[j] < 130 OR z_pos[j] > 140)) OR
+             (z_raw_zone[j] = 5 AND (z_belt[j] < 2 OR z_belt[j] > 4)) OR
+             (z_raw_zone[j] <= 4 AND
+              NOT ((st_lane[j] = 1 AND z_belt[j] = 1) OR
+                   (st_lane[j] = 2 AND z_belt[j] = 5) OR
+                   (st_lane[j] = 3 AND z_belt[j] = 6))) THEN
+            z_quality[j] := 3; z_fault := 2;
+          ELSE
+            z_view_zone[j] := z_raw_zone[j];
+            z_view_motion[j] := z_raw_motion[j];
+            z_view_hold[j] := z_raw_hold[j];
+            z_view_dwell[j] := z_raw_dwell[j];
+            z_view_seq[j] := z_raw_seq[j]; z_quality[j] := 1;
+          END_IF;
+        END_IF;
+      END_IF;
+    END_FOR;
+    FOR j := 0 TO 2 DO
+      IF z_quality[j] = 1 AND z_view_zone[j] < 6 THEN
+        FOR i := j + 1 TO 2 DO
+          IF z_quality[i] = 1 AND z_view_zone[i] < 6 AND
+             z_belt[j] = z_belt[i] THEN
+            z_difference := z_pos[j] - z_pos[i];
+            IF z_difference < 0 THEN z_difference := -z_difference; END_IF;
+            IF z_difference < 32 THEN
+              z_quality[j] := 3; z_quality[i] := 3; z_fault := 3;
+            END_IF;
+          END_IF;
+        END_FOR;
+      END_IF;
+    END_FOR;
+  ELSIF z_view_age < 32000 THEN
+    z_view_age := z_view_age + 1;
+  END_IF;
+  IF z_view_age > 15 THEN
+    z_view_ready := 0;
+    FOR j := 0 TO 2 DO
+      IF z_quality[j] = 1 THEN z_quality[j] := 2; END_IF;
+    END_FOR;
+  END_IF;
+  IF z_fault <> 0 THEN sorter_run := FALSE; z_view_ready := 0; END_IF;
+  z0_view_zone := z_view_zone[0]; z0_view_motion := z_view_motion[0];
+  z0_view_hold := z_view_hold[0]; z0_view_dwell := z_view_dwell[0];
+  z0_view_seq := z_view_seq[0]; z0_quality := z_quality[0];
+  z1_view_zone := z_view_zone[1]; z1_view_motion := z_view_motion[1];
+  z1_view_hold := z_view_hold[1]; z1_view_dwell := z_view_dwell[1];
+  z1_view_seq := z_view_seq[1]; z1_quality := z_quality[1];
+  z2_view_zone := z_view_zone[2]; z2_view_motion := z_view_motion[2];
+  z2_view_hold := z_view_hold[2]; z2_view_dwell := z_view_dwell[2];
+  z2_view_seq := z_view_seq[2]; z2_quality := z_quality[2];
+END_IF;
+
 
 (* Opt-in stateful field inputs. The plant publishes three committed rows,
    one for each PLC slot. Only an exact run/lane/token/serial match is
@@ -1367,16 +1545,29 @@ IF plant_mode AND photoeye_mode THEN
           END_IF;
           IF pe_stable[pe_index] THEN
             pe_filtered[j] := pe_filtered[j] + pe_bit;
-            IF pe_duration[pe_index] < 32000 THEN
-              pe_duration[pe_index] := pe_duration[pe_index] + 1;
-            END_IF;
-            IF pe_duration[pe_index] > pe_max_block THEN
-              pe_quality[j] := 3; pe_fault_sensor := pe_sensor;
+            IF accumulation_mode AND z_quality[j] = 1 AND
+               (z_view_motion[j] = 2 OR z_view_motion[j] = 3 OR
+                z_view_motion[j] = 4 OR z_view_motion[j] = 5) THEN
+              (* The beam is physically blocked through a controlled hold.
+                 A trailing edge must still satisfy the minimum duration. *)
+              IF pe_duration[pe_index] < pe_min_block THEN
+                pe_duration[pe_index] := pe_min_block;
+              END_IF;
+            ELSE
+              IF pe_duration[pe_index] < 32000 THEN
+                pe_duration[pe_index] := pe_duration[pe_index] + 1;
+              END_IF;
+              IF pe_duration[pe_index] > pe_max_block THEN
+                pe_quality[j] := 3; pe_fault_sensor := pe_sensor;
+              END_IF;
             END_IF;
           END_IF;
           pe_bit := pe_bit * 2;
         END_FOR;
-        IF pe_expected[j] <= 5 AND pe_travel[j] < 32000 THEN
+        IF pe_expected[j] <= 5 AND pe_travel[j] < 32000 AND
+           NOT (accumulation_mode AND z_quality[j] = 1 AND
+                (z_view_motion[j] = 2 OR z_view_motion[j] = 3 OR
+                 z_view_motion[j] = 4 OR z_view_motion[j] = 5)) THEN
           pe_travel[j] := pe_travel[j] + 1;
           IF pe_travel[j] > pe_max_travel THEN
             pe_quality[j] := 2; pe_fault_sensor := pe_expected[j];
@@ -1750,7 +1941,8 @@ IF plant_mode THEN
   IF tmr2 < rate_sp_2 THEN tmr2 := tmr2 + 1; END_IF;
   IF tmr3 < rate_sp_3 THEN tmr3 := tmr3 + 1; END_IF;
   IF NOT plant_request_pending AND sorter_run AND plant_fault = 0 AND
-     epoch_fault = 0 AND xle_liveness = 0 AND hb_ready AND hb_age <= 50 THEN
+     epoch_fault = 0 AND xle_liveness = 0 AND hb_ready AND hb_age <= 50 AND
+     (NOT accumulation_mode OR (z_fault = 0 AND z_view_age <= 15)) THEN
     slot_index := -1;
     FOR j := 0 TO 2 DO
       IF st_state[j] = 0 AND slot_index = -1 THEN slot_index := j; END_IF;
@@ -1760,6 +1952,10 @@ IF plant_mode THEN
       FOR i := 0 TO 2 DO
         plant_candidate := ((plant_next_lane - 1 + i) MOD 3) + 1;
         IF plant_pick_lane = 0 AND
+           (NOT accumulation_mode OR
+            (plant_candidate = 1 AND (z_view_ready MOD 2) = 1) OR
+            (plant_candidate = 2 AND ((z_view_ready / 2) MOD 2) = 1) OR
+            (plant_candidate = 3 AND ((z_view_ready / 4) MOD 2) = 1)) AND
            ((plant_candidate = 1 AND lane1_run AND tmr1 >= rate_sp_1) OR
             (plant_candidate = 2 AND lane2_run AND tmr2 >= rate_sp_2) OR
             (plant_candidate = 3 AND lane3_run AND tmr3 >= rate_sp_3)) THEN

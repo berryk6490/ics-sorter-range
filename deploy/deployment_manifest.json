@@ -10,7 +10,7 @@
         "openplc.service"
       ],
       "hash_policy": "exact",
-      "sha256": "780e4e6c7cba821d23e20a6e873bc87799e2d582e0dec4a2a48aec06a2e54d70",
+      "sha256": "9ac0d152e78604c89c3f0a9afd9dbcd216e519d280b68c611a294cfdd2d532ab",
       "verification_command": "sha256sum /home/kevin/OpenPLC_v3/webserver/st_files/xle_sorter.st"
     },
     {
@@ -21,7 +21,7 @@
         "sorter-plant.service"
       ],
       "hash_policy": "exact",
-      "sha256": "c2fcbac1a19f788003c565d3510b90dec2e72e670432380009da043393cc1e17",
+      "sha256": "1555cb7a9c5e1dd9ec582fcb37571bf7078127a7eb3401993deb82b2cadd5074",
       "verification_command": "sha256sum /home/kevin/plant.py"
     },
     {
@@ -115,7 +115,7 @@
         "opcua-server.service"
       ],
       "hash_policy": "exact",
-      "sha256": "9a2bc68df4942e9415eebeece8f5ef447a5c43246c052edc0947346f4b943452",
+      "sha256": "bf9718c8e6f0eb5fb71798da1755e559466ae905b41def7135b4c5142c1675ce",
       "verification_command": "sha256sum /home/kevin/opcua_server.py"
     },
     {
@@ -126,7 +126,7 @@
         "sorter-hmi.service"
       ],
       "hash_policy": "exact",
-      "sha256": "1f97cfc8e0e96de8e409eba700ada89e2d8943611ea23dabfe439299817c28da",
+      "sha256": "c795fb2bbeee19d17205ce0565522c0c44570f1fb98b1f3066cf95555190e2a7",
       "verification_command": "sha256sum /home/kevin/hmi_ua.py"
     },
     {
@@ -153,7 +153,7 @@
       "canonical_destination": "/home/kevin/live_plant_lane3.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "e134852c11c6adfe9b1cc4f27c6a58ba1cfa658bbac447de96e9129aafd9598c",
+      "sha256": "90c850a3037d835294b3f68233a1a497db3cc40d4df72ed009c16edd8614ea7d",
       "verification_command": "sha256sum /home/kevin/live_plant_lane3.py"
     },
     {
@@ -191,6 +191,53 @@
       "hash_policy": "exact",
       "sha256": "a63db2d292a376a2e9b168f7a6bed896712333e2b861fe178d38407640866216",
       "verification_command": "sha256sum /home/kevin/live_missed_phased.py"
+    },
+    {
+      "repository_source": "tests/live_accumulation.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/live_accumulation.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "0aad09f182688e7f7430ebcd50c0312eda450931b6cb4ff9cf41cd8c853e33f8",
+      "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation.py"
+    },
+    {
+      "repository_source": "tests/accumulation_plan.json",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/accumulation_plan.json",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "2bb162cd1920d7ba69dba99c71f808482cc3395aed0ab84557f3a05f16eb7f9a",
+      "verification_command": "sha256sum /home/kevin/sorter-services/accumulation_plan.json"
+    },
+    {
+      "repository_source": "tests/check_accumulation_views.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/check_accumulation_views.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "88cf833b525ab2afe364a5c3287534fdd3a0b0006383444deeaf09157241a1f2",
+      "verification_command": "sha256sum /home/kevin/sorter-services/check_accumulation_views.py"
+    },
+    {
+      "repository_source": "tests/read_accumulation_state.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/read_accumulation_state.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "ab18b63bd844748cc40921fd291c57515ee96eb2d314446c27b4ba67ddafe4b0",
+      "verification_command": "sha256sum /home/kevin/sorter-services/read_accumulation_state.py"
+    },
+    {
+      "repository_source": "tests/read_accumulation_state.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/read_accumulation_state.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "ab18b63bd844748cc40921fd291c57515ee96eb2d314446c27b4ba67ddafe4b0",
+      "verification_command": "sha256sum /home/kevin/read_accumulation_state.py"
     }
-  ]
+  ],
+  "milestone": "phase-2a-accumulation-backpressure",
+  "plc_program_identity": 24113
 }

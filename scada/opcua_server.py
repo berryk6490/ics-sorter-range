@@ -61,7 +61,7 @@ TRUSTLIST = "certs/trusted"
 # zero everywhere and looks like a dead process.
 
 SP_BASE, IB_BASE, OB_BASE, COIL_BASE = 200, 260, 380, 880
-SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 40
+SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 41
 
 # Offsets into the SP block (absolute address = SP_BASE + offset).
 SP = {
@@ -112,7 +112,7 @@ COIL = {"run": 0, "auto": 1, "lane_run": 2, "ob_run": 5,
         "reset_cmd": 30, "fault_reset": 31,
         "scanner_fault_ack": 32, "scanner_retry": 33,
         "xle_fault_ack": 36, "xle_retry": 37, "plant_mode": 38,
-        "photoeye_mode": 39}
+        "photoeye_mode": 39, "accumulation_mode": 40}
 COIL_ABS = {k: COIL_BASE + v for k, v in COIL.items()}
 
 log = logging.getLogger("opcua_server")
@@ -155,10 +155,11 @@ class ModbusLink:
         plant_failed_lane = self.plc.read_holding_registers(646, 1, slave=1)
         photoeye_view = self.plc.read_holding_registers(720, 24, slave=1)
         photoeye_fault = self.plc.read_holding_registers(748, 3, slave=1)
+        zone_view = self.plc.read_holding_registers(766, 23, slave=1)
         if any(r.isError() for r in (sp, ib, ob, co, live, plant, plant_age,
                                      plant_view, plant_view2, plant_lane2,
                                      plant_failed_lane, photoeye_view,
-                                     photoeye_fault)):
+                                     photoeye_fault, zone_view)):
             raise IOError("plc read")
 
         drives = []
@@ -187,6 +188,7 @@ class ModbusLink:
             "plant_lane2": s16(plant_lane2.registers[0]),
             "photoeye_view": [s16(v) for v in photoeye_view.registers],
             "photoeye_fault": [s16(v) for v in photoeye_fault.registers],
+            "zone_view": [s16(v) for v in zone_view.registers],
             "drives": drives,
         }
 
@@ -321,6 +323,10 @@ class Namespace:
         await self._add_ro(status, "plant_heartbeat_age", "PlantHeartbeatAge")
         await self._add_ro(status, "plant_mode", "PlantMode", ua.VariantType.Boolean)
         await self._add_ro(status, "photoeye_mode", "PhotoeyeMode", ua.VariantType.Boolean)
+        await self._add_ro(status, "accumulation_mode", "AccumulationMode", ua.VariantType.Boolean)
+        await self._add_ro(status, "zone_fault", "ZoneFault")
+        await self._add_ro(status, "zone_ready_mask", "ZoneInductReadyMask")
+        await self._add_ro(status, "zone_age", "ZoneAgeScans")
         for key, name in (("photoeye_fault_mask", "PhotoeyeFaultMask"),
                           ("photoeye_fault_sensor", "PhotoeyeFaultSensor"),
                           ("photoeye_fault_lane", "PhotoeyeFaultLane")):
@@ -349,6 +355,9 @@ class Namespace:
             photoeyes = await slot.add_variable(
                 self.idx, "Photoeyes", ua.Variant([0] * 8, ua.VariantType.Int16))
             self.ro[f"plant{i}.photoeyes"] = photoeyes
+            zone = await slot.add_variable(
+                self.idx, "ValidatedZone", ua.Variant([0] * 6, ua.VariantType.Int16))
+            self.ro[f"plant{i}.zone"] = zone
             await self._add_ro(slot, f"plant{i}.status", "Status")
             await self._add_ro(slot, f"plant{i}.age", "AgeScans")
             await self._add_ro(slot, f"plant{i}.lane", "Lane")
@@ -519,12 +528,19 @@ async def push(ns, handler, snap):
     await w("plant_heartbeat_age", snap["plant_heartbeat_age"])
     await w("plant_mode", bool(co[COIL["plant_mode"]]))
     await w("photoeye_mode", bool(co[COIL["photoeye_mode"]]))
+    await w("accumulation_mode", bool(co[COIL["accumulation_mode"]]))
+    await w("zone_ready_mask", snap["zone_view"][20])
+    await w("zone_age", snap["zone_view"][21])
+    await w("zone_fault", snap["zone_view"][22])
     for i, key in enumerate(("photoeye_fault_mask", "photoeye_fault_sensor",
                              "photoeye_fault_lane")):
         await w(key, snap["photoeye_fault"][i])
     for i in range(3):
         await ns.ro[f"plant{i}.photoeyes"].write_value(ua.Variant(
             snap["photoeye_view"][i * 8:(i + 1) * 8], ua.VariantType.Int16))
+        await ns.ro[f"plant{i}.zone"].write_value(ua.Variant(
+            snap["zone_view"][i * 5:(i + 1) * 5] +
+            [snap["zone_view"][15 + i]], ua.VariantType.Int16))
         view = (snap["plant_view"][i * 10:(i + 1) * 10]
                 if i < 2 else snap["plant_view2"][:10])
         await ns.ro[f"plant{i}.telemetry"].write_value(

@@ -1,5 +1,10 @@
 # Lane 1 independent plant slice
 
+For opt-in finite accumulation (coil 920), see `ACCUMULATION_BACKPRESSURE.md`.
+That milestone supersedes the free-motion, spacing, and merge-queue
+descriptions below only while coil 920 is on; this document still describes
+the earlier plant behavior when it is off.
+
 ## Ownership and placement
 
 The original `Sorter.st` cell arrays (`ib1`, `ob1`..`ob3`) advance from VFD

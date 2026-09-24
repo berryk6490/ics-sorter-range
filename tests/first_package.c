@@ -19,7 +19,7 @@ static void scan(void) { SORTER_body__(&plc); }
 int main(void) {
     SORTER_init__(&plc, 0);
     scan();
-    assert(WORD(249) == 24112);
+    assert(WORD(249) == 24113);
     assert(WORD(118) == 32766 && WORD(122) == 32766 && WORD(126) == 32766);
     assert(WORD(119) == 1 && WORD(123) == 1 && WORD(127) == 1);
     assert(WORD(220) == 0);

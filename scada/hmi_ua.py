@@ -75,6 +75,11 @@ def _tagmap():
     t["plant_heartbeat_age"] = ["Process", "Status", "PlantHeartbeatAge"]
     t["plant_mode"] = ["Process", "Status", "PlantMode"]
     t["photoeye_mode"] = ["Process", "Status", "PhotoeyeMode"]
+    for key, name in (("accumulation_mode", "AccumulationMode"),
+                      ("zone_fault", "ZoneFault"),
+                      ("zone_ready_mask", "ZoneInductReadyMask"),
+                      ("zone_age", "ZoneAgeScans")):
+        t[key] = ["Process", "Status", name]
     for key, name in (("photoeye_fault_mask", "PhotoeyeFaultMask"),
                       ("photoeye_fault_sensor", "PhotoeyeFaultSensor"),
                       ("photoeye_fault_lane", "PhotoeyeFaultLane")):
@@ -83,6 +88,7 @@ def _tagmap():
         slot = ["Process", "Plant", f"Slot{i+1}"]
         t[f"plant{i}"] = slot + ["Telemetry"]
         t[f"photoeyes{i}"] = slot + ["Photoeyes"]
+        t[f"zone{i}"] = slot + ["ValidatedZone"]
         t[f"plant_status{i}"] = slot + ["Status"]
         t[f"plant_age{i}"] = slot + ["AgeScans"]
         t[f"plant_lane{i}"] = slot + ["Lane"]
@@ -110,7 +116,8 @@ TAGS = _tagmap()
 
 state = {k: ([0] * 20 if k.startswith(("ib", "ob")) and len(k) == 3
              else [0] * 10 if k.startswith("plant") and len(k) == 6
-             else [0] * 8 if k.startswith("photoeyes") else 0)
+             else [0] * 8 if k.startswith("photoeyes")
+             else [0] * 6 if k.startswith("zone") and len(k) == 5 else 0)
          for k in TAGS}
 state["connected"] = False
 hist = collections.deque(maxlen=int(RATE_WINDOW / RATE_SAMPLE))
@@ -255,6 +262,11 @@ def api():
         "xle_liveness": s["xle_liveness"],
         "plant_fault": s["plant_fault"], "plant_mode": s["plant_mode"],
         "photoeye_mode": s["photoeye_mode"],
+        "accumulation_mode": s["accumulation_mode"],
+        "zone_fault": s["zone_fault"],
+        "zone_ready_mask": s["zone_ready_mask"],
+        "zone_age": s["zone_age"],
+        "zone_rows": [s[f"zone{i}"] for i in range(3)],
         "photoeye_fault_mask": s["photoeye_fault_mask"],
         "photoeye_fault_sensor": s["photoeye_fault_sensor"],
         "photoeye_fault_lane": s["photoeye_fault_lane"],
@@ -366,10 +378,12 @@ h2{font-size:10px;font-weight:600;color:var(--dim);margin:0 0 9px;
   transition:transform .09s linear,opacity .18s linear}
 .pkg.plant.stale{background:var(--warn);border-color:var(--warn);
   transition:none}
+.pkg.plant.held{filter:saturate(.35);border-color:var(--dim)}
 .plantstate{display:flex;gap:12px;margin:0 0 9px 67px;color:var(--dim);
   font-size:10px;font-variant-numeric:tabular-nums}
 .plantstate .stale{color:var(--warn);font-weight:700}
 .plantstate .unavailable{color:var(--alarm);font-weight:700}
+.plantstate .held{color:var(--dim);font-weight:600}
 .flow{height:14px;margin:2px 0 8px 67px;position:relative}
 .flow div{position:absolute;top:6px;height:1px;background:var(--line)}
 .doors{display:flex;gap:9px;margin-left:67px;margin-top:3px}
@@ -566,6 +580,10 @@ requestAnimationFrame(frame);
 const plantSeen={};
 let currentPlantMode=false;
 const SENSOR_NAME=['WAIT','INDUCT','TUNNEL','DIVERT','TRAILER','RECIRC','FAILED CONFIRM'];
+const ZONE_NAME=['NONE','APPROACH','DECISION','PREMERGE','MERGE','OUTBOUND','TERMINAL'];
+const MOTION_NAME=['NONE','MOVING','HELD_DOWNSTREAM','HELD_MERGE','DRIVE_STOPPED',
+  'AWAITING_ROUTE','OUTBOUND','TERMINAL','JAMMED'];
+const HOLD_NAME=['NONE','ZONE_FULL','MERGE_CAPACITY','DRIVE_OFF','ROUTE_PENDING'];
 function clearLegacy(belt){
   const live=seen[belt]||{};
   for(const key in live) live[key].el.remove();
@@ -600,11 +618,19 @@ function paintPlant(d){
     const pe=d.photoeye_mode ? d.photoeye_rows?.[slot] : null;
     const peValid=!d.photoeye_mode || (pe && pe[0]===r[0] && pe[1]===r[1] &&
       pe[2]===r[2] && pe[3]===r[3] && pe[4]===r[4]);
-    const stale=status!==1 || d.plant_fault!==0 || (d.photoeye_mode && !peValid);
+    const z=d.accumulation_mode ? d.zone_rows?.[slot] : null;
+    const zValid=!d.accumulation_mode || (z && z[5]===1 && z[4]!==0);
+    const held=zValid && d.accumulation_mode && [2,3,4,5].includes(z[1]);
+    const stale=status!==1 || d.plant_fault!==0 || (d.photoeye_mode && !peValid) ||
+      (d.accumulation_mode && (!zValid || d.zone_age>15));
     const state=stale?'STALE':'LIVE';
-    labels.push('<span class="'+(stale?'stale':'')+'">SLOT '+(slot+1)+' '+identity+
+    labels.push('<span class="'+(stale?'stale':held?'held':'')+'">SLOT '+(slot+1)+' '+identity+
       ' '+beltId.toUpperCase()+' '+pos.toFixed(1)+' '+(SENSOR_NAME[kind]||'UNKNOWN')+
       (actual?' '+actual:'')+' '+state+' ('+age+')'+
+      (d.accumulation_mode ? ' ZONE '+(zValid?ZONE_NAME[z[0]]:'UNAVAILABLE')+
+       ' MOTION '+(zValid?MOTION_NAME[z[1]]:'UNAVAILABLE')+
+       ' HOLD '+(zValid?HOLD_NAME[z[2]]:'UNAVAILABLE')+
+       ' DWELL '+(zValid?(z[3]/10).toFixed(1)+'s':'?') : '')+
       (d.photoeye_mode ? ' PE RAW '+(peValid?pe[5]:'?')+
        ' FILTERED '+(peValid?pe[6]:'?')+
        ' QUALITY '+(peValid?pe[7]:'UNAVAILABLE') : '')+'</span>');
@@ -620,10 +646,17 @@ function paintPlant(d){
     const track=document.getElementById(beltId);
     if(el.parentElement!==track) track.appendChild(el);
     el.classList.toggle('stale',stale);
+    el.classList.toggle('held',!!held && !stale);
     el.style.transition=stale?'none':'transform .09s linear,opacity .18s linear';
     el.style.transform='translateX('+(Math.max(0,Math.min(19,pos))*CW+4)+'px)';
     el.dataset.belt=beltId; el.dataset.position=String(pos);
     el.dataset.event=String(kind); el.dataset.status=stale?'stale':'live';
+    if(d.accumulation_mode){
+      el.dataset.zone=zValid?String(z[0]):'unavailable';
+      el.dataset.motion=zValid?String(z[1]):'unavailable';
+      el.dataset.hold=zValid?String(z[2]):'unavailable';
+      el.dataset.dwell=zValid?String(z[3]):'unavailable';
+    }
     if(d.photoeye_mode){
       el.dataset.photoeyeRaw=peValid?String(pe[5]):'unavailable';
       el.dataset.photoeyeConditioned=peValid?String(pe[6]):'unavailable';
@@ -711,6 +744,7 @@ async function tick(){
   if(d.alarms.noread) p+=stat('NO-READ',0,1);
   if(d.alarms.nohome) p+=stat('NO-HOME',0,1);
   if(d.plant_mode && d.plant_fault) p+=stat('PLANT FAULT '+d.plant_fault,0,1);
+  if(d.accumulation_mode && d.zone_fault) p+=stat('ZONE VALIDATION FAULT '+d.zone_fault,0,1);
   if(d.photoeye_mode && d.photoeye_fault_mask)
     p+=stat('PHOTOEYE LANE '+d.photoeye_fault_lane+' SENSOR '+d.photoeye_fault_sensor+
       ' FAULT (SLOTS '+d.photoeye_fault_mask+')',0,1);

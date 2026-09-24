@@ -52,7 +52,7 @@ def run(plc, drive, camera):
         original_options = coils(plc, 881, 7)  # auto, induct and outbound enables
         original_setpoints = registers(plc, 200, 11)
         original_seed = registers(plc, 247)[0]
-        if registers(plc, 249)[0] != 24112:
+        if registers(plc, 249)[0] != 24113:
             raise RuntimeError("The running PLC program is not the expected sorter generation")
 
         set_coil(plc, 880, False)  # %QX110.0: operator run

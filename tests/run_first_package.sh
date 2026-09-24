@@ -53,3 +53,8 @@ cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/
 for case_name in normal bounce event_gate stuck_clear stuck_blocked order mismatch missing short cleanup; do
     "$build_dir/photoeyes" "$case_name"
 done
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/accumulation_plc.c" -lm -o "$build_dir/accumulation_plc"
+for case_name in normal jump stale lane overlap clearance terminal_expiry held_beam; do
+    "$build_dir/accumulation_plc" "$case_name"
+done

@@ -29,13 +29,14 @@ CASES = {
 }
 
 
-def main(case, start_file=None, stateful=False):
+def main(case, start_file=None, stateful=False, accumulation=False):
     config = CASES[case]
     plc = ModbusTcpClient("10.10.1.10", port=502, timeout=2)
     assert plc.connect()
     original = {"enables": coils(plc, 881, 7), "external": coils(plc, 914, 2),
                 "plant": coils(plc, 918)[0],
                 "photoeye": coils(plc, 919)[0],
+                "accumulation": coils(plc, 920)[0],
                 "setpoints": holding(plc, 200, 11),
                 "seed": holding(plc, 247)[0]}
     asx = xle = None
@@ -67,6 +68,7 @@ def main(case, start_file=None, stateful=False):
         set_coil(plc, 914, True); set_coil(plc, 915, True)
         set_coil(plc, 918, True)
         set_coil(plc, 919, stateful)
+        set_coil(plc, 920, accumulation)
         for address in (200, 201, 202, 203, 204, 205):
             set_register(plc, address, 120)
         for address in (207, 208, 209):
@@ -97,6 +99,7 @@ def main(case, start_file=None, stateful=False):
         sensor_events = []
         photoeye_samples = {lane: [] for lane in config["lanes"]}
         telemetry = {lane: [] for lane in config["lanes"]}
+        zone_samples = {lane: [] for lane in config["lanes"]}
         hmi_lanes = set()
         occupied_max = 0
         merge_wait = False
@@ -124,6 +127,7 @@ def main(case, start_file=None, stateful=False):
             view = holding(plc, 620, 26)
             view2 = holding(plc, 670, 12)
             lanes = holding(plc, 644, 2) + holding(plc, 659)
+            zone = holding(plc, 766, 23) if accumulation else []
             if stateful:
                 for slot in range(3):
                     pe = holding(plc, 720 + slot * 8, 8)
@@ -142,6 +146,10 @@ def main(case, start_file=None, stateful=False):
                 tele = view[slot * 10:(slot + 1) * 10] if slot < 2 else view2[:10]
                 status = view[20 + slot] if slot < 2 else view2[10]
                 if row[0] and lane in telemetry and status == 1:
+                    if accumulation:
+                        zr = zone[slot * 5:slot * 5 + 5] + [zone[15 + slot]]
+                        if zr[5] == 1 and (not zone_samples[lane] or zone_samples[lane][-1] != zr):
+                            zone_samples[lane].append(zr)
                     sample = (row[0], tele[5], tele[6], tele[7])
                     if not telemetry[lane] or telemetry[lane][-1] != sample:
                         telemetry[lane].append(sample)
@@ -165,6 +173,8 @@ def main(case, start_file=None, stateful=False):
                 try:
                     hmi = json.load(urlopen("http://127.0.0.1:8000/api", timeout=1))
                     if hmi["plant_mode"]:
+                        if accumulation:
+                            assert hmi["accumulation_mode"] and hmi["zone_fault"] == 0
                         hmi_lanes.update(lane for lane, status in zip(
                             hmi["plant_lane"], hmi["plant_status"]) if status == 1)
                 except (OSError, KeyError):
@@ -213,6 +223,11 @@ def main(case, start_file=None, stateful=False):
                 samples = photoeye_samples[lane]
                 assert samples and all(sample[3] == 0 for sample in samples), samples
                 assert any(sample[1] != 0 for sample in samples), samples
+        if accumulation:
+            assert holding(plc, 788)[0] == 0
+            for lane in config["lanes"]:
+                assert any(z[0] == 1 for z in zone_samples[lane]), zone_samples
+                assert any(z[0] == 5 for z in zone_samples[lane]), zone_samples
         assert pre_confirmation_counters == [0] * 9
         assert holding(plc, 219)[0] == (1 if case == "failure" else 0)
         if case == "failure":
@@ -229,6 +244,8 @@ def main(case, start_file=None, stateful=False):
         assert {v["package_id"] for _, v in journal_rows} == {
             row["package_id"] for row in rows.values()}
         print(json.dumps({"case": case, "stateful": stateful,
+                          "accumulation": accumulation,
+                          "zone_samples": zone_samples,
                           "photoeye_samples": photoeye_samples,
                           "photoeye_fault": holding(plc, 748, 3),
                           "rows": rows, "trailer": trailer,
@@ -249,6 +266,7 @@ def main(case, start_file=None, stateful=False):
              (set_coil, 915, original["external"][1]),
              (set_coil, 918, original["plant"]),
              (set_coil, 919, original["photoeye"]),
+             (set_coil, 920, original["accumulation"]),
              (set_register, 247, original["seed"])] +
             [(set_coil, 881 + i, v) for i, v in enumerate(original["enables"])] +
             [(set_register, 200 + i, v) for i, v in enumerate(original["setpoints"])]):
@@ -266,5 +284,6 @@ if __name__ == "__main__":
     parser.add_argument("case", choices=CASES)
     parser.add_argument("--start-file")
     parser.add_argument("--stateful", action="store_true")
+    parser.add_argument("--accumulation", action="store_true")
     args = parser.parse_args()
-    main(args.case, args.start_file, args.stateful)
+    main(args.case, args.start_file, args.stateful, args.accumulation)

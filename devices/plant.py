@@ -8,8 +8,10 @@ waits for the PLC's acknowledgement. It never reads XLe or ASX state.
 import argparse
 from collections import deque
 from dataclasses import dataclass
+from enum import IntEnum
 import json
 import logging
+import math
 import time
 
 LOG = logging.getLogger("sorter_plant")
@@ -19,6 +21,66 @@ VFD = ["10.10.1.21", "10.10.1.22", "10.10.1.23",
 ENTRY = {1: 2.0, 2: 5.0, 3: 8.0}
 INDUCT, TUNNEL, DIVERT, TRAILER, RECIRC, FAILED_CONFIRM = range(1, 7)
 PHOTOEYES = ("induction", "tunnel", "divert", "outbound", "trailer")
+
+
+class Zone(IntEnum):
+    APPROACH = 1
+    DECISION = 2
+    PREMERGE = 3
+    MERGE = 4
+    OUTBOUND = 5
+    TERMINAL = 6
+
+
+class Motion(IntEnum):
+    MOVING = 1
+    HELD_DOWNSTREAM = 2
+    HELD_MERGE = 3
+    DRIVE_STOPPED = 4
+    AWAITING_ROUTE = 5
+    OUTBOUND = 6
+    TERMINAL = 7
+    JAMMED = 8  # Phase 2B reserved; never produced here.
+
+
+class Hold(IntEnum):
+    NONE = 0
+    ZONE_FULL = 1
+    MERGE_CAPACITY = 2
+    DRIVE_OFF = 3
+    ROUTE_PENDING = 4
+
+
+ZONE_LIMITS = {Zone.APPROACH: (0.0, 9.0),
+               Zone.DECISION: (9.0, 11.8),
+               Zone.PREMERGE: (11.8, 14.0),
+               Zone.OUTBOUND: (2.0, 20.0)}
+PREMERGE_HOLD = 13.6
+DECISION_HOLD = 11.6
+
+
+@dataclass
+class ZoneBlock:
+    """One bounded run-scoped test hold; no fixture is present by default."""
+    kind: str
+    after_token: int
+    duration: float
+    lane: int = 0
+    zone: str = ""
+    start: float = -1.0
+
+    def __post_init__(self):
+        if (self.kind not in ("merge", "lane") or
+            self.after_token <= 0 or not 0 < self.duration <= 60 or
+            (self.kind == "lane" and (self.lane not in ENTRY or
+                                      self.zone not in ("decision", "premerge"))) or
+            (self.kind == "merge" and (self.lane or self.zone))):
+            raise ValueError("bounded merge or lane-zone block required")
+
+    def active(self, clock, package, threshold):
+        if self.start < 0 and package.token == self.after_token and package.position >= threshold:
+            self.start = clock
+        return self.start >= 0 and clock - self.start < self.duration
 
 
 @dataclass(frozen=True)
@@ -48,6 +110,11 @@ class Package:
     terminal_sent: bool = False
     target: int = 0
     trailer_position: float = 0.0
+    zone: int = 0
+    motion: int = 0
+    hold: int = 0
+    dwell: int = 0
+    state_clock: float = -1.0
 
 
 class PlantModel:
@@ -60,9 +127,13 @@ class PlantModel:
 
     def __init__(self, length_cm=60, spacing_cm=100, cell_cm=50,
                  miss_divert_token=0, fail_confirm_token=0,
-                 stateful=False, photoeye_fixture=None):
+                 stateful=False, photoeye_fixture=None, accumulation=False,
+                 zone_block=None):
         self.length = length_cm / cell_cm
         self.spacing = spacing_cm / cell_cm
+        if accumulation and (self.length <= 0 or self.spacing < 0 or
+                             self.length + self.spacing < 3.2 - 1e-9):
+            raise ValueError("accumulation requires a positive package and at least 3.2 cells pitch")
         self.packages = []
         self.pending = deque()
         self.queued = deque()
@@ -75,6 +146,9 @@ class PlantModel:
         self.fail_confirm_token = fail_confirm_token
         self.stateful = stateful
         self.photoeye_fixture = photoeye_fixture
+        self.accumulation = accumulation
+        self.zone_block = zone_block
+        self.merge_next_lane = 1
         self.beam_first_high = {}
         self.beam_latched = set()
 
@@ -88,6 +162,8 @@ class PlantModel:
 
     def step(self, seconds, rpm, slots):
         """slots maps token to (serial, state, destination) from PLC rows."""
+        if self.accumulation:
+            return self.step_zones(seconds, rpm, slots)
         self.clock += seconds
         self.recent = {token: record for token, record in self.recent.items()
                        if record[0] > self.clock}
@@ -181,6 +257,183 @@ class PlantModel:
             self.pending.append((DIVERT, p.token, p.serial, belt,
                                  int(p.position * 10)))
 
+    def zone_capacity(self, zone, package_length=None):
+        """Maximum fronts in a finite zone at the configured clear spacing."""
+        low, high = ZONE_LIMITS[Zone(zone)]
+        length = self.length if package_length is None else package_length
+        return max(1, math.floor((high - low + self.spacing) /
+                                 (length + self.spacing)))
+
+    def can_induct(self, lane):
+        if any(p.lane == lane for p in self.queued):
+            return False
+        pitch = self.length + self.spacing
+        return all(p.outbound or p.lane != lane or p.position >= pitch
+                   for p in self.packages)
+
+    def induct_ready_mask(self):
+        return sum((1 << (lane - 1)) for lane in ENTRY if self.can_induct(lane))
+
+    def zone_row(self, token, serial):
+        for p in self.packages:
+            if p.token == token and p.serial == serial:
+                return [p.zone, p.motion, p.hold, p.dwell]
+        if token in self.recent and self.recent[token][1] == serial:
+            return [Zone.TERMINAL, Motion.TERMINAL, Hold.NONE, 0]
+        return [0, 0, 0, 0]
+
+    def _state(self, p, zone, motion, hold, seconds):
+        if p.motion == motion and p.hold == hold and hold and p.state_clock != self.clock:
+            p.dwell = min(32000, p.dwell + max(1, int(seconds * 10)))
+        elif p.motion != motion or p.hold != hold or not hold:
+            p.dwell = 0
+        p.zone, p.motion, p.hold = int(zone), int(motion), int(hold)
+        p.state_clock = self.clock
+
+    def _lane_blocked(self, p, candidate):
+        block = self.zone_block
+        if not block or block.kind != "lane" or block.lane != p.lane:
+            return False
+        threshold = DECISION_HOLD if block.zone == "premerge" else 8.8
+        if block.start < 0 and p.token == block.after_token and candidate >= threshold:
+            block.start = self.clock
+        return block.start >= 0 and self.clock - block.start < block.duration
+
+    def _merge_blocked(self, p):
+        block = self.zone_block
+        return bool(block and block.kind == "merge" and
+                    ((block.start < 0 and block.active(self.clock, p, PREMERGE_HOLD)) or
+                     (block.start >= 0 and self.clock - block.start < block.duration)))
+
+    def step_zones(self, seconds, rpm, slots):
+        """Finite lane zones, FIFO motion and round-robin outbound admission."""
+        self.clock += seconds
+        self.recent = {k: v for k, v in self.recent.items() if v[0] > self.clock}
+        active_tokens = {p.token for p in self.packages} | set(self.recent)
+        self.last_event = {k: v for k, v in self.last_event.items() if k in active_tokens}
+        self.lane_by_token = {k: v for k, v in self.lane_by_token.items()
+                              if k in active_tokens or k in slots or
+                              any(p.token == k for p in self.queued)}
+        for p in list(self.queued):
+            if rpm[p.lane - 1] > 0:
+                pitch = self.length + self.spacing
+                if any(q.lane == p.lane and not q.outbound and q.position < pitch
+                       for q in self.packages):
+                    continue
+                self.queued.remove(p)
+                self.packages.append(p)
+                self.pending.append((INDUCT, p.token, p.serial, 0, 0))
+                self._state(p, Zone.APPROACH, Motion.MOVING, Hold.NONE, seconds)
+        # Outbound speed feedback is the only outbound motion source.
+        for belt in (1, 2, 3):
+            members = sorted((p for p in self.packages if p.outbound == belt),
+                             key=lambda p: -p.outbound_position)
+            leader = None
+            for p in members:
+                speed = seconds * 10 * max(0, rpm[belt + 2]) / 1750
+                candidate = p.outbound_position + speed
+                bound = (leader.outbound_position - max(p.length, leader.length) - self.spacing
+                         if leader else 100.0)
+                p.outbound_position = min(candidate, bound)
+                motion = (Motion.DRIVE_STOPPED if rpm[belt + 2] <= 0 else
+                          Motion.HELD_DOWNSTREAM if p.outbound_position < candidate - 1e-6 else
+                          Motion.OUTBOUND)
+                hold = (Hold.DRIVE_OFF if motion == Motion.DRIVE_STOPPED else
+                        Hold.ZONE_FULL if motion == Motion.HELD_DOWNSTREAM else Hold.NONE)
+                self._state(p, Zone.OUTBOUND, motion, hold, seconds)
+                leader = p
+                if not p.terminal_sent and p.outbound_position >= 12 + 3 * ((p.target - 1) % 3):
+                    p.terminal_sent = True
+                    p.trailer_position = 12 + 3 * ((p.target - 1) % 3)
+                    kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
+                    self.pending.append((kind, p.token, p.serial,
+                                         0 if kind == FAILED_CONFIRM else p.target,
+                                         int(p.outbound_position * 10)))
+                if p.terminal_sent and p.outbound_position > p.trailer_position + p.length:
+                    kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
+                    self.recent[p.token] = (self.clock + 2, p.serial, belt + 1,
+                                            int(p.outbound_position * 10), kind,
+                                            0 if kind == FAILED_CONFIRM else p.target)
+                    self.packages.remove(p)
+        for lane in ENTRY:
+            members = sorted((p for p in self.packages if p.lane == lane and not p.outbound),
+                             key=lambda p: -p.position)
+            leader = None
+            for p in members:
+                speed = seconds * 10 * max(0, rpm[lane - 1]) / 1750
+                candidate = p.position + speed
+                bound = 100.0
+                cause = Hold.NONE
+                if leader:
+                    bound = min(bound, leader.position - max(p.length, leader.length) - self.spacing)
+                    cause = Hold.ZONE_FULL
+                if self._lane_blocked(p, candidate):
+                    hold_point = DECISION_HOLD if self.zone_block.zone == "premerge" else 8.8
+                    if hold_point < bound:
+                        bound, cause = hold_point, Hold.ZONE_FULL
+                if p.position >= PREMERGE_HOLD and p.target > 0:
+                    bound, cause = min(bound, PREMERGE_HOLD), Hold.MERGE_CAPACITY
+                if p.position < PREMERGE_HOLD and candidate >= PREMERGE_HOLD:
+                    serial, state, dest = slots.get(p.token, (0, 0, 0))
+                    if serial == p.serial and state == 3 and 1 <= dest <= 9:
+                        p.target = dest
+                        bound, cause = min(bound, PREMERGE_HOLD), Hold.MERGE_CAPACITY
+                p.position = max(p.position, min(candidate, bound))
+                if p.position >= 10 and not p.tunnel_sent:
+                    p.tunnel_sent = True
+                    self.pending.append((TUNNEL, p.token, p.serial, 0, int(p.position * 10)))
+                if p.position >= 14 and not p.divert_sent:
+                    serial, state, dest = slots.get(p.token, (0, 0, 0))
+                    if serial != p.serial or state != 3 or not 1 <= dest <= 9:
+                        p.target = -1
+                    if p.target == -1:
+                        p.divert_sent = True
+                        self.pending.append((DIVERT, p.token, p.serial, 0, int(p.position * 10)))
+                if p.divert_sent and p.position >= 19:
+                    self.pending.append((RECIRC, p.token, p.serial, 0, int(p.position * 10)))
+                    self.recent[p.token] = (self.clock + 2, p.serial,
+                                            1 if lane == 1 else 5 if lane == 2 else 6,
+                                            int(p.position * 10), RECIRC, 0)
+                    self.packages.remove(p)
+                if p not in self.packages:
+                    continue
+                zone = (Zone.APPROACH if p.position < 9 else
+                        Zone.DECISION if p.position < 11.8 else Zone.PREMERGE)
+                if rpm[lane - 1] <= 0:
+                    motion, hold = Motion.DRIVE_STOPPED, Hold.DRIVE_OFF
+                elif p.position < candidate - 1e-6:
+                    motion = Motion.HELD_MERGE if cause == Hold.MERGE_CAPACITY else Motion.HELD_DOWNSTREAM
+                    hold = cause
+                else:
+                    motion, hold = Motion.MOVING, Hold.NONE
+                self._state(p, zone, motion, hold, seconds)
+                leader = p
+        # All ready lanes are considered at each gap. The circular pointer
+        # prevents a lower-numbered lane from repeatedly winning ties.
+        ready = [p for p in self.packages if not p.outbound and p.target > 0 and
+                 p.position >= PREMERGE_HOLD and not p.divert_sent]
+        ready.sort(key=lambda p: (p.lane - self.merge_next_lane) % 3)
+        for p in ready:
+            if self._merge_blocked(p):
+                self._state(p, Zone.MERGE, Motion.HELD_MERGE, Hold.MERGE_CAPACITY, seconds)
+                continue
+            belt = (p.target - 1) // 3 + 1
+            entry = ENTRY[p.lane]
+            if any(other is not p and other.outbound == belt and
+                   abs(other.outbound_position - entry) <
+                   max(p.length, other.length) + self.spacing for other in self.packages):
+                self._state(p, Zone.MERGE, Motion.HELD_MERGE, Hold.MERGE_CAPACITY, seconds)
+                continue
+            if rpm[belt + 2] <= 0:
+                self._state(p, Zone.MERGE, Motion.DRIVE_STOPPED, Hold.DRIVE_OFF, seconds)
+                continue
+            p.outbound = belt
+            p.outbound_position = entry
+            p.divert_sent = True
+            self._state(p, Zone.OUTBOUND, Motion.OUTBOUND, Hold.NONE, seconds)
+            self.pending.append((DIVERT, p.token, p.serial, belt, int(p.position * 10)))
+            self.merge_next_lane = p.lane % 3 + 1
+
     def telemetry(self, token, serial):
         """Return belt, position ×10, latest sent sensor, actual; all bounded."""
         for package in self.packages:
@@ -267,10 +520,14 @@ def run(args):
     fixture = (PhotoeyeFixture(args.photoeye_fault_sensor, args.photoeye_fault_token,
                                args.photoeye_fault_kind)
                if args.photoeye_fault_sensor else None)
+    block = (ZoneBlock("merge", args.block_after_token, args.block_duration)
+             if args.block_merge else
+             ZoneBlock("lane", args.block_after_token, args.block_duration,
+                       args.block_lane, args.block_zone) if args.block_lane else None)
     model = PlantModel(args.length_cm, args.spacing_cm,
                        miss_divert_token=args.miss_divert_token,
                        fail_confirm_token=args.fail_confirm_token,
-                       photoeye_fixture=fixture)
+                       photoeye_fixture=fixture, zone_block=block)
     active = None
     sequence = 0
     telemetry_sequence = [0, 0, 0]
@@ -289,6 +546,10 @@ def run(args):
             if stateful_result.isError():
                 raise IOError("photoeye mode coil")
             stateful = bool(stateful_result.bits[0])
+            accumulation_result = plc.read_coils(920, 1, slave=1)
+            if accumulation_result.isError():
+                raise IOError("accumulation mode coil")
+            accumulation = bool(accumulation_result.bits[0])
             if not mode:
                 armed = True
             if mode and not armed:
@@ -304,10 +565,13 @@ def run(args):
             run_key = (epoch, nonce) if mode and epoch != (0, 0) else None
             if run_key != active:
                 active = run_key
+                if block is not None:
+                    block.start = -1.0
                 model = PlantModel(args.length_cm, args.spacing_cm,
                                    miss_divert_token=args.miss_divert_token,
                                    fail_confirm_token=args.fail_confirm_token,
-                                   stateful=stateful, photoeye_fixture=fixture)
+                                   stateful=stateful, photoeye_fixture=fixture,
+                                   accumulation=accumulation, zone_block=block)
                 outstanding = None
                 # Reset may have accepted a separately injected event. Continue
                 # after the PLC's committed sequence so its seen-sequence
@@ -338,6 +602,9 @@ def run(args):
                      for row in rows if row[0]}
             model.step(elapsed, rpm, slots)
             if mode:
+                if accumulation:
+                    # Seqlock: PLC ignores partially rewritten slot rows.
+                    write(plc, 785, [0])
                 for index, row in enumerate(rows):
                     token, serial = row[:2]
                     belt, position, event_type, actual = model.telemetry(token, serial)
@@ -346,6 +613,9 @@ def run(args):
                     write(plc, base, [*epoch, nonce, token, serial, belt,
                                       position, event_type, actual])
                     write(plc, base + 9, [telemetry_sequence[index]])
+                    if accumulation:
+                        write(plc, 751 + index * 5,
+                              [*model.zone_row(token, serial), telemetry_sequence[index]])
                     if stateful and token in model.lane_by_token:
                         raw_base = 690 + index * 8
                         raw_sequence = telemetry_sequence[index]
@@ -353,6 +623,8 @@ def run(args):
                                               model.lane_by_token[token],
                                               model.photoeyes(token, serial)])
                         write(plc, raw_base + 7, [raw_sequence])
+                if accumulation:
+                    write(plc, 784, [model.induct_ready_mask(), heartbeat])
             if outstanding is not None:
                 if read(plc, 586)[0] == outstanding:
                     outstanding = None
@@ -387,11 +659,20 @@ def main():
     parser.add_argument("--photoeye-fault-token", type=int, default=0)
     parser.add_argument("--photoeye-fault-kind", choices=(
         "stuck_clear", "stuck_blocked", "bounce", "missed", "early"))
+    parser.add_argument("--block-merge", action="store_true")
+    parser.add_argument("--block-lane", type=int, choices=(1, 2, 3), default=0)
+    parser.add_argument("--block-zone", choices=("decision", "premerge"), default="premerge")
+    parser.add_argument("--block-after-token", type=int, default=0)
+    parser.add_argument("--block-duration", type=float, default=0)
     args = parser.parse_args()
     if bool(args.photoeye_fault_sensor) != bool(args.photoeye_fault_token) or (
             args.photoeye_fault_sensor and not args.photoeye_fault_kind) or (
             args.photoeye_fault_kind and not args.photoeye_fault_sensor):
         parser.error("photoeye fixture requires sensor, positive token and kind together")
+    if (args.block_merge and args.block_lane) or (
+            bool(args.block_merge or args.block_lane) != bool(args.block_after_token)) or (
+            bool(args.block_merge or args.block_lane) != bool(args.block_duration)):
+        parser.error("one bounded zone block requires kind, token and duration")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     run(args)
 

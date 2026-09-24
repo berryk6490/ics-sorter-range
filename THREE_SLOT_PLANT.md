@@ -1,5 +1,9 @@
 # Three global plant slots (2026-09-23)
 
+For opt-in finite accumulation (coil 920), see `ACCUMULATION_BACKPRESSURE.md`.
+It supersedes the earlier free-motion merge and spacing approximation only
+in that mode. The three global PLC slots and fourth-package wait remain.
+
 ## Contract and ownership
 
 The plant process on **drives** owns package coordinates and photoeye events. It

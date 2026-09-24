@@ -1,5 +1,10 @@
 # Stateful photoeyes, opt-in plant slice
 
+For opt-in finite accumulation (coil 920), see `ACCUMULATION_BACKPRESSURE.md`.
+The raw beam contract remains, while the PLC pauses expected-hold blocked
+and travel timers as documented there. This document continues to describe
+stateful photoeyes with accumulation mode off.
+
 ## Ownership and protocol
 
 `devices/plant.py` remains the sole owner of package coordinates. It advances
