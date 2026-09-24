@@ -133,6 +133,12 @@ scanner services were active. Only the normal unflagged plant process
 remained. The original five VM states were unchanged. The Case A work stayed
 on remote `wip/case-a-integrity-validation`; this branch remained `main`.
 
+The later phased latch-evidence workflow is documented in
+`MISSED_TUNNEL_VALIDATION.md`. It leaves the PLC fault latched while the
+normal plant service returns, captures Modbus, OPC UA, HMI and rendered-browser
+evidence, then performs the documented reset. It does not alter the legacy
+one-shot `live_photoeye_fault.py` runner or the photoeye protocol.
+
 Remaining physical limits: these are five ideal geometric beam locations on
 simulated belts, not real optics, actuators or mechanics. The Modbus update
 interval bounds detectable pulse width; a beam shorter than the PLC's sample

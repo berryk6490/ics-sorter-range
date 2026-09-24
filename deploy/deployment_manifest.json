@@ -182,6 +182,15 @@
       "hash_policy": "exact",
       "sha256": "ac7363300864d19234753f2047bff1674e2d20acc6ebe61a33297f2f2d7c8995",
       "verification_command": "sha256sum /home/kevin/live_plant.py"
+    },
+    {
+      "repository_source": "tests/live_missed_phased.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/live_missed_phased.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "a63db2d292a376a2e9b168f7a6bed896712333e2b861fe178d38407640866216",
+      "verification_command": "sha256sum /home/kevin/live_missed_phased.py"
     }
   ]
 }
