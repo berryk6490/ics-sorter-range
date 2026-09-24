@@ -236,6 +236,15 @@
       "hash_policy": "exact",
       "sha256": "ab18b63bd844748cc40921fd291c57515ee96eb2d314446c27b4ba67ddafe4b0",
       "verification_command": "sha256sum /home/kevin/read_accumulation_state.py"
+    },
+    {
+      "repository_source": "tests/live_accumulation_monitor.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/live_accumulation_monitor.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "7c3da1a183a261e3a9a3d3cf23d646f0b839493b2432a0e55008594f7984b0db",
+      "verification_command": "sha256sum /home/kevin/live_accumulation_monitor.py"
     }
   ],
   "milestone": "phase-2a-accumulation-backpressure",

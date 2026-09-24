@@ -1,5 +1,11 @@
 # Phase 2A: finite accumulation and downstream backpressure
 
+For independent readiness evidence before a live validation runner can
+enable accumulation, use the canonical monitor and host gate in
+`ACCUMULATION_MONITOR.md`. Its ready proof and terminal files are required
+Phase 2A evidence for new independently validated runs; the earlier live
+results below predate that gate.
+
 This milestone is opt-in independent plant mode: coils 918 (plant), 919
 (stateful photoeyes), and 920 (finite accumulation) must be on. The PLC
 identity is **24113**. With coil 920 off, the earlier plant kinematics and
