@@ -225,6 +225,13 @@ never invoke this helper.
 
 ### Canonical Hermes command order
 
+The typed restoration baseline and comparison in
+[`PHASE2A_RESTORATION.md`](PHASE2A_RESTORATION.md) are mandatory. Capture the
+baseline before starting the monitor and before operator approval. The
+scenario `launch` command requires `--typed-baseline "$EVIDENCE_DIR/typed-before.json"`;
+`verify-clean` captures the postflight snapshot and must pass before the next
+scenario starts. This replaces ad hoc baseline field lists.
+
 Deploy only test tooling and verify exact hashes:
 
 ```sh
@@ -239,7 +246,7 @@ printed control path for `$MONITOR_CONTROL`. The scenario controller prints
 its own control path for `$SCENARIO_CONTROL`:
 
 ```sh
-python3 tests/accumulation_scenario_control.py launch --evidence-dir /home/kevin/vm/sorter-evidence/phase2a-hermes --case lane_hold --monitor-control "$MONITOR_CONTROL" --startup-timeout 30 --hold-timeout 30
+python3 tests/accumulation_scenario_control.py launch --evidence-dir /home/kevin/vm/sorter-evidence/phase2a-hermes --case lane_hold --monitor-control "$MONITOR_CONTROL" --typed-baseline "$EVIDENCE_DIR/typed-before.json" --startup-timeout 30 --hold-timeout 30
 python3 tests/accumulation_scenario_control.py probe-ready --control "$SCENARIO_CONTROL"
 ```
 

@@ -225,7 +225,7 @@
       "canonical_destination": "/home/kevin/sorter-services/read_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "f8174c134aa40fd9243b68193fe06ca1075267c704bd28377a40e715437ae27e",
+      "sha256": "7a7114b04362f7c183c6fb6332f129e9245bdbd48f788c859d7c5a113a7adb72",
       "verification_command": "sha256sum /home/kevin/sorter-services/read_accumulation_state.py"
     },
     {
@@ -234,7 +234,7 @@
       "canonical_destination": "/home/kevin/read_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "f8174c134aa40fd9243b68193fe06ca1075267c704bd28377a40e715437ae27e",
+      "sha256": "7a7114b04362f7c183c6fb6332f129e9245bdbd48f788c859d7c5a113a7adb72",
       "verification_command": "sha256sum /home/kevin/read_accumulation_state.py"
     },
     {

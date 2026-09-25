@@ -13,6 +13,7 @@ from urllib.request import urlopen
 from accumulation_monitor_control import (Controller as MonitorController, SerialGuest,
                                           SCADA_PYTHON, GuestCommandError,
                                           atomic_control, load_control)
+from accumulation_state_snapshot import capture as typed_capture, compare as typed_compare, save as typed_save
 
 GUEST = "/home/kevin/sorter-services/live_accumulation_detached.py"
 RUNNER = "/home/kevin/sorter-services/live_accumulation.py"
@@ -23,6 +24,22 @@ FIXTURE_UNIT = "sorter-plant.service"
 FIXTURE_STOP = ["sudo", "-n", "/usr/bin/systemctl", "stop", FIXTURE_UNIT]
 FIXTURE_START = ["sudo", "-n", "/usr/bin/systemctl", "start", FIXTURE_UNIT]
 CASES = ("smoke", "lane_hold", "merge_hold", "drive_stop", "normal")
+
+
+def validate_typed_launch(evidence_root, typed_baseline, monitor_control):
+    gate = Path(evidence_root) / "typed-restoration-gate.json"
+    if gate.exists() and json.loads(gate.read_text()).get("status") != "PASS":
+        raise ValueError("previous scenario has no passing typed restoration comparison")
+    baseline = json.loads(Path(typed_baseline).read_text())
+    baseline_time = datetime.fromisoformat(baseline["captured_utc"])
+    monitor_time = datetime.fromisoformat(load_control(monitor_control)["launched_utc"])
+    age = (datetime.now(timezone.utc) - baseline_time).total_seconds()
+    if not 0 <= age <= 600 or baseline_time >= monitor_time:
+        raise ValueError("typed baseline must be fresh and precede monitor launch")
+    baseline_report = typed_compare(baseline, baseline)
+    if baseline_report["status"] != "PASS":
+        raise ValueError(f"unsafe typed baseline: {baseline_report['differences']}")
+    return baseline, baseline_report
 
 
 def identity(control):
@@ -55,7 +72,8 @@ class ScenarioController:
                 "--pid", control["pid"], "--start-ticks", control["start_ticks"]]
         return valid(json.loads(self.scada.run(args).splitlines()[-1]), control)
 
-    def launch(self, evidence_dir, case, monitor_control, startup_timeout=30, hold_timeout=30):
+    def launch(self, evidence_dir, case, monitor_control, typed_baseline,
+               startup_timeout=30, hold_timeout=30):
         if case not in CASES or not 1 <= startup_timeout <= 60 or not 1 <= hold_timeout <= 60:
             raise ValueError("invalid scenario or timeout")
         manifest = json.loads(Path("deploy/deployment_manifest.json").read_text())
@@ -64,8 +82,16 @@ class ScenarioController:
         if hashlib.sha256(Path("tests/live_accumulation.py").read_bytes()).hexdigest() != expected:
             raise ValueError("local runner does not match deployment manifest")
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
-        local = Path(evidence_dir).resolve() / run_id
+        evidence_root = Path(evidence_dir).resolve()
+        gate = evidence_root / "typed-restoration-gate.json"
+        baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
+                                                          monitor_control)
+        local = evidence_root / run_id
         local.mkdir(parents=True, mode=0o700)
+        typed_save(local / "typed-before.json", baseline)
+        typed_save(local / "typed-baseline-check.json", baseline_report)
+        atomic_control(gate, {"status": "PENDING", "run_id": run_id,
+                              "baseline": str(local / "typed-before.json")})
         initial = self.state()
         if initial["identity"] != 24113 or initial["coils_880_920"][0] or any(
                 row[4] for row in initial["slots"]):
@@ -444,6 +470,13 @@ class ScenarioController:
 
     def verify_clean(self, path):
         control = json.loads(Path(path).read_text())
+        before = json.loads((Path(control["local_dir"]) / "typed-before.json").read_text())
+        after = typed_capture()
+        typed_save(Path(control["local_dir"]) / "typed-after.json", after)
+        typed_report = typed_compare(before, after)
+        typed_save(Path(control["local_dir"]) / "typed-restoration-report.json", typed_report)
+        if typed_report["status"] != "PASS":
+            raise AssertionError(f"typed restoration failed: {typed_report['differences']}")
         original = json.loads((Path(control["local_dir"]) / "initial-state.json").read_text())
         final = self.state()
         if self._inspect(control)["alive"]:
@@ -502,6 +535,9 @@ class ScenarioController:
         proof = {**identity(control), "restored": True, "plant_service": service,
                  "initial": original, "final": final}
         atomic_control(Path(control["local_dir"]) / "final-state.json", proof)
+        atomic_control(Path(control["local_dir"]).parent / "typed-restoration-gate.json",
+                       {"status": "PASS", "run_id": control["run_id"],
+                        "report": str(Path(control["local_dir"]) / "typed-restoration-report.json")})
         return proof
 
 
@@ -512,6 +548,7 @@ def main(argv=None):
     p.add_argument("--evidence-dir", required=True)
     p.add_argument("--case", choices=CASES, required=True)
     p.add_argument("--monitor-control", required=True)
+    p.add_argument("--typed-baseline", required=True)
     p.add_argument("--startup-timeout", type=float, default=30)
     p.add_argument("--hold-timeout", type=float, default=30)
     for name in ("probe-ready", "authorize", "begin", "probe-checkpoint", "release", "wait",
@@ -532,7 +569,7 @@ def main(argv=None):
     try:
         if args.action == "launch":
             result = {"control": str(control.launch(args.evidence_dir, args.case,
-                                                    args.monitor_control,
+                                                    args.monitor_control, args.typed_baseline,
                                                     args.startup_timeout, args.hold_timeout))}
         elif args.action == "probe-ready":
             result = control.probe_ready(args.control, args.timeout)

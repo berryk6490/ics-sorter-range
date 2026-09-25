@@ -19,7 +19,9 @@ def execute(vm, command, timeout=120, nonce=None, spawn=pexpect.spawn):
     if not re.fullmatch(r"[0-9a-f]{24,64}", nonce):
         raise ValueError("nonce must be 24-64 lowercase hex characters")
     prompt = rf"kevin@{re.escape(vm)}:.*\$ "
-    marker = rf"(?m)^__SORTER_RC_{nonce}__(\d+)\r?$"
+    # A terminal mode escape may precede the marker when a command emits no
+    # output. The echoed command contains %s, not digits, so cannot satisfy it.
+    marker = rf"__SORTER_RC_{nonce}__(\d+)"
     tty = spawn("virsh", ["-c", "qemu:///system", "console", vm],
                 encoding="utf-8", timeout=timeout, maxread=200000)
     stage = "attach"

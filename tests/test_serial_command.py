@@ -1,5 +1,6 @@
 """Serial completion and prompt classification with a fake persistent console."""
 import pathlib
+import re
 import sys
 import unittest
 
@@ -15,9 +16,11 @@ class TTY:
         self.before = ""
         self.match = None
         self.sent = []
+        self.patterns = []
         self.closed = False
 
     def expect(self, pattern, timeout):
+        self.patterns.append(pattern)
         item = next(self.outcomes)
         if isinstance(item, Exception):
             self.before = ""
@@ -82,6 +85,13 @@ class SerialTests(unittest.TestCase):
         with self.assertRaises(serial.SerialFailure) as caught:
             serial.execute("drives", "true", 2, "a" * 32, spawn=lambda *a, **k: tty)
         self.assertEqual(caught.exception.kind, "pager_like")
+
+    def test_zero_output_marker_survives_terminal_mode_escape(self):
+        tty, result = self.call([(0, ""), (0, ""), (0, "", Match()), (0, "")])
+        self.assertTrue(result["completion_marker"])
+        marker = tty.patterns[2][0]
+        self.assertIsNotNone(re.search(marker,
+            "\x1b[?2004l\r__SORTER_RC_" + "a" * 32 + "__0\r\n"))
 
 
 if __name__ == "__main__":

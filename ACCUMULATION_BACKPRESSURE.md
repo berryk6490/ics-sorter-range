@@ -1,5 +1,10 @@
 # Phase 2A: finite accumulation and downstream backpressure
 
+The canonical typed baseline, postflight comparison, and next-scenario gate
+are specified in `PHASE2A_RESTORATION.md`. That contract supersedes older
+informal cleanup field lists below; the movement and register model here is
+unchanged.
+
 For independent readiness evidence before a live validation runner can
 enable accumulation, use the canonical monitor and host gate in
 `ACCUMULATION_MONITOR.md`. Its ready proof and terminal files are required
