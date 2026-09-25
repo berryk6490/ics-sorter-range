@@ -266,6 +266,16 @@ identity before requesting approval:
 python3 tests/accumulation_scenario_control.py prepare --evidence-dir "$EVIDENCE_DIR" --case lane_hold --typed-baseline "$EVIDENCE_DIR/typed-before.json" --preflight-report "$EVIDENCE_DIR/deployment-preflight.json"
 ```
 
+`prepare` creates a new version-2 `preparation.json` in a unique run directory.
+`launch` claims that exact directory for the same run ID, case, baseline and
+preflight. Before claiming it, only `preparation.json` and, for a fixture case,
+`operator-approval.json` may exist there. A second `prepare` creates a new run
+ID; an ID collision fails without replacing the first reservation. A second
+`launch`, an old version-1 preparation, or an unrelated/tampered directory is
+rejected without launching another worker. **Do not reuse** the approval or
+run ID `20260925T161812_6947140fa13b4d9b9b61b89167be37f8` from the
+interrupted handoff; its version-1 preparation is intentionally ineligible.
+
 Use the printed `$PREPARATION` path and its run ID to request **one** operator
 approval for this `lane_hold` run and the two exact commands above. Waiting for
 the operator happens here, before any monitor or worker launch. When approval
@@ -301,6 +311,29 @@ and never starts fixture-stop or a service transition. After such a failure,
 run `verify-clean --control "$SCENARIO_CONTROL"` to compare postflight state
 and release the global restoration gate; investigate any failed comparison
 before launching another run.
+
+On a valid launch, `launch-claimed.json` spends the prepared attempt and a
+`restoration-gate.json` in that run directory, plus the global gate, become
+`PENDING` for **that run ID** before the guest worker can start. `verify-clean`
+requires both gates to name the same run; a prior run's `PASS` cannot satisfy
+it. If launch fails after the claim, the controller aborts any matching guest
+worker, collects the monitor, captures the typed postflight, and records
+`launch-failure.json` with separate original error, process cleanup, typed
+restoration and service state. A clean failed launch records `PASS` with
+`result=launch_failed` for the current run; incomplete cleanup/restoration
+records `FAIL` and blocks the next run. No failed approval may be retried.
+For a no-fixture smoke, use the same `prepare` and `launch --preparation`
+commands with `--case smoke`, omitting `record-approval` and fixture actions.
+
+The 2026-09-25 handoff smoke prepared run
+`20260925T163510_122b91a50b8b4fb4bdde2bb0ab0cf6c4`; launch reused its
+directory, and both gates showed that run ID as `PENDING`. The worker reached
+ready, was intentionally aborted before begin, and exited with no orphan.
+Monitor collection and `verify-clean` passed all 215 typed fields; both gates
+then showed `PASS`, `result=completed`, for the same run. The canonical plant
+service stayed active; no fixture, package, or PLC write occurred. The read-only
+31-component deployment preflight took 98.375 seconds. Evidence is under
+`/home/kevin/vm/sorter-evidence/phase2a-handoff-smoke-20260925/`.
 
 On 2026-09-25 the final no-package coordination smoke used a full 31-component
 preflight lasting 96.105 seconds before launch. The post-ready gate took 9.834

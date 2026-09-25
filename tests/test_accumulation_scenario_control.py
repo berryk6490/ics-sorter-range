@@ -1,4 +1,8 @@
 """Host gates and fixture teardown; no guest or PLC connection."""
+from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
+import hashlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -346,10 +350,13 @@ class PrelaunchApprovalTest(unittest.TestCase):
         row = json.loads(row_path.read_text())
         row["expires_wall_ns"] = 1
         row_path.write_text(json.dumps(row))
-        with self.assertRaisesRegex(ValueError, "expired"):
-            self.manager.launch(self.root, "lane_hold", "monitor", self.baseline,
-                                self.preflight, preparation_path=path)
-        self.manager.monitor.collect.assert_called_once_with("monitor", timeout=20, stop=True)
+        with patch.object(host, "validate_typed_launch", return_value=(typed_sample(), {"status": "PASS"})), \
+             patch.object(self.manager, "_failed_launch", return_value={
+                 "cleanup": {"errors": []}, "typed_restoration": {"status": "PASS"}}) as postflight:
+            with self.assertRaisesRegex(RuntimeError, "expired"):
+                self.manager.launch(self.root, "lane_hold", "monitor", self.baseline,
+                                    self.preflight, preparation_path=path)
+        postflight.assert_called_once()
         self.manager.scada.run.assert_not_called()
 
     def test_expiry_after_launch_refuses_fixture_and_aborts(self):
@@ -414,6 +421,203 @@ class PrelaunchApprovalTest(unittest.TestCase):
         guest_argv = self.manager.drives.run.call_args_list[1].args[0]
         self.assertEqual(guest_argv[guest_argv.index("--run-id") + 1], run_id)
         self.assertEqual(guest_argv[guest_argv.index("--case") + 1], "lane_hold")
+
+
+class PreparedHandoffTest(unittest.TestCase):
+    """Exercise the actual command parser and controller methods in one fake guest run."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.evidence = self.root / "evidence"
+        self.evidence.mkdir()
+        self.gate = self.root / "global-gate.json"
+        self.manager = host.ScenarioController(scada=Mock(), drives=Mock(), monitor=Mock())
+        self.manager.monitor.collect.return_value = {"cleanup_errors": [], "orphan": False}
+        self.manager.state = Mock(return_value={"identity": 24113,
+            "coils_880_920": [False] * 41, "slots": [[0] * 12 for _ in range(3)]})
+        now = datetime.now(timezone.utc)
+        baseline = typed_sample()
+        baseline["captured_utc"] = (now - timedelta(seconds=20)).isoformat()
+        self.before = self.evidence / "typed-before.json"
+        self.before.write_text(json.dumps(baseline))
+        manifest = Path("deploy/deployment_manifest.json")
+        receipt = {"schema_version": 1, "status": "PASS", "live": True,
+            "completed_utc": (now - timedelta(seconds=120)).isoformat(),
+            "duration_seconds": 92.0, "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "source_and_guest_hashes": len(json.loads(manifest.read_text())["components"]),
+            "program_identity": 24113}
+        self.preflight = self.evidence / "deployment-preflight.json"
+        self.preflight.write_text(json.dumps(receipt))
+        self.monitor_control = self.evidence / "monitor.json"
+        self.monitor_control.write_text(json.dumps({
+            "launched_utc": (now - timedelta(seconds=10)).isoformat()}))
+        self.gate.write_text(json.dumps({"status": "PASS", "run_id": "previous_run"}))
+
+    def command(self, *argv):
+        out = io.StringIO()
+        with patch.object(host, "ScenarioController", return_value=self.manager), \
+             patch.object(host, "RESTORATION_GATE", self.gate), \
+             patch.object(host, "APPROVAL_LEDGER", self.root / "ledger.jsonl"), \
+             patch.object(host, "load_control", side_effect=lambda path: json.loads(Path(path).read_text())), \
+             redirect_stdout(out):
+            code = host.main(list(argv))
+        self.assertEqual(code, 0)
+        return json.loads(out.getvalue().splitlines()[-1])
+
+    def prepare(self, case="lane_hold"):
+        return Path(self.command("prepare", "--evidence-dir", str(self.evidence),
+                                 "--case", case, "--typed-baseline", str(self.before),
+                                 "--preflight-report", str(self.preflight))["preparation"])
+
+    def launch(self, preparation, case="lane_hold"):
+        return Path(self.command("launch", "--evidence-dir", str(self.evidence),
+                                 "--case", case, "--preparation", str(preparation),
+                                 "--monitor-control", str(self.monitor_control),
+                                 "--typed-baseline", str(self.before),
+                                 "--preflight-report", str(self.preflight))["control"])
+
+    def approve(self, preparation):
+        self.command("record-approval", "--preparation", str(preparation),
+                     "--approval-id", "new_receipt_12345678")
+
+    def test_canonical_prepare_then_launch_claims_same_directory_once(self):
+        preparation = self.prepare()
+        self.approve(preparation)
+
+        def worker(argv):
+            self.assertEqual(argv[argv.index("--run-id") + 1], preparation.parent.name)
+            return json.dumps({"run_id": preparation.parent.name,
+                               "scenario": "lane_hold", "pid": 42})
+
+        self.manager.scada.run.side_effect = worker
+        control = self.launch(preparation)
+        self.assertEqual(control.parent, preparation.parent)
+        self.assertEqual(json.loads(control.read_text())["run_id"], preparation.parent.name)
+        self.assertEqual(json.loads(self.gate.read_text())["status"], "PENDING")
+        self.assertEqual(json.loads(self.gate.read_text())["run_id"], preparation.parent.name)
+        self.assertEqual(json.loads((control.parent / "restoration-gate.json").read_text())["status"], "PENDING")
+        with self.assertRaisesRegex(ValueError, "already launched"):
+            self.launch(preparation)
+        self.manager.scada.run.assert_called_once()
+        self.assertEqual(json.loads(self.gate.read_text())["status"], "PENDING")
+
+    def test_wrong_scenario_and_unrelated_contents_rejected(self):
+        preparation = self.prepare()
+        self.approve(preparation)
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.launch(preparation, "merge_hold")
+        (preparation.parent / "unrelated.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "unexpected contents"):
+            self.launch(preparation)
+        self.manager.scada.run.assert_not_called()
+        self.assertEqual(json.loads(self.gate.read_text())["run_id"], "previous_run")
+
+    def test_prepared_old_schema_and_repeat_prepare_are_rejected(self):
+        preparation = self.prepare("smoke")
+        row = json.loads(preparation.read_text())
+        row["version"] = 1
+        preparation.write_text(json.dumps(row))
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.launch(preparation, "smoke")
+        self.manager.scada.run.assert_not_called()
+
+    def test_prepare_collision_never_replaces_existing_reservation(self):
+        fixed_now = datetime.now(timezone.utc)
+
+        class FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now
+
+        with patch.object(host, "datetime", FixedDatetime), \
+             patch.object(host.uuid, "uuid4", return_value=Mock(hex="a" * 32)):
+            first = self.prepare("smoke")
+            original = first.read_bytes()
+            with self.assertRaises(FileExistsError):
+                self.prepare("smoke")
+        self.assertEqual(first.read_bytes(), original)
+        self.manager.scada.run.assert_not_called()
+
+    def test_launch_failure_has_current_run_postflight_and_no_prior_pass(self):
+        preparation = self.prepare()
+        self.approve(preparation)
+        self.manager.state.side_effect = RuntimeError("PLC state read failed")
+        with patch.object(host, "typed_capture", return_value=json.loads(self.before.read_text())), \
+             patch.object(host, "RESTORATION_GATE", self.gate):
+            with self.assertRaisesRegex(RuntimeError, "PLC state read failed"):
+                self.launch(preparation)
+        failure = json.loads((preparation.parent / "launch-failure.json").read_text())
+        self.assertEqual(failure["status"], "launch_failed")
+        self.assertEqual(failure["typed_restoration"]["status"], "PASS")
+        self.assertEqual(failure["cleanup"]["errors"], [])
+        self.assertFalse(failure["service_restoration"]["required_start"])
+        self.assertEqual(json.loads(self.gate.read_text())["run_id"], preparation.parent.name)
+        self.assertEqual(json.loads(self.gate.read_text())["result"], "launch_failed")
+        self.manager.monitor.collect.assert_called_once()
+        self.manager.scada.run.assert_not_called()
+
+    def test_preflight_failure_spends_approved_attempt_and_runs_postflight(self):
+        preparation = self.prepare()
+        self.approve(preparation)
+        receipt = json.loads(self.preflight.read_text())
+        receipt["manifest_sha256"] = "wrong"
+        self.preflight.write_text(json.dumps(receipt))
+        with patch.object(host, "typed_capture", return_value=json.loads(self.before.read_text())):
+            with self.assertRaisesRegex(RuntimeError, "preflight receipt"):
+                self.launch(preparation)
+        self.assertTrue((preparation.parent / "launch-claimed.json").exists())
+        self.assertEqual(json.loads((preparation.parent / "launch-failure.json").read_text())[
+            "typed_restoration"]["status"], "PASS")
+        self.assertEqual(json.loads(self.gate.read_text())["run_id"], preparation.parent.name)
+        self.manager.scada.run.assert_not_called()
+
+    def test_prior_pending_gate_is_never_closed_by_failed_handoff(self):
+        preparation = self.prepare()
+        self.approve(preparation)
+        self.gate.write_text(json.dumps({"status": "PENDING", "run_id": "unresolved_prior_run"}))
+        with patch.object(host, "typed_capture", return_value=json.loads(self.before.read_text())):
+            with self.assertRaisesRegex(RuntimeError, "previous scenario"):
+                self.launch(preparation)
+        self.assertEqual(json.loads(self.gate.read_text())["run_id"], "unresolved_prior_run")
+        local_gate = json.loads((preparation.parent / "restoration-gate.json").read_text())
+        self.assertEqual(local_gate["result"], "launch_blocked_by_prior_run")
+
+    def test_verify_clean_rejects_prior_run_pass(self):
+        preparation = self.prepare("smoke")
+        self.manager.scada.run.return_value = json.dumps({
+            "run_id": preparation.parent.name, "scenario": "smoke", "pid": 42})
+        control = self.launch(preparation, "smoke")
+        self.gate.write_text(json.dumps({"status": "PASS", "run_id": "previous_run"}))
+        with patch.object(host, "RESTORATION_GATE", self.gate), \
+             patch.object(host, "typed_capture") as capture:
+            with self.assertRaisesRegex(ValueError, "another run"):
+                self.manager.verify_clean(control)
+        capture.assert_not_called()
+
+    def test_worker_launch_failure_aborts_matching_pid_and_retains_results(self):
+        preparation = self.prepare()
+        self.approve(preparation)
+        self.manager.scada.run.side_effect = RuntimeError("serial response lost")
+        self.manager.scada.read_file.return_value = json.dumps({
+            "run_id": preparation.parent.name, "scenario": "lane_hold",
+            "pid": 42, "start_ticks": 77})
+        after = json.loads(self.before.read_text())
+        after["plc"]["plant_faults"][0] = 1
+        with patch.object(host, "typed_capture", return_value=after), \
+             patch.object(self.manager, "_abort_failed_gate", return_value={
+                 "worker_terminal": {"status": "scenario_failure"},
+                 "monitor": {"cleanup_errors": [], "orphan": False}, "errors": []}) as abort:
+            with self.assertRaisesRegex(RuntimeError, "serial response lost"):
+                self.launch(preparation)
+        abort.assert_called_once()
+        failure = json.loads((preparation.parent / "launch-failure.json").read_text())
+        self.assertEqual(failure["typed_restoration"]["status"], "FAIL")
+        self.assertEqual(failure["cleanup"]["errors"], [])
+        self.assertEqual(failure["service_restoration"]["sorter_plant_active"], True)
+        self.assertEqual(json.loads(self.gate.read_text())["status"], "FAIL")
+        self.assertEqual(json.loads(self.gate.read_text())["run_id"], preparation.parent.name)
 
 
 if __name__ == "__main__":

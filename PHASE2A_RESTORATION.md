@@ -72,13 +72,25 @@ and both full preflight and baseline must precede monitor launch. After the
 worker is ready, run `post-ready-gate` before issuing the guest fixture
 authorization; it is the sole
 post-ready state check and does not repeat deployment hashes. Launch writes a `PENDING` restoration
-gate at `/home/kevin/vm/sorter-evidence/phase2a-restoration-gate.json`.
-Only a passing `verify-clean` changes it to `PASS`. An unresolved gate blocks
+gate for the prepared run ID both beside `preparation.json` and at
+`/home/kevin/vm/sorter-evidence/phase2a-restoration-gate.json` before the
+guest worker starts. A passing run-bound `verify-clean`, or the automatic
+postflight after a failed launch, changes it to `PASS`. An unresolved gate blocks
 the next scenario even when it uses a different evidence directory.
 If the ten-minute baseline window or the prelaunch approval expires, stop the
 monitor, capture a new baseline while no validation process remains, prepare a
 new run, and obtain a new receipt. The old receipt cannot be reused. Human
 approval is never awaited inside the detached worker's 120-second timer.
+
+`launch` accepts the exact directory created by version-2 `prepare`; it never
+creates that prepared directory again. Unexpected files, a different case or
+baseline, an old version-1 preparation, or a prior launch claim fail closed.
+After a claimed launch fails, `launch-failure.json` keeps the original error,
+worker/monitor cleanup, typed postflight and plant-service state separate.
+The current run's gate may become `PASS` only with a successful postflight;
+its result remains `launch_failed`. A previous run's `PASS` is never a
+postflight result for this run. Use a new run ID and approval receipt after
+any failed fixture launch.
 
 After release or abort, wait/collect, restore the fixture if used, stop and
 collect the monitor, and call `verify-clean`. It saves `typed-after.json` and

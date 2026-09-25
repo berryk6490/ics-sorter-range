@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import time
 import uuid
@@ -38,6 +39,49 @@ GATE_READERS = {
 }
 APPROVAL_LIFETIME = 300
 APPROVAL_LEDGER = Path.home() / "vm" / "sorter-evidence" / "phase2a-host-approval-ledger.jsonl"
+RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}_[0-9a-f]{32}")
+PREPARATION_SCHEMA = 2
+
+
+def exclusive_record(path, value):
+    """Durably claim one lifecycle step without replacing an earlier attempt."""
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(value, stream, sort_keys=True, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def prepared_directory(path, record, case, baseline, preflight, *, approved):
+    """Accept only the exact directory reserved by prepare for this launch."""
+    root = path.parent
+    expected = {"preparation.json", "operator-approval.json"} if approved else {"preparation.json"}
+    if (path.is_symlink() or not path.is_dir() or not RUN_ID.fullmatch(path.name) or
+        record.get("version") != PREPARATION_SCHEMA or record.get("run_id") != path.name or
+        record.get("scenario") != case or
+        record.get("typed_baseline") != str(Path(baseline).resolve()) or
+        record.get("preflight_report") != str(Path(preflight).resolve()) or
+        not isinstance(record.get("prepared_utc"), str)):
+        raise ValueError("prepared run identity or arguments differ from launch")
+    contents = {item.name for item in path.iterdir()}
+    if contents != expected or any(item.is_symlink() or not stat.S_ISREG(item.stat().st_mode)
+                                   for item in path.iterdir()):
+        raise ValueError(f"prepared run directory has unexpected contents: {sorted(contents)}")
+    if root.resolve() != root:
+        raise ValueError("prepared evidence root is not canonical")
+    return path
+
+
+def write_run_gate(local, run_id, scenario, status, **details):
+    record = {"run_id": run_id, "scenario": scenario, "status": status,
+              "recorded_utc": datetime.now(timezone.utc).isoformat(), **details}
+    if status == "PASS":
+        atomic_control(local / "restoration-gate.json", record)
+        atomic_control(RESTORATION_GATE, record)
+    else:
+        atomic_control(RESTORATION_GATE, record)
+        atomic_control(local / "restoration-gate.json", record)
+    return record
 
 
 def validate_unchanged_plc(before, current):
@@ -170,19 +214,19 @@ class ScenarioController:
 
     def prepare(self, evidence_dir, case, typed_baseline, preflight_report):
         """Reserve the run identity before requesting human approval."""
-        if case not in ("lane_hold", "merge_hold"):
-            raise ValueError("prelaunch approval is only for a plant fixture scenario")
+        if case not in CASES:
+            raise ValueError("unknown scenario")
         root = Path(evidence_dir).resolve()
         validate_typed_launch(root, typed_baseline, None, preflight_report)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
         local = root / run_id
         local.mkdir(parents=True, mode=0o700, exist_ok=False)
-        record = {"version": 1, "run_id": run_id, "scenario": case,
+        record = {"version": PREPARATION_SCHEMA, "run_id": run_id, "scenario": case,
                   "typed_baseline": str(Path(typed_baseline).resolve()),
                   "preflight_report": str(Path(preflight_report).resolve()),
                   "prepared_utc": datetime.now(timezone.utc).isoformat()}
         path = local / "preparation.json"
-        atomic_control(path, record)
+        exclusive_record(path, record)
         return path
 
     def record_approval(self, preparation_path, approval_id, valid_for=APPROVAL_LIFETIME):
@@ -192,10 +236,11 @@ class ScenarioController:
         path = Path(preparation_path).resolve()
         preparation = json.loads(path.read_text())
         local = path.parent
-        if path.name != "preparation.json" or local.name != preparation["run_id"]:
-            raise ValueError("preparation identity mismatch")
-        if (local / "operator-approval.json").exists() or (local / "scenario-control.json").exists():
-            raise ValueError("run already approved or launched")
+        if preparation.get("scenario") not in ("lane_hold", "merge_hold") or path.name != "preparation.json":
+            raise ValueError("fixture preparation identity mismatch")
+        prepared_directory(local, preparation, preparation["scenario"],
+                           preparation["typed_baseline"], preparation["preflight_report"],
+                           approved=False)
         validate_typed_launch(local.parent, preparation["typed_baseline"], None,
                               preparation["preflight_report"])
         claim_host_approval(approval_id, preparation["run_id"], preparation["scenario"])
@@ -206,10 +251,79 @@ class ScenarioController:
                     "initial_service_state": "active",
                     "approved_wall_ns": now, "expires_wall_ns": now + int(valid_for * 1e9),
                     "scope": "one stop and its restorative start for this run only"}
-        atomic_control(local / "operator-approval.json", approval)
+        exclusive_record(local / "operator-approval.json", approval)
         return {"run_id": preparation["run_id"], "scenario": preparation["scenario"],
                 "approval_record": str(local / "operator-approval.json"),
                 "expires_wall_ns": approval["expires_wall_ns"]}
+
+    def _failed_launch(self, local, run_id, case, monitor_control, baseline,
+                       guest_dir, commit, runner_sha256, original_error, guest_attempted):
+        """Retain original, process cleanup, typed postflight and service results separately."""
+        cleanup = {"worker": None, "monitor": None, "errors": []}
+        control_path = local / "scenario-control.json"
+        if guest_attempted and not control_path.exists():
+            end = time.monotonic() + 3
+            while time.monotonic() < end:
+                try:
+                    pid = json.loads(self.scada.read_file(f"{guest_dir}/pid.json"))
+                    if pid.get("run_id") != run_id or pid.get("scenario") != case:
+                        raise ValueError("guest PID file belongs to another run")
+                    control = {"version": 1, "run_id": run_id, "scenario": case,
+                               "pid": pid["pid"], "start_ticks": pid["start_ticks"],
+                               "guest_dir": guest_dir, "local_dir": str(local),
+                               "monitor_control": str(Path(monitor_control).resolve()),
+                               "commit": commit, "runner_sha256": runner_sha256}
+                    exclusive_record(control_path, control)
+                    break
+                except GuestCommandError:
+                    time.sleep(.15)
+                except Exception as exc:
+                    cleanup["errors"].append(f"worker identity: {type(exc).__name__}: {exc}")
+                    break
+        if control_path.exists():
+            try:
+                cleanup["worker"] = self._abort_failed_gate(control_path, str(original_error))
+                cleanup["monitor"] = cleanup["worker"].get("monitor")
+                cleanup["errors"].extend(cleanup["worker"].get("errors", []))
+            except Exception as exc:
+                cleanup["errors"].append(f"worker cleanup: {type(exc).__name__}: {exc}")
+        if cleanup["monitor"] is None:
+            try:
+                cleanup["monitor"] = self.monitor.collect(monitor_control, timeout=20, stop=True)
+                cleanup["errors"].extend(cleanup["monitor"].get("cleanup_errors", []))
+                if cleanup["monitor"].get("orphan"):
+                    cleanup["errors"].append("monitor orphan remains")
+            except Exception as exc:
+                cleanup["errors"].append(f"monitor cleanup: {type(exc).__name__}: {exc}")
+        typed = {"status": "ERROR", "error": "postflight not captured"}
+        service = {"required_start": False, "sorter_plant_active": None,
+                   "fixture_started": (local / "fixture-control.json").exists()}
+        try:
+            after = typed_capture()
+            typed_save(local / "typed-after.json", after)
+            typed = typed_compare(baseline, after)
+            typed_save(local / "typed-restoration-report.json", typed)
+            service["sorter_plant_active"] = (
+                after["environment"]["services"].get("drives:sorter-plant.service") == "active")
+        except Exception as exc:
+            typed = {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"}
+        restored = (not cleanup["errors"] and typed["status"] == "PASS" and
+                    service["sorter_plant_active"] and not service["fixture_started"])
+        prior = json.loads(RESTORATION_GATE.read_text()) if RESTORATION_GATE.exists() else None
+        if prior and prior.get("status") != "PASS" and prior.get("run_id") != run_id:
+            # This attempt cannot close another run's unresolved restoration gate.
+            gate = {"run_id": run_id, "scenario": case, "status": "FAIL",
+                    "result": "launch_blocked_by_prior_run", "prior_run_id": prior.get("run_id")}
+            atomic_control(local / "restoration-gate.json", gate)
+        else:
+            gate = write_run_gate(local, run_id, case, "PASS" if restored else "FAIL",
+                                  result="launch_failed", report=str(local / "typed-restoration-report.json"))
+        failure = {"run_id": run_id, "scenario": case, "status": "launch_failed",
+                   "original_error": f"{type(original_error).__name__}: {original_error}",
+                   "cleanup": cleanup, "typed_restoration": typed,
+                   "service_restoration": service, "restoration_gate": gate}
+        atomic_control(local / "launch-failure.json", failure)
+        return failure
 
     def launch(self, evidence_dir, case, monitor_control, typed_baseline, preflight_report,
                startup_timeout=120, hold_timeout=30, preparation_path=None):
@@ -221,80 +335,94 @@ class ScenarioController:
         if hashlib.sha256(Path("tests/live_accumulation.py").read_bytes()).hexdigest() != expected:
             raise ValueError("local runner does not match deployment manifest")
         evidence_root = Path(evidence_dir).resolve()
-        if case in ("lane_hold", "merge_hold"):
-            try:
-                if preparation_path is None:
-                    raise ValueError("fixture scenario requires prelaunch operator approval")
-                preparation_file = Path(preparation_path).resolve()
-                preparation = json.loads(preparation_file.read_text())
-                if (preparation_file.name != "preparation.json" or
-                    preparation_file.parent.parent != evidence_root or
-                    preparation.get("scenario") != case or
-                    preparation.get("typed_baseline") != str(Path(typed_baseline).resolve()) or
-                    preparation.get("preflight_report") != str(Path(preflight_report).resolve())):
-                    raise ValueError("preparation differs from launch parameters")
-                run_id = preparation["run_id"]
-                if preparation_file.parent.name != run_id:
-                    raise ValueError("prepared run identity mismatch")
-                valid_preapproval(preparation, json.loads((preparation_file.parent / "operator-approval.json").read_text()))
-                if (preparation_file.parent / "launch-claimed.json").exists():
-                    raise ValueError("approved run was already launched")
-            except Exception as exc:
-                try:
-                    cleanup = self.monitor.collect(monitor_control, timeout=20, stop=True)
-                except Exception as cleanup_exc:
-                    raise RuntimeError(f"prelaunch approval refused: {exc}; monitor cleanup failed: {cleanup_exc}") from exc
-                if cleanup.get("cleanup_errors") or cleanup.get("orphan"):
-                    raise RuntimeError(f"prelaunch approval refused: {exc}; monitor cleanup: {cleanup}") from exc
-                raise
-        else:
-            if preparation_path is not None:
-                raise ValueError("non-fixture scenario cannot use a fixture approval")
-            run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
-        gate = RESTORATION_GATE
+        prepared = preparation_path is not None
+        if case in ("lane_hold", "merge_hold") and not prepared:
+            self.monitor.collect(monitor_control, timeout=20, stop=True)
+            raise ValueError("fixture scenario requires a prepared, approved run")
+        local = None
+        claimed = False
+        guest_attempted = False
+        baseline = None
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         try:
-            baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
-                                                              monitor_control, preflight_report)
-        except Exception:
-            # The monitor is already running when launch is requested.
+            if prepared:
+                preparation_file = Path(preparation_path).resolve()
+                if preparation_file.name != "preparation.json" or preparation_file.parent.parent != evidence_root:
+                    raise ValueError("preparation path is outside the evidence root")
+                local = preparation_file.parent
+                preparation = json.loads(preparation_file.read_text())
+                if (local / "launch-claimed.json").exists():
+                    raise ValueError("prepared run was already launched or attempted")
+                prepared_directory(local, preparation, case, typed_baseline, preflight_report,
+                                   approved=case in ("lane_hold", "merge_hold"))
+                run_id = preparation["run_id"]
+                exclusive_record(local / "launch-claimed.json",
+                                 {"run_id": run_id, "scenario": case,
+                                  "claimed_utc": datetime.now(timezone.utc).isoformat()})
+                claimed = True
+                baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
+                                                                  monitor_control, preflight_report)
+            else:
+                run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
+                baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
+                                                                  monitor_control, preflight_report)
+                local = evidence_root / run_id
+                local.mkdir(parents=True, mode=0o700, exist_ok=False)
+                exclusive_record(local / "launch-claimed.json",
+                                 {"run_id": run_id, "scenario": case,
+                                  "claimed_utc": datetime.now(timezone.utc).isoformat()})
+                claimed = True
+            guest_dir = f"/tmp/sorter-accumulation-scenario-{run_id}"
+            if case in ("lane_hold", "merge_hold"):
+                valid_preapproval(preparation, json.loads((local / "operator-approval.json").read_text()))
+            RESTORATION_GATE.parent.mkdir(parents=True, exist_ok=True)
+            write_run_gate(local, run_id, case, "PENDING",
+                           baseline=str(local / "typed-before.json"))
+            typed_save(local / "typed-before.json", baseline)
+            typed_save(local / "typed-baseline-check.json", baseline_report)
+            initial = self.state()
+            if initial["identity"] != 24113 or initial["coils_880_920"][0] or any(
+                    row[4] for row in initial["slots"]):
+                raise ValueError("PLC is not at a stopped, empty baseline")
+            atomic_control(local / "initial-state.json", initial)
+            argv = [SCADA_PYTHON, GUEST, "launch", "--directory", guest_dir,
+                    "--run-id", run_id, "--case", case, "--commit", commit,
+                    "--runner-sha256", expected, "--startup-timeout", startup_timeout,
+                    "--hold-timeout", hold_timeout]
+            guest_attempted = True
+            result = json.loads(self.scada.run(argv).splitlines()[-1])
+            if result["run_id"] != run_id or result["scenario"] != case or result["pid"] <= 0:
+                raise ValueError("launch identity mismatch")
+            control = {"version": 1, "run_id": run_id, "scenario": case,
+                       "pid": result["pid"], "start_ticks": None,
+                       "guest_dir": guest_dir, "local_dir": str(local),
+                       "monitor_control": str(Path(monitor_control).resolve()),
+                       "commit": commit, "runner_sha256": expected,
+                       "launch_utc": datetime.now(timezone.utc).isoformat()}
+            path = local / "scenario-control.json"
+            exclusive_record(path, control)
+            return path
+        except Exception as exc:
+            if claimed and local is not None:
+                if baseline is None:
+                    try:
+                        baseline = json.loads(Path(typed_baseline).read_text())
+                    except Exception:
+                        baseline = None
+                try:
+                    failure = self._failed_launch(local, run_id, case, monitor_control, baseline,
+                                                  f"/tmp/sorter-accumulation-scenario-{run_id}",
+                                                  commit, expected, exc, guest_attempted)
+                except Exception as cleanup_exc:
+                    raise RuntimeError(f"launch failed for {run_id}: {exc}; "
+                                       f"cleanup/postflight also failed: {cleanup_exc}") from exc
+                raise RuntimeError(f"launch failed for {run_id}: {exc}; "
+                                   f"cleanup={failure['cleanup']['errors']}; "
+                                   f"typed={failure['typed_restoration']['status']}") from exc
             cleanup = self.monitor.collect(monitor_control, timeout=20, stop=True)
-            if cleanup.get("cleanup_errors"):
-                raise RuntimeError(f"launch preflight failed; monitor cleanup: {cleanup['cleanup_errors']}")
+            if cleanup.get("cleanup_errors") or cleanup.get("orphan"):
+                raise RuntimeError(f"launch rejected: {exc}; monitor cleanup: {cleanup}") from exc
             raise
-        local = evidence_root / run_id
-        local.mkdir(parents=True, mode=0o700)
-        typed_save(local / "typed-before.json", baseline)
-        typed_save(local / "typed-baseline-check.json", baseline_report)
-        gate.parent.mkdir(parents=True, exist_ok=True)
-        atomic_control(gate, {"status": "PENDING", "run_id": run_id,
-                              "baseline": str(local / "typed-before.json")})
-        initial = self.state()
-        if initial["identity"] != 24113 or initial["coils_880_920"][0] or any(
-                row[4] for row in initial["slots"]):
-            raise ValueError("PLC is not at a stopped, empty baseline")
-        atomic_control(local / "initial-state.json", initial)
-        if preparation_path:
-            # A failed or interrupted launch cannot replay this approved run.
-            atomic_control(local / "launch-claimed.json", {"run_id": run_id, "scenario": case,
-                           "claimed_utc": datetime.now(timezone.utc).isoformat()})
-        guest_dir = f"/tmp/sorter-accumulation-scenario-{run_id}"
-        commit = __import__("subprocess").check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        argv = [SCADA_PYTHON, GUEST, "launch", "--directory", guest_dir,
-                "--run-id", run_id, "--case", case, "--commit", commit,
-                "--runner-sha256", expected, "--startup-timeout", startup_timeout,
-                "--hold-timeout", hold_timeout]
-        result = json.loads(self.scada.run(argv).splitlines()[-1])
-        if result["run_id"] != run_id or result["scenario"] != case or result["pid"] <= 0:
-            raise ValueError("launch identity mismatch")
-        control = {"version": 1, "run_id": run_id, "scenario": case,
-                   "pid": result["pid"], "start_ticks": None,
-                   "guest_dir": guest_dir, "local_dir": str(local),
-                   "monitor_control": str(Path(monitor_control).resolve()),
-                   "commit": commit, "runner_sha256": expected,
-                   "launch_utc": datetime.now(timezone.utc).isoformat()}
-        path = local / "scenario-control.json"
-        atomic_control(path, control)
-        return path
 
     def probe_ready(self, path, timeout=12):
         control = json.loads(Path(path).read_text())
@@ -835,6 +963,13 @@ class ScenarioController:
 
     def verify_clean(self, path):
         control = json.loads(Path(path).read_text())
+        local_gate = json.loads((Path(control["local_dir"]) / "restoration-gate.json").read_text())
+        global_gate = json.loads(RESTORATION_GATE.read_text())
+        if (local_gate.get("run_id") != control["run_id"] or
+            global_gate.get("run_id") != control["run_id"] or
+            local_gate.get("status") not in ("PENDING", "PASS") or
+            global_gate.get("status") not in ("PENDING", "PASS")):
+            raise ValueError("restoration gate belongs to another run or is not verifiable")
         before = json.loads((Path(control["local_dir"]) / "typed-before.json").read_text())
         after = typed_capture()
         typed_save(Path(control["local_dir"]) / "typed-after.json", after)
@@ -900,9 +1035,9 @@ class ScenarioController:
         proof = {**identity(control), "restored": True, "plant_service": service,
                  "initial": original, "final": final}
         atomic_control(Path(control["local_dir"]) / "final-state.json", proof)
-        atomic_control(RESTORATION_GATE,
-                       {"status": "PASS", "run_id": control["run_id"],
-                        "report": str(Path(control["local_dir"]) / "typed-restoration-report.json")})
+        write_run_gate(Path(control["local_dir"]), control["run_id"], control["scenario"],
+                       "PASS", result="completed", report=str(Path(control["local_dir"]) /
+                                                          "typed-restoration-report.json"))
         return proof
 
 
@@ -911,7 +1046,7 @@ def main(argv=None):
     sub = cli.add_subparsers(dest="action", required=True)
     p = sub.add_parser("prepare")
     p.add_argument("--evidence-dir", required=True)
-    p.add_argument("--case", choices=("lane_hold", "merge_hold"), required=True)
+    p.add_argument("--case", choices=CASES, required=True)
     p.add_argument("--typed-baseline", required=True)
     p.add_argument("--preflight-report", required=True)
     p = sub.add_parser("record-approval")
