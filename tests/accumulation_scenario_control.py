@@ -24,10 +24,11 @@ FIXTURE_UNIT = "sorter-plant.service"
 FIXTURE_STOP = ["sudo", "-n", "/usr/bin/systemctl", "stop", FIXTURE_UNIT]
 FIXTURE_START = ["sudo", "-n", "/usr/bin/systemctl", "start", FIXTURE_UNIT]
 CASES = ("smoke", "lane_hold", "merge_hold", "drive_stop", "normal")
+RESTORATION_GATE = Path.home() / "vm" / "sorter-evidence" / "phase2a-restoration-gate.json"
 
 
 def validate_typed_launch(evidence_root, typed_baseline, monitor_control):
-    gate = Path(evidence_root) / "typed-restoration-gate.json"
+    gate = RESTORATION_GATE
     if gate.exists() and json.loads(gate.read_text()).get("status") != "PASS":
         raise ValueError("previous scenario has no passing typed restoration comparison")
     baseline = json.loads(Path(typed_baseline).read_text())
@@ -83,13 +84,14 @@ class ScenarioController:
             raise ValueError("local runner does not match deployment manifest")
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
         evidence_root = Path(evidence_dir).resolve()
-        gate = evidence_root / "typed-restoration-gate.json"
+        gate = RESTORATION_GATE
         baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
                                                           monitor_control)
         local = evidence_root / run_id
         local.mkdir(parents=True, mode=0o700)
         typed_save(local / "typed-before.json", baseline)
         typed_save(local / "typed-baseline-check.json", baseline_report)
+        gate.parent.mkdir(parents=True, exist_ok=True)
         atomic_control(gate, {"status": "PENDING", "run_id": run_id,
                               "baseline": str(local / "typed-before.json")})
         initial = self.state()
@@ -535,7 +537,7 @@ class ScenarioController:
         proof = {**identity(control), "restored": True, "plant_service": service,
                  "initial": original, "final": final}
         atomic_control(Path(control["local_dir"]) / "final-state.json", proof)
-        atomic_control(Path(control["local_dir"]).parent / "typed-restoration-gate.json",
+        atomic_control(RESTORATION_GATE,
                        {"status": "PASS", "run_id": control["run_id"],
                         "report": str(Path(control["local_dir"]) / "typed-restoration-report.json")})
         return proof

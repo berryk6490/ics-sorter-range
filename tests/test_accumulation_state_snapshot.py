@@ -160,15 +160,17 @@ class SnapshotTests(unittest.TestCase):
             baseline["captured_utc"] = (now - timedelta(seconds=20)).isoformat()
             source = root / "before.json"
             source.write_text(json.dumps(baseline))
-            with patch.object(scenario, "load_control", return_value={
+            with patch.object(scenario, "RESTORATION_GATE", root / "global-gate.json"), \
+                 patch.object(scenario, "load_control", return_value={
                     "launched_utc": (now - timedelta(seconds=10)).isoformat()}):
                 self.assertEqual(scenario.validate_typed_launch(root, source, "monitor")[0],
                                  baseline)
-                (root / "typed-restoration-gate.json").write_text('{"status":"PENDING"}')
+                (root / "global-gate.json").write_text('{"status":"PENDING"}')
                 with self.assertRaisesRegex(ValueError, "previous scenario"):
-                    scenario.validate_typed_launch(root, source, "monitor")
-                (root / "typed-restoration-gate.json").unlink()
-            with patch.object(scenario, "load_control", return_value={
+                    scenario.validate_typed_launch(root / "another-run", source, "monitor")
+                (root / "global-gate.json").unlink()
+            with patch.object(scenario, "RESTORATION_GATE", root / "global-gate.json"), \
+                 patch.object(scenario, "load_control", return_value={
                     "launched_utc": (now - timedelta(seconds=30)).isoformat()}):
                 with self.assertRaisesRegex(ValueError, "precede monitor"):
                     scenario.validate_typed_launch(root, source, "monitor")

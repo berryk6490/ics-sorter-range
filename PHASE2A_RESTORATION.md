@@ -63,8 +63,9 @@ Then start/probe the drives monitor. Launch the detached scenario with
 `--typed-baseline "$EVIDENCE_DIR/typed-before.json"` in addition to the
 documented arguments. The baseline must be safe, less than ten minutes old,
 and timestamped before monitor launch. Launch writes a `PENDING` restoration
-gate in the evidence root. Only a passing `verify-clean` changes it to `PASS`.
-An unresolved gate blocks the next scenario in that evidence root.
+gate at `/home/kevin/vm/sorter-evidence/phase2a-restoration-gate.json`.
+Only a passing `verify-clean` changes it to `PASS`. An unresolved gate blocks
+the next scenario even when it uses a different evidence directory.
 If the ten-minute baseline window expires, stop the monitor, capture a new
 baseline while no validation process remains, and start a new monitor/run.
 
