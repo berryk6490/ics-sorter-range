@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -253,6 +254,10 @@ if __name__ == "__main__":
     parser.add_argument("--preparation", type=Path, required=True)
     parser.add_argument("--approval-id")
     args = parser.parse_args()
+    def interrupted(signum, _frame):
+        raise InterruptedError(f"host attempt interrupted by signal {signum}")
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     outcome = run_attempt(args.preparation, args.approval_id)
     print(json.dumps(outcome, sort_keys=True, default=str), flush=True)
     raise SystemExit(0 if outcome["status"] == "PASS" else 1)

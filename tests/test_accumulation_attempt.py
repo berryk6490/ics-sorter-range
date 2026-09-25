@@ -261,6 +261,50 @@ class LifecycleTests(unittest.TestCase):
             self.assertLess(calls.index("browser"), calls.index("release"))
             self.assertLess(calls.index("release"), calls.index("worker_collect"))
 
+    def test_interrupted_evidence_aborts_and_never_passes(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            prep = self.preparation(root, "smoke")
+            calls = []
+
+            class Monitor:
+                def start(self, *_a, **_k): return root / "monitor.json"
+                def probe(self, *_a, **_k): return {"run_id": "monitor"}
+                def collect(self, *_a, **_k):
+                    calls.append("monitor_collect")
+                    return {"orphan": False, "cleanup_errors": []}
+
+            class Scenario:
+                def launch(self, *_a, **_k): return root / "control.json"
+                def probe_ready(self, *_a, **_k): pass
+                def pre_authorization_gate(self, *_a, **_k): return {"status": "PASS"}
+                def action(self, _p, name): calls.append(name)
+                def probe_checkpoint(self, *_a, **_k): return {"sample": {"smoke": True}}
+                def evidence(self, *_a, **_k): raise InterruptedError("host interrupted")
+                def collect(self, *_a, **_k):
+                    calls.append("worker_collect")
+                    return {"terminal": {"status": "scenario_failure"}, "orphan": False}
+                def state(self):
+                    return {"slots": [[0] * 12 for _ in range(3)],
+                            "plant_faults": [0, 0, 0], "run_identity": {"epoch_fault": 0},
+                            "photoeye_faults": [0, 0, 0], "zone_view": [0] * 23}
+                def verify_clean(self, *_a):
+                    calls.append("postflight")
+                    return {"restored": True}
+
+            class Proxy:
+                def poll(self): return 0
+                def wait(self, **_k): return 0
+
+            result = attempt.run_attempt(prep, scenario=Scenario(), monitor=Monitor(),
+                                         proxy_start=lambda _p: Proxy())
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(result["functional_outcome"], "FAIL")
+            self.assertEqual(result["typed_postflight"], "PASS")
+            self.assertIn("abort", calls)
+            self.assertNotIn("release", calls)
+            self.assertLess(calls.index("worker_collect"), calls.index("postflight"))
+
 
 if __name__ == "__main__":
     unittest.main()
