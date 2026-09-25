@@ -65,6 +65,19 @@ The only new guest deployment is the read-only monitor script on drives:
 python3 tests/serial_copy.py drives \
   tests/live_accumulation_monitor.py:/home/kevin/live_accumulation_monitor.py
 python3 tests/deployment_preflight.py --live
+
+The canonical read-only deployment preflight requires each serial command to
+finish with its nonce-bound completion marker and the existing guest prompt.
+It then detaches and reattaches to the same guest for a separate `printf`
+liveness probe with a new nonce. A command or probe failure stops preflight at
+once; its JSON output distinguishes command timeout, missing marker, missing
+prompt, liveness failure, and pager-like output. The probe never logs the guest
+shell out. Service reads use exactly
+`env SYSTEMD_PAGER=cat SYSTEMD_COLORS=0 /usr/bin/systemctl --no-pager is-active UNIT`.
+The host wrapper has a 30-second bound, each serial operation has a 20-second
+bound, and a fresh probe follows every guest hash, PLC identity, and service
+read. The preflight also requires manifest guest VMs running and compares PLC
+holding register 249 with the manifest identity. The tool makes no guest writes.
 ```
 
 The host controller stays at
