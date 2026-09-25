@@ -186,9 +186,11 @@ operator reset, and restores the recorded operator settings.
 For lane and merge cases, the separate drives helper
 `/home/kevin/live_accumulation_fixture.py` is a bounded supervisor. It
 accepts only the fixed lane-1 premerge or shared-merge plant fixture. Hermes
-must obtain **one fresh operator approval after the full preflight and typed
-baseline, but before launching the monitor or worker**. `prepare` reserves the
-unique run ID and scenario first. The approval must name that ID and scenario and explicitly
+reserves a unique run ID with no expiring baseline or active process. Hermes
+then obtains **one fresh operator approval for that ID and case**. The approved
+command runs a new full preflight and typed baseline before recording the
+short-lived receipt or launching the monitor and worker. The approval must
+name that ID and scenario and explicitly
 cover both exact guest commands:
 
 ```text
@@ -226,7 +228,11 @@ restores independently at its bounded deadline.
 The approval receipt is an operator attestation supplied by Hermes; the
 script validates its scope and lifetime, not the identity of the approving
 person. Human response time is outside the worker's 120-second authorization
-timer. If the operator has not approved before launch, no worker starts.
+timer. The reservation has no baseline lifetime. The post-approval attestation
+must still be less than 300 seconds old when the receipt is issued. Changed
+PLC settings, faults, slots, program or repository identity, or an expired
+attestation consumes the reservation without a service stop. If the operator
+has not approved before launch, no worker starts.
 Do not grant generic sudo, wildcard sudoers rules, Hermes YOLO mode,
 or a broader command allowlist. The no-package smoke and drive-stop case
 never invoke this helper.
@@ -235,22 +241,40 @@ never invoke this helper.
 
 After recovering the 2026-09-25 failed attempt, the host command
 `tests/run_accumulation_attempt.py` owns the entire bounded attempt. Hermes
-first runs the full deployment preflight, typed baseline capture and
-comparison, then `prepare` to reserve a unique run ID. The operator approves
-that ID and `lane_hold` for exactly these transitions, once:
+reserves a unique run ID using a read-only stopped PLC observation:
+
+```sh
+python3 tests/accumulation_scenario_control.py reserve --evidence-dir "$EVIDENCE_DIR" --case lane_hold
+```
+
+No monitor, worker, fixture, approval receipt, or expiring typed baseline
+exists while waiting for the operator. The operator approves that run ID and
+`lane_hold` for exactly these transitions, once:
 
 ```text
 sudo -n /usr/bin/systemctl stop sorter-plant.service
 sudo -n /usr/bin/systemctl start sorter-plant.service
 ```
 
-The approval ID is supplied to the one command. It is spent before the
-monitor or worker starts; no second approval is requested during restoration.
-For one run, invoke:
+After approval, record its UTC response timestamp and unique receipt ID.
+Invoke one command. It spends the reservation, runs the full deployment
+preflight and fresh typed capture, compares critical PLC state with the
+reservation and immediately before issuing the receipt, then starts the
+monitor and worker. The response timestamp must still be less than 300
+seconds old at issuance. A failed check consumes the run ID; obtain a new
+run ID and approval for another attempt. No second approval is requested
+during cleanup.
 
 ```sh
-python3 tests/run_accumulation_attempt.py --preparation "$PREPARATION" --approval-id "$APPROVAL_RECEIPT_ID"
+python3 tests/run_accumulation_attempt.py --reservation "$RESERVATION" --approved-at "$APPROVAL_UTC" --approval-id "$APPROVAL_RECEIPT_ID"
 ```
+
+The evidence root contains `reservations/<run_id>.json`, an exclusive
+`.claim.json`, fresh `.preflight.json` and `.typed-before.json`, plus the
+activated `<run_id>/preparation.json`. A reservation may wait beyond ten
+minutes because the baseline is captured only after approval. The one-use
+host and guest ledgers and exact sudo argv remain unchanged. The former
+`--preparation` invocation is retained for diagnostic compatibility.
 
 The command starts and proves the drives monitor, launches the detached
 worker, checks its existing post-ready gate, authorizes and starts the bounded
@@ -264,6 +288,20 @@ Changing position, dwell and event sequence are saved as telemetry and are
 not required to equal an older checkpoint. A read spanning two plant commits
 is classified as `InconsistentSnapshot` and retried up to eight times. A
 consistent identity mismatch or missing safety observation fails the attempt.
+The old slot-0 failure is specifically explained by the preserved monitor
+trace: checkpoint commit 582 had slot 0 token 1, serial 1, scanner sequence 1,
+barcode 6001, destination 2, zone 2, motion 2, dwell 11, zone sequence 171.
+The monitor still showed those stable fields at commit 708, but dwell had
+risen to 136 and zone sequence to 296; by commit 780 they were 209 and 369.
+The old probe compared sequence for equality and allowed only 15 dwell ticks
+of lag against the older checkpoint, so its `modbus slot 0 differs` assertion
+was guaranteed once evidence collection took more than that window. It did
+not capture the failing Modbus probe row, so the trace cannot independently
+exclude another transient mismatch. The new probe brackets its PLC read with
+the plant commit sequence, retries an inconsistent read eight times, and
+compares the package identity and hold invariants only after a consistent
+read. Position, dwell and sequence are retained as telemetry. This logic has
+focused tests; a live package run has not yet verified it.
 The result is `attempt-result.json` beside `preparation.json`; `status=PASS`
 requires independent evidence, a complete package run, and typed restoration.
 `functional_outcome`, `evidence_quality`, `service_restoration`,
@@ -276,8 +314,11 @@ when cleanup passes. Review the structured result and guest terminal records
 before another run.
 
 To exercise the same lifecycle without packages or service transitions, use
-`prepare --case smoke` and then `python3 tests/run_accumulation_attempt.py
---preparation "$PREPARATION"` (no approval ID). The command attaches the real
+`reserve --case smoke`, wait if testing delayed approval, then call
+`python3 tests/run_accumulation_attempt.py --reservation "$RESERVATION"
+--approved-at "$SMOKE_APPROVAL_UTC"` without a service approval ID. The
+timestamp marks a simulated approval handoff; no fixture authorization is
+created. The command attaches the real
 serial HMI proxy at the smoke checkpoint and releases only after HMI API
 evidence. The old step-by-step commands below are retained as diagnostic
 reference, not a live validation procedure.

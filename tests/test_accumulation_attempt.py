@@ -1,5 +1,8 @@
 """Focused lifecycle and committed-read tests; no live PLC or service calls."""
 import json
+import hashlib
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import tempfile
@@ -10,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import check_accumulation_views as views
 import run_accumulation_attempt as attempt
 import accumulation_scenario_control as scenario
+from test_accumulation_state_snapshot import sample
 
 
 class Reply:
@@ -157,6 +161,135 @@ class LifecycleTests(unittest.TestCase):
             self.assertLess(calls.index("checkpoint"), calls.index("evidence"))
             self.assertLess(calls.index("evidence"), calls.index("release"))
             self.assertLess(calls.index("worker_collect"), calls.index("postflight"))
+
+
+class DelayedReservationTests(unittest.TestCase):
+    def preparation(self, root, case):
+        run = root / ("20260925T180000_" + "a" * 32)
+        run.mkdir()
+        path = run / "preparation.json"
+        path.write_text(json.dumps({"run_id": run.name, "scenario": case,
+                                    "typed_baseline": str(root / "typed-before.json"),
+                                    "preflight_report": str(root / "preflight.json")}))
+        return path
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.gate = patch.object(scenario, "RESTORATION_GATE", self.root / "gate.json")
+        self.gate.start()
+        self.addCleanup(self.gate.stop)
+        (self.root / "gate.json").write_text('{"status":"PASS"}')
+        self.plc = sample()["plc"]
+        self.calls = []
+        outer = self
+
+        class Scenario(scenario.ScenarioController):
+            def state(self): return deepcopy(outer.plc)
+            def launch(self, *_a, **_k):
+                outer.calls.append("launch")
+                return outer.root / "control.json"
+            def probe_ready(self, *_a, **_k): pass
+            def pre_authorization_gate(self, *_a, **_k): return {"status": "PASS"}
+            def action(self, _path, action): outer.calls.append(action)
+            def probe_checkpoint(self, *_a, **_k): return {"sample": {"smoke": True}}
+            def evidence(self, *_a, **_k): return {"api": {}}
+            def collect(self, *_a, **_k):
+                return {"terminal": {"status": "complete"}, "orphan": False}
+            def verify_clean(self, *_a): return {"restored": True}
+        self.sc = Scenario()
+
+        class Monitor:
+            def start(self, *_a, **_k):
+                outer.calls.append("monitor_start")
+                return outer.root / "monitor.json"
+            def probe(self, *_a, **_k): return {"run_id": "monitor"}
+            def collect(self, *_a, **_k):
+                return {"orphan": False, "cleanup_errors": []}
+        self.monitor = Monitor()
+
+    def preflight(self, report, _log):
+        self.calls.append("fresh_preflight")
+        report.write_text(json.dumps({"schema_version": 1, "status": "PASS", "live": True,
+            "completed_utc": datetime.now(timezone.utc).isoformat(),
+            "manifest_sha256": hashlib.sha256(scenario.MANIFEST.read_bytes()).hexdigest(),
+            "source_and_guest_hashes": len(json.loads(scenario.MANIFEST.read_text())["components"]),
+            "program_identity": 24113}))
+
+    def capture(self):
+        self.calls.append("fresh_baseline")
+        result = sample()
+        result["captured_utc"] = datetime.now(timezone.utc).isoformat()
+        return result
+
+    def reserve_aged(self, case="smoke"):
+        reservation = self.sc.reserve(self.root / "evidence", case)
+        record = json.loads(reservation.read_text())
+        record["reserved_utc"] = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+        reservation.write_text(json.dumps(record))
+        return reservation
+
+    def test_late_human_then_fresh_baseline_runs_no_package_lifecycle(self):
+        reservation = self.reserve_aged()
+        outcome = attempt.run_reserved(
+            reservation, datetime.now(timezone.utc).isoformat(), scenario=self.sc,
+            monitor=self.monitor, preflight_run=self.preflight, capture=self.capture,
+            proxy_start=lambda _p: None)
+        self.assertEqual(outcome["status"], "PASS")
+        self.assertGreater(outcome["reservation_age_seconds"], 600)
+        self.assertLess(self.calls.index("fresh_preflight"), self.calls.index("fresh_baseline"))
+        self.assertLess(self.calls.index("fresh_baseline"), self.calls.index("launch"))
+
+    def test_changed_critical_state_fails_before_worker_or_receipt(self):
+        reservation = self.reserve_aged("lane_hold")
+        def changed():
+            value = self.capture()
+            value["plc"]["seed"] = 138
+            return value
+        outcome = attempt.run_reserved(
+            reservation, datetime.now(timezone.utc).isoformat(), "unused_receipt_123",
+            scenario=self.sc, monitor=self.monitor,
+            preflight_run=self.preflight, capture=changed)
+        self.assertEqual(outcome["status"], "FAIL")
+        self.assertEqual(outcome["service_restoration"], "NOT_TOUCHED")
+        self.assertIn("configuration changed", outcome["error"])
+        self.assertNotIn("monitor_start", self.calls)
+        self.assertFalse((self.root / "evidence" / reservation.stem).exists())
+
+    def test_expired_approval_consumes_reservation_without_preflight(self):
+        reservation = self.reserve_aged("lane_hold")
+        old = (datetime.now(timezone.utc) - timedelta(seconds=301)).isoformat()
+        outcome = attempt.run_reserved(
+            reservation, old, "unused_receipt_123", scenario=self.sc,
+            monitor=self.monitor, preflight_run=self.preflight, capture=self.capture)
+        self.assertEqual(outcome["status"], "FAIL")
+        self.assertIn("expired", outcome["error"])
+        self.assertNotIn("fresh_preflight", self.calls)
+        with self.assertRaises(FileExistsError):
+            attempt.run_reserved(reservation, datetime.now(timezone.utc).isoformat(),
+                                 "another_receipt_123", scenario=self.sc)
+
+    def test_approval_expiring_during_fresh_reads_stops_before_worker(self):
+        reservation = self.reserve_aged("lane_hold")
+        with patch.object(attempt, "approval_age", side_effect=[1.0, ValueError("operator approval expired")]):
+            outcome = attempt.run_reserved(
+                reservation, datetime.now(timezone.utc).isoformat(), "unused_receipt_123",
+                scenario=self.sc, monitor=self.monitor,
+                preflight_run=self.preflight, capture=self.capture)
+        self.assertEqual(outcome["status"], "FAIL")
+        self.assertIn("expired", outcome["error"])
+        self.assertEqual(self.calls, ["fresh_preflight", "fresh_baseline"])
+        self.assertEqual(outcome["service_restoration"], "NOT_TOUCHED")
+
+    def test_tampered_reservation_scope_is_rejected(self):
+        reservation = self.reserve_aged("lane_hold")
+        row = json.loads(reservation.read_text())
+        row["start_argv"] = ["sudo", "systemctl", "start", "sorter-plant.service"]
+        reservation.write_text(json.dumps(row))
+        with self.assertRaisesRegex(ValueError, "scope mismatch"):
+            self.sc.claim_reservation(reservation)
+        self.assertNotIn("fresh_preflight", self.calls)
 
     def test_missing_approval_rejected_before_monitor(self):
         with tempfile.TemporaryDirectory() as name:

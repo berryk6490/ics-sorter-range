@@ -41,6 +41,7 @@ APPROVAL_LIFETIME = 300
 APPROVAL_LEDGER = Path.home() / "vm" / "sorter-evidence" / "phase2a-host-approval-ledger.jsonl"
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}_[0-9a-f]{32}")
 PREPARATION_SCHEMA = 2
+RESERVATION_SCHEMA = 1
 
 
 def exclusive_record(path, value):
@@ -242,6 +243,76 @@ class ScenarioController:
                 "--run-id", control["run_id"], "--case", control["scenario"],
                 "--pid", control["pid"], "--start-ticks", control["start_ticks"]]
         return valid(json.loads(self.scada.run(args).splitlines()[-1]), control)
+
+    def reserve(self, evidence_dir, case):
+        """Name a run for human approval without starting any expiring timer."""
+        if case not in ("lane_hold", "smoke"):
+            raise ValueError("single-command reservation supports lane_hold or smoke")
+        if RESTORATION_GATE.exists() and json.loads(RESTORATION_GATE.read_text()).get("status") != "PASS":
+            raise ValueError("previous run has no passing restoration gate")
+        root = Path(evidence_dir).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        state = self.state()
+        validate_unchanged_plc(state, state)
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
+        reservations = root / "reservations"
+        reservations.mkdir(mode=0o700, exist_ok=True)
+        record = {"version": RESERVATION_SCHEMA, "run_id": run_id, "scenario": case,
+                  "unit": FIXTURE_UNIT, "stop_argv": FIXTURE_STOP,
+                  "start_argv": FIXTURE_START, "reserved_utc": datetime.now(timezone.utc).isoformat(),
+                  "repository_commit": subprocess.check_output(["git", "rev-parse", "HEAD"],
+                                                               text=True).strip(),
+                  "manifest_sha256": hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
+                  "plc_state": state}
+        path = reservations / f"{run_id}.json"
+        exclusive_record(path, record)
+        return path
+
+    def claim_reservation(self, reservation_path):
+        """Spend a reservation on the first post-approval attempt, even if it fails."""
+        path = Path(reservation_path).resolve()
+        root = path.parent.parent
+        record = json.loads(path.read_text())
+        run_id = record.get("run_id")
+        if (path.parent.name != "reservations" or path.name != f"{run_id}.json" or
+            not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id) or
+            record.get("version") != RESERVATION_SCHEMA or
+            record.get("scenario") not in ("lane_hold", "smoke") or
+            record.get("unit") != FIXTURE_UNIT or record.get("stop_argv") != FIXTURE_STOP or
+            record.get("start_argv") != FIXTURE_START or
+            not isinstance(record.get("reserved_utc"), str) or
+            (root / run_id).exists()):
+            raise ValueError("reservation identity or scope mismatch")
+        exclusive_record(path.with_suffix(".claim.json"),
+                         {"run_id": run_id, "scenario": record["scenario"],
+                          "claimed_utc": datetime.now(timezone.utc).isoformat()})
+        if (subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() !=
+            record.get("repository_commit") or
+            hashlib.sha256(MANIFEST.read_bytes()).hexdigest() != record.get("manifest_sha256")):
+            raise ValueError("repository identity changed since operator reservation")
+        return path, record
+
+    def activate_reservation(self, reservation_path, record, baseline, preflight):
+        """Bind the same reserved ID to a fresh checked baseline after approval."""
+        path = Path(reservation_path).resolve()
+        root = path.parent.parent
+        if not path.with_suffix(".claim.json").exists():
+            raise ValueError("reservation has not been claimed")
+        validate_typed_launch(root, baseline, None, preflight)
+        before = record["plc_state"]
+        fresh = json.loads(Path(baseline).read_text())["plc"]
+        validate_unchanged_plc(before, fresh)
+        validate_unchanged_plc(fresh, self.state())
+        local = root / record["run_id"]
+        local.mkdir(mode=0o700, exist_ok=False)
+        preparation = {"version": PREPARATION_SCHEMA, "run_id": record["run_id"],
+                       "scenario": record["scenario"],
+                       "typed_baseline": str(Path(baseline).resolve()),
+                       "preflight_report": str(Path(preflight).resolve()),
+                       "prepared_utc": datetime.now(timezone.utc).isoformat()}
+        prepared = local / "preparation.json"
+        exclusive_record(prepared, preparation)
+        return prepared
 
     def prepare(self, evidence_dir, case, typed_baseline, preflight_report):
         """Reserve the run identity before requesting human approval."""
@@ -1067,6 +1138,9 @@ class ScenarioController:
 def main(argv=None):
     cli = argparse.ArgumentParser()
     sub = cli.add_subparsers(dest="action", required=True)
+    p = sub.add_parser("reserve")
+    p.add_argument("--evidence-dir", required=True)
+    p.add_argument("--case", choices=("lane_hold", "smoke"), required=True)
     p = sub.add_parser("prepare")
     p.add_argument("--evidence-dir", required=True)
     p.add_argument("--case", choices=CASES, required=True)
@@ -1103,7 +1177,9 @@ def main(argv=None):
     args = cli.parse_args(argv)
     control = ScenarioController()
     try:
-        if args.action == "prepare":
+        if args.action == "reserve":
+            result = {"reservation": str(control.reserve(args.evidence_dir, args.case))}
+        elif args.action == "prepare":
             result = {"preparation": str(control.prepare(args.evidence_dir, args.case,
                                                           args.typed_baseline, args.preflight_report))}
         elif args.action == "record-approval":
@@ -1138,7 +1214,7 @@ def main(argv=None):
         else:
             result = control.verify_clean(args.control)
     except Exception as exc:
-        if args.action not in ("launch", "prepare", "record-approval"):
+        if args.action not in ("launch", "prepare", "reserve", "record-approval"):
             record = json.loads(Path(args.control).read_text())
             category = ("evidence_failure" if args.action in ("evidence", "probe-checkpoint") else
                         "monitor_failure" if args.action in ("probe-ready", "post-ready-gate", "authorize") else

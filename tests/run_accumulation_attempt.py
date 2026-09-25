@@ -1,8 +1,4 @@
-"""One bounded host command for an approved Phase 2A validation attempt.
-
-Full deployment preflight, typed baseline and run preparation precede this
-command. For a fixture run, the supplied approval ID is spent on entry.
-"""
+"""One bounded host command from post-approval preflight through restoration."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -15,12 +11,14 @@ import time
 from urllib.request import urlopen
 
 from accumulation_monitor_control import Controller as MonitorController, atomic_control
-from accumulation_scenario_control import ScenarioController
+from accumulation_scenario_control import ScenarioController, APPROVAL_LIFETIME
+from accumulation_state_snapshot import capture as typed_capture, save as typed_save
 
 ROOT = Path(__file__).resolve().parent
 PROXY = ROOT / "serial_hmi_proxy.py"
 BROWSER = ROOT / "browser_accumulation.py"
 RECOVERY = "/home/kevin/sorter-services/recover_accumulation_state.py"
+PREFLIGHT = ROOT / "deployment_preflight.py"
 
 
 def error(exc):
@@ -40,6 +38,72 @@ def evidence_hashes(root):
             rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}")
     (root / "SHA256SUMS").write_text("\n".join(rows) + "\n")
     return len(rows)
+
+
+def approval_age(approved_at, *, now=None):
+    try:
+        when = datetime.fromisoformat(approved_at)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("approval timestamp missing or malformed") from exc
+    if when.tzinfo is None:
+        raise ValueError("approval timestamp must include timezone")
+    seconds = ((now or datetime.now(timezone.utc)) - when).total_seconds()
+    if not 0 <= seconds < APPROVAL_LIFETIME:
+        raise ValueError("operator approval expired or dated in the future")
+    return seconds
+
+
+def live_preflight(report, log):
+    with log.open("w") as stream:
+        subprocess.run([sys.executable, str(PREFLIGHT), "--live", "--report", str(report)],
+                       cwd=ROOT.parent, stdout=stream, stderr=subprocess.STDOUT,
+                       timeout=180, check=True)
+
+
+def run_reserved(reservation, approved_at, approval_id=None, *, scenario=None,
+                 preflight_run=live_preflight, capture=typed_capture, **attempt_options):
+    """Spend one reservation, then create a new baseline after human approval."""
+    sc = scenario or ScenarioController()
+    reservation, record = sc.claim_reservation(reservation)
+    root = reservation.parent.parent
+    run_id, case = record["run_id"], record["scenario"]
+    result_path = reservation.with_suffix(".result.json")
+    preflight = reservation.with_suffix(".preflight.json")
+    baseline = reservation.with_suffix(".typed-before.json")
+    approval = None
+    try:
+        if case == "lane_hold" and not approval_id:
+            raise ValueError("fresh approval receipt ID required for lane fixture")
+        if case == "smoke" and approval_id:
+            raise ValueError("smoke must not spend a service approval receipt")
+        approval = approval_age(approved_at)
+        start = time.monotonic()
+        preflight_run(preflight, reservation.with_suffix(".preflight.log"))
+        preflight_seconds = round(time.monotonic() - start, 3)
+        typed_save(baseline, capture())
+        # The human wait has no worker timer, but the attestation itself is
+        # short lived and checked again immediately before receipt issuance.
+        approval_at_receipt = approval_age(approved_at)
+        prepared = sc.activate_reservation(reservation, record, baseline, preflight)
+        approval_at_receipt = approval_age(approved_at)
+        outcome = run_attempt(prepared, approval_id, scenario=sc, **attempt_options)
+        outcome["reservation_age_seconds"] = round(
+            (datetime.now(timezone.utc) - datetime.fromisoformat(record["reserved_utc"])).total_seconds(), 3)
+        outcome["approval_age_before_preflight_seconds"] = round(approval, 3)
+        outcome["approval_age_at_receipt_seconds"] = round(approval_at_receipt, 3)
+        outcome["fresh_preflight_seconds"] = preflight_seconds
+        atomic_control(prepared.parent / "attempt-result.json", outcome)
+        evidence_hashes(root)
+        return outcome
+    except BaseException as exc:
+        failure = {"run_id": run_id, "scenario": case, "status": "FAIL",
+                   "functional_outcome": "NOT_STARTED", "evidence_quality": "NOT_CAPTURED",
+                   "service_restoration": "NOT_TOUCHED", "typed_postflight": "NOT_RUN",
+                   "orphans": "NONE_STARTED", "approval_receipt_spent": False,
+                   "error": error(exc), "recorded_utc": datetime.now(timezone.utc).isoformat()}
+        atomic_control(result_path, failure)
+        evidence_hashes(root)
+        return failure
 
 
 def start_proxy(path, *, timeout=8):
@@ -251,13 +315,17 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--preparation", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--reservation", type=Path)
+    source.add_argument("--preparation", type=Path)
     parser.add_argument("--approval-id")
+    parser.add_argument("--approved-at", help="UTC timestamp of this run's operator approval")
     args = parser.parse_args()
     def interrupted(signum, _frame):
         raise InterruptedError(f"host attempt interrupted by signal {signum}")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
-    outcome = run_attempt(args.preparation, args.approval_id)
+    outcome = (run_reserved(args.reservation, args.approved_at, args.approval_id)
+               if args.reservation else run_attempt(args.preparation, args.approval_id))
     print(json.dumps(outcome, sort_keys=True, default=str), flush=True)
     raise SystemExit(0 if outcome["status"] == "PASS" else 1)
