@@ -178,8 +178,11 @@ def compare(before, after):
                  "plc.scanner_fault_mask", "plc.run_identity.epoch_fault",
                  "plc.xle_health.1", "plc.zone_view.22", "plc.zone_view.20"):
         _record(rows, before, after, path, "RESET_ZERO", 0)
+    # The PLC clears its internal zone rows at reset, but copies them to the
+    # supervisory registers only while plant and accumulation modes are on.
+    # With both modes off these are inactive historical payload, not occupancy.
     for idx in (0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17, 18):
-        _record(rows, before, after, f"plc.zone_view.{idx}", "RESET_ZERO", 0)
+        _record(rows, before, after, f"plc.zone_view.{idx}", "INFORMATIONAL")
     _record(rows, before, after, "plc.coils_880_920.0", "SAFE_INVARIANT", "master off",
             lambda v: v is False)
     for name in VFD_NAMES:

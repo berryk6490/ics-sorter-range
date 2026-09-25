@@ -231,7 +231,57 @@ Do not grant generic sudo, wildcard sudoers rules, Hermes YOLO mode,
 or a broader command allowlist. The no-package smoke and drive-stop case
 never invoke this helper.
 
-### Canonical Hermes command order
+### Canonical Lane 1 command (supersedes the manual sequence below)
+
+After recovering the 2026-09-25 failed attempt, the host command
+`tests/run_accumulation_attempt.py` owns the entire bounded attempt. Hermes
+first runs the full deployment preflight, typed baseline capture and
+comparison, then `prepare` to reserve a unique run ID. The operator approves
+that ID and `lane_hold` for exactly these transitions, once:
+
+```text
+sudo -n /usr/bin/systemctl stop sorter-plant.service
+sudo -n /usr/bin/systemctl start sorter-plant.service
+```
+
+The approval ID is supplied to the one command. It is spent before the
+monitor or worker starts; no second approval is requested during restoration.
+For one run, invoke:
+
+```sh
+python3 tests/run_accumulation_attempt.py --preparation "$PREPARATION" --approval-id "$APPROVAL_RECEIPT_ID"
+```
+
+The command starts and proves the drives monitor, launches the detached
+worker, checks its existing post-ready gate, authorizes and starts the bounded
+fixture, waits for a PLC checkpoint, obtains a commit-consistent direct Modbus
+snapshot, compares stable package identities and safety state with OPC UA and
+HMI API, starts the existing serial HMI proxy, captures a real rendered browser
+screenshot, releases the worker, collects all processes, performs documented
+operator reset/plant/XLe recovery if required, and runs typed postflight.
+Changing position, dwell and event sequence are saved as telemetry and are
+not required to equal an older checkpoint. A read spanning two plant commits
+is classified as `InconsistentSnapshot` and retried up to eight times. A
+consistent identity mismatch or missing safety observation fails the attempt.
+The result is `attempt-result.json` beside `preparation.json`; `status=PASS`
+requires independent evidence, a complete package run, and typed restoration.
+`functional_outcome`, `evidence_quality`, `service_restoration`,
+`plc_recovery`, `typed_postflight`, `orphans`, and `errors` remain separate.
+On timeout, interruption or error, the command stops its own proxy, aborts
+the matching worker, collects the monitor and fixture, and verifies cleanup.
+The guest fixture independently restores `sorter-plant.service` on its own
+bounded timeout if the host disappears. A failed package run stays FAIL even
+when cleanup passes. Review the structured result and guest terminal records
+before another run.
+
+To exercise the same lifecycle without packages or service transitions, use
+`prepare --case smoke` and then `python3 tests/run_accumulation_attempt.py
+--preparation "$PREPARATION"` (no approval ID). The command attaches the real
+serial HMI proxy at the smoke checkpoint and releases only after HMI API
+evidence. The old step-by-step commands below are retained as diagnostic
+reference, not a live validation procedure.
+
+### Prior manual command order (diagnostic reference only)
 
 The typed restoration baseline and comparison in
 [`PHASE2A_RESTORATION.md`](PHASE2A_RESTORATION.md) are mandatory. Capture the

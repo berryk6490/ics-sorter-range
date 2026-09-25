@@ -154,6 +154,20 @@ the scanner/plant handshake, then restore the saved settings. Do not write
 internal slot, fault, or outcome registers. Verify three slots empty,
 faults clear, coil 920 off, services active, and no fixture process.
 
+The canonical Phase 2A Lane 1 validation command and typed evidence contract
+are now in `ACCUMULATION_MONITOR.md`. The 2026-09-25 failed Lane 1 run
+`20260925T164518_83e69e448aa24ef38595f5dc091a0d2a` was preserved before
+recovery. Its independent probe compared changing dwell and event sequence
+to an earlier checkpoint and failed before browser evidence. The worker
+timed out waiting for release, restored the normal plant service, and left
+master off with empty slots and zero trailer counters. The operator reset,
+scanner ACKs, journal-backed XLe epoch 5 and normal plant handshake cleared
+plant and epoch fault 1 without induction. The typed comparator now treats
+inactive historical zone payload registers as informational while requiring
+master off, empty slots, zone ready/fault zero and all other safe invariants.
+The old run's canonical `verify-clean` then passed. Its package outcome
+remains failed; restoration PASS does not change that result.
+
 ## Verified live results (2026-09-24 UTC)
 
 Evidence is outside Git in

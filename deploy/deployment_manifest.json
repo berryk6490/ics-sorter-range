@@ -216,7 +216,7 @@
       "canonical_destination": "/home/kevin/sorter-services/check_accumulation_views.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "15590693f4a53c5f548bcbe539912fb7acf82dcdd566a53586b9b4c1f743e3ad",
+      "sha256": "7d13670037da8310363078af473129dd2305cdcb7230e3bdbc684369d2e655ff",
       "verification_command": "sha256sum /home/kevin/sorter-services/check_accumulation_views.py"
     },
     {
@@ -299,6 +299,15 @@
       "hash_policy": "exact",
       "sha256": "f5ecd29d1e7c88e69f9fcf5388e205671a39f9e30d0cc30467a34ad7c1d3f6c9",
       "verification_command": "sha256sum /home/kevin/sorter-services/read_authorization_gate.py"
+    },
+    {
+      "repository_source": "tests/recover_accumulation_state.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/recover_accumulation_state.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "2e5b4a0ab9cc55254e31b382f4098d9ddd3de512dd162d842dc471b6c066e93b",
+      "verification_command": "sha256sum /home/kevin/sorter-services/recover_accumulation_state.py"
     }
   ],
   "milestone": "phase-2a-accumulation-backpressure",

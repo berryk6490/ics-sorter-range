@@ -142,6 +142,14 @@ class SnapshotTests(unittest.TestCase):
         new["captured_utc"] = "later"
         self.assertEqual(snap.compare(old, new)["status"], "PASS")
 
+    def test_inactive_historical_zone_payload_after_reset(self):
+        old = sample()
+        new = deepcopy(old)
+        new["plc"]["zone_view"][:18] = [2, 2, 1, 284, 444, 1] * 3
+        self.assertEqual(snap.compare(old, new)["status"], "PASS")
+        new["plc"]["zone_view"][20] = 1  # active validated readiness remains unsafe
+        self.assertEqual(snap.compare(old, new)["status"], "FAIL")
+
     def test_unsettled_or_faulted_drive(self):
         self.check_failure(lambda s: s["plc"]["vfds"]["induct1"].__setitem__(
             "feedback_rpm", 100), "feedback_rpm")

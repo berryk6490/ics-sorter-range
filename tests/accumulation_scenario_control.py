@@ -193,6 +193,37 @@ def valid(row, control):
     return row
 
 
+def validate_hold_snapshot(sample, plc, motion):
+    """Compare committed identity and safety state; retain changing telemetry."""
+    if (plc["epoch"] != sample["epoch"] or plc["nonce"] != sample["nonce"] or
+        plc["faults"] != {"plant": 0, "zone": 0, "photoeyes": [0, 0, 0]} or
+        any(plc["counters"]) or not plc["master"]):
+        raise AssertionError("consistent PLC snapshot violates hold safety invariants")
+    telemetry = []
+    for row in sample["rows"]:
+        if row["state"] not in (1, 2, 3, 4) or row["motion"] != motion:
+            continue
+        slot = row["slot"]
+        observed = plc["slots"][slot]
+        stable = ("token", "serial", "scanner_sequence", "barcode", "state",
+                  "destination", "actual")
+        if (plc["identities"][slot] != row["package_id"] or
+            plc["lanes"][slot] != row["lane"] or
+            any(observed[i] != row[key] for i, key in enumerate(stable))):
+            raise AssertionError(f"consistent PLC identity mismatch at slot {slot}")
+        actual = plc["rows"][slot]
+        if actual[:3] != [row["zone"], row["motion"], row["hold_reason"]] or actual[5] != 1:
+            raise AssertionError(f"PLC hold invariant changed at slot {slot}")
+        telemetry.append({"slot": slot, "package_id": row["package_id"],
+                          "checkpoint_dwell": row["dwell"], "current_dwell": actual[3],
+                          "checkpoint_sequence": row["sequence"],
+                          "current_sequence": actual[4],
+                          "current_position": plc["plant_rows"][slot][6]})
+    if not telemetry:
+        raise AssertionError("no required held package in committed PLC snapshot")
+    return telemetry
+
+
 class ScenarioController:
     def __init__(self, scada=None, drives=None, monitor=None):
         self.scada = scada or SerialGuest("scada")
@@ -864,16 +895,8 @@ class ScenarioController:
                 command = [SCADA_PYTHON, "/home/kevin/sorter-services/check_accumulation_views.py",
                            "--motion", motion, "--timeout", 8, "--output", output]
                 agreement = json.loads(self.scada.run(command, timeout=13).splitlines()[-1])
-                for row in sample["rows"]:
-                    if row["state"] not in (1, 2, 3, 4) or row["motion"] != motion:
-                        continue
-                    slot = row["slot"]
-                    expected = [row["zone"], row["motion"], row["hold_reason"],
-                                row["dwell"], row["sequence"], row["quality"]]
-                    for source in ("modbus", "opc", "hmi"):
-                        actual = agreement[source]["rows" if source != "hmi" else "zone_rows"][slot]
-                        if actual[:3] != expected[:3] or actual[4:] != expected[4:] or abs(actual[3] - expected[3]) > 15:
-                            raise AssertionError(f"{source} slot {slot} differs from checkpoint")
+                telemetry = validate_hold_snapshot(sample, agreement["modbus"], motion)
+                agreement["changing_telemetry"] = telemetry
                 (Path(control["local_dir"]) / "opc-agreement.json").write_text(
                     json.dumps(agreement, sort_keys=True, indent=2) + "\n")
             proof = {**identity(control), "checkpoint": checkpoint,
@@ -904,10 +927,10 @@ class ScenarioController:
                 lane = api["plant_lane"][slot]
                 observed_id = f"l{lane}-{plant[0]+plant[1]*30000}-{plant[2]}-{plant[3]}-{plant[4]}"
                 zone = api["zone_rows"][slot]
-                if (observed_id != row["package_id"] or zone[:3] != [row["zone"], row["motion"], row["hold_reason"]] or
-                    zone[4:] != [row["sequence"], row["quality"]] or
-                    abs(zone[3] - row["dwell"]) > 15 or api["plant_status"][slot] != 1):
-                    raise AssertionError(f"HMI package or bounded zone lag mismatch at slot {slot}")
+                if (observed_id != row["package_id"] or
+                    zone[:3] != [row["zone"], row["motion"], row["hold_reason"]] or
+                    zone[5] != 1 or api["plant_status"][slot] != 1):
+                    raise AssertionError(f"HMI package identity or hold invariant mismatch at slot {slot}")
                 matching += 1
             if matching < (3 if control["scenario"] == "merge_hold" else 1):
                 raise AssertionError("required HMI package evidence absent")
