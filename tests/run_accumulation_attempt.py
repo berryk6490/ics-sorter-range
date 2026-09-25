@@ -63,6 +63,28 @@ def start_proxy(path, *, timeout=8):
         raise
 
 
+def start_driver(path, *, timeout=8):
+    stream = path.open("w")
+    process = subprocess.Popen(["geckodriver", "--port", "4445"],
+                               stdout=stream, stderr=subprocess.STDOUT)
+    stream.close()
+    end = time.monotonic() + timeout
+    try:
+        while time.monotonic() < end:
+            if process.poll() is not None:
+                raise RuntimeError(f"geckodriver exited {process.returncode}")
+            try:
+                with urlopen("http://127.0.0.1:4445/status", timeout=1) as response:
+                    if response.status == 200:
+                        return process
+            except OSError:
+                time.sleep(.15)
+        raise TimeoutError("rendered browser driver did not become ready")
+    except BaseException:
+        stop_proxy(process)
+        raise
+
+
 def stop_proxy(process):
     if process is None:
         return None
@@ -78,7 +100,7 @@ def stop_proxy(process):
 
 
 def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
-                proxy_start=start_proxy, browser_run=None):
+                proxy_start=start_proxy, driver_start=start_driver, browser_run=None):
     preparation = Path(preparation).resolve()
     reserved = json.loads(preparation.read_text())
     case = reserved["scenario"]
@@ -98,7 +120,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
               "plc_recovery": "NOT_NEEDED", "typed_postflight": "NOT_RUN",
               "orphans": "UNKNOWN", "errors": {}, "artifacts": {}}
     monitor_path = control_path = None
-    proxy = None
+    proxy = driver = None
     released = False
     try:
         if case == "lane_hold":
@@ -122,6 +144,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
         result["checkpoint"] = sc.probe_checkpoint(control_path, timeout=90)
         proxy = proxy_start(local / "hmi-proxy.log")
         if case == "lane_hold":
+            driver = driver_start(local / "geckodriver.log")
             if browser_run is None:
                 completed = subprocess.run(
                     [sys.executable, str(BROWSER), "lane_hold", "--output-dir", str(local)],
@@ -137,8 +160,12 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
         result["evidence_quality"] = "PASS"
         proxy_error = stop_proxy(proxy)
         proxy = None
+        driver_error = stop_proxy(driver)
+        driver = None
         if proxy_error:
             raise RuntimeError(proxy_error)
+        if driver_error:
+            raise RuntimeError(driver_error)
         sc.action(control_path, "release")
         released = True
         result["release_sent"] = True
@@ -152,6 +179,12 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
                 result["errors"]["proxy_cleanup"] = proxy_error
         except BaseException as exc:
             result["errors"]["proxy_cleanup"] = error(exc)
+        try:
+            driver_error = stop_proxy(driver)
+            if driver_error:
+                result["errors"]["browser_driver_cleanup"] = driver_error
+        except BaseException as exc:
+            result["errors"]["browser_driver_cleanup"] = error(exc)
         if control_path is not None:
             if not released:
                 try:

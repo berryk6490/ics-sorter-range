@@ -186,6 +186,81 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(calls, ["start", "collect"])
             self.assertTrue((prep.parent / "attempt-result.json").exists())
 
+    def test_lane_attempt_orders_fixture_browser_release_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            prep = self.preparation(root, "lane_hold")
+            calls = []
+
+            class Process:
+                def poll(self): return 0
+                def wait(self, **_k): return 0
+
+            class Monitor:
+                def start(self, *_a, **_k):
+                    calls.append("monitor_start")
+                    return root / "monitor.json"
+                def probe(self, *_a, **_k):
+                    calls.append("monitor_ready")
+                    return {"run_id": "monitor"}
+                def collect(self, *_a, **_k):
+                    calls.append("monitor_collect")
+                    return {"orphan": False, "cleanup_errors": []}
+
+            class Scenario:
+                def record_approval(self, *_a):
+                    calls.append("approval")
+                    return {"run_id": prep.parent.name}
+                def launch(self, *_a, **_k):
+                    calls.append("launch")
+                    return root / "control.json"
+                def probe_ready(self, *_a, **_k): calls.append("worker_ready")
+                def pre_authorization_gate(self, *_a, **_k):
+                    calls.append("gate")
+                    return {"status": "PASS"}
+                def action(self, _p, action): calls.append(action)
+                def fixture_authorize(self, *_a): calls.append("fixture_authorize")
+                def fixture_start(self, *_a, **_k): calls.append("fixture_start")
+                def fixture_probe(self, *_a): calls.append("fixture_ready")
+                def probe_checkpoint(self, *_a, **_k):
+                    calls.append("checkpoint")
+                    return {"sample": {"rows": []}}
+                def evidence(self, *_a, **_k):
+                    calls.append("evidence")
+                    return {"api": {}}
+                def collect(self, *_a, **_k):
+                    calls.append("worker_collect")
+                    return {"terminal": {"status": "complete",
+                            "fixture_restoration": {"service_restored": True}},
+                            "orphan": False}
+                def state(self):
+                    return {"slots": [[0] * 12 for _ in range(3)],
+                            "plant_faults": [0, 0, 0],
+                            "run_identity": {"epoch_fault": 0},
+                            "photoeye_faults": [0, 0, 0],
+                            "zone_view": [0] * 23}
+                def verify_clean(self, *_a):
+                    calls.append("postflight")
+                    return {"restored": True}
+
+            def browser(_case, path):
+                calls.append("browser")
+                screenshot = path / "lane_hold.png"
+                screenshot.write_bytes(b"fake test screenshot")
+                return {"screenshot": str(screenshot)}
+
+            result = attempt.run_attempt(
+                prep, "fresh_receipt_123", scenario=Scenario(), monitor=Monitor(),
+                proxy_start=lambda _p: (calls.append("proxy") or Process()),
+                driver_start=lambda _p: (calls.append("driver") or Process()),
+                browser_run=browser)
+            self.assertEqual(result["status"], "PASS")
+            self.assertLess(calls.index("approval"), calls.index("monitor_start"))
+            self.assertLess(calls.index("gate"), calls.index("fixture_start"))
+            self.assertLess(calls.index("checkpoint"), calls.index("browser"))
+            self.assertLess(calls.index("browser"), calls.index("release"))
+            self.assertLess(calls.index("release"), calls.index("worker_collect"))
+
 
 if __name__ == "__main__":
     unittest.main()

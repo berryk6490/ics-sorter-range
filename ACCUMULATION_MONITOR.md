@@ -257,7 +257,8 @@ worker, checks its existing post-ready gate, authorizes and starts the bounded
 fixture, waits for a PLC checkpoint, obtains a commit-consistent direct Modbus
 snapshot, compares stable package identities and safety state with OPC UA and
 HMI API, starts the existing serial HMI proxy, captures a real rendered browser
-screenshot, releases the worker, collects all processes, performs documented
+screenshot through a command-owned geckodriver, releases the worker, collects
+all processes, performs documented
 operator reset/plant/XLe recovery if required, and runs typed postflight.
 Changing position, dwell and event sequence are saved as telemetry and are
 not required to equal an older checkpoint. A read spanning two plant commits
