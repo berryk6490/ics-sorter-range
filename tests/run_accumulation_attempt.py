@@ -31,10 +31,19 @@ def need_recovery(state):
             any(state["photoeye_faults"]) or state["zone_view"][22])
 
 
-def evidence_hashes(root):
+def evidence_hashes(root, stdout_path=None):
+    # A caller may redirect this command's final JSON to a file under the
+    # evidence root. That file grows *after* this function runs; exclude only
+    # that active output and let the caller hash it after process exit.
+    if stdout_path is None:
+        try:
+            stdout_path = Path("/proc/self/fd/1").resolve()
+        except OSError:
+            stdout_path = None
+    stdout_path = Path(stdout_path).resolve() if stdout_path is not None else None
     rows = []
     for path in sorted(root.rglob("*")):
-        if path.is_file() and path.name != "SHA256SUMS":
+        if path.is_file() and path.name != "SHA256SUMS" and path.resolve() != stdout_path:
             rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}")
     (root / "SHA256SUMS").write_text("\n".join(rows) + "\n")
     return len(rows)

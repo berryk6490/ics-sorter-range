@@ -54,6 +54,18 @@ class FakePLC:
 
 
 class CommittedReadTests(unittest.TestCase):
+    def test_hashes_exclude_active_redirected_stdout(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            active = root / "attempt.log"
+            active.write_text("before")
+            (root / "proof.json").write_text('{"status":"PASS"}')
+            attempt.evidence_hashes(root, stdout_path=active)
+            active.write_text("after final JSON")
+            sums = (root / "SHA256SUMS").read_text()
+            self.assertNotIn("attempt.log", sums)
+            self.assertIn("proof.json", sums)
+
     def test_consistent_identity_snapshot(self):
         result = views.plc_view_once(FakePLC())
         self.assertEqual(result["commit_sequence"], 10)

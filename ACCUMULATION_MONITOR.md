@@ -256,7 +256,9 @@ sudo -n /usr/bin/systemctl stop sorter-plant.service
 sudo -n /usr/bin/systemctl start sorter-plant.service
 ```
 
-After approval, record its UTC response timestamp and unique receipt ID.
+After approval, record its UTC response timestamp (ISO 8601 with timezone)
+and unique receipt ID. Preserve the actual response time; do not regenerate
+the timestamp when invoking the command later.
 Invoke one command. It spends the reservation, runs the full deployment
 preflight and fresh typed capture, compares critical PLC state with the
 reservation and immediately before issuing the receipt, then starts the
@@ -294,10 +296,10 @@ barcode 6001, destination 2, zone 2, motion 2, dwell 11, zone sequence 171.
 The monitor still showed those stable fields at commit 708, but dwell had
 risen to 136 and zone sequence to 296; by commit 780 they were 209 and 369.
 The old probe compared sequence for equality and allowed only 15 dwell ticks
-of lag against the older checkpoint, so its `modbus slot 0 differs` assertion
-was guaranteed once evidence collection took more than that window. It did
-not capture the failing Modbus probe row, so the trace cannot independently
-exclude another transient mismatch. The new probe brackets its PLC read with
+of lag against the older checkpoint, so either comparison would fail for the
+later rows observed by the monitor. The failing Modbus probe row was not
+preserved, so this is a specific evidence-supported explanation, not proof
+that no other transient mismatch occurred. The new probe brackets its PLC read with
 the plant commit sequence, retries an inconsistent read eight times, and
 compares the package identity and hold invariants only after a consistent
 read. Position, dwell and sequence are retained as telemetry. This logic has
@@ -322,6 +324,19 @@ created. The command attaches the real
 serial HMI proxy at the smoke checkpoint and releases only after HMI API
 evidence. The old step-by-step commands below are retained as diagnostic
 reference, not a live validation procedure.
+
+The delayed-approval no-package smoke on 2026-09-25 reserved run
+`20260925T175758_41f4e1f506d947eab6d7b1f59c841ee5` and left it idle
+for more than 600 seconds. The command's result recorded reservation age
+890.773 seconds, fresh 32-component preflight 98.847 seconds, and approval
+age 133.95 seconds at receipt time. The detached worker and monitor reached
+ready, the SCADA serial proxy supplied real HMI API evidence at the
+checkpoint, release completed, and both processes exited. Typed postflight
+passed all 215 fields with no differences; no PLC recovery, fixture, service
+stop/start, or package induction occurred. The structured result and hashes
+are under `/home/kevin/vm/sorter-evidence/phase2a-delayed-approval-smoke-20260925/`.
+The command excludes its actively redirected stdout file from its internal
+`SHA256SUMS`; hash that outer log after the process exits if retained.
 
 ### Prior manual command order (diagnostic reference only)
 
