@@ -306,7 +306,7 @@
       "canonical_destination": "/home/kevin/sorter-services/recover_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "2e5b4a0ab9cc55254e31b382f4098d9ddd3de512dd162d842dc471b6c066e93b",
+      "sha256": "e2ff1e60dd9d2701f5b6e05ebcbcad15cbc4577def904f2c686f66fbb894e279",
       "verification_command": "sha256sum /home/kevin/sorter-services/recover_accumulation_state.py"
     }
   ],

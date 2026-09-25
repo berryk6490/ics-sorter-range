@@ -13,6 +13,7 @@ from urllib.request import urlopen
 from accumulation_monitor_control import Controller as MonitorController, atomic_control
 from accumulation_scenario_control import ScenarioController, APPROVAL_LIFETIME
 from accumulation_state_snapshot import capture as typed_capture, save as typed_save
+from deployment_preflight import PreflightFailure, guest_read
 
 ROOT = Path(__file__).resolve().parent
 PROXY = ROOT / "serial_hmi_proxy.py"
@@ -29,6 +30,39 @@ def need_recovery(state):
     return (any(row[4] for row in state["slots"]) or
             any(state["plant_faults"][:2]) or state["run_identity"]["epoch_fault"] or
             any(state["photoeye_faults"]) or state["zone_view"][22])
+
+
+def verify_postflight(sc, control_path, local, *, shell_probe=guest_read):
+    """Retry one read-only typed capture after a proven SCADA transport lapse."""
+    attempts = []
+    for number in (1, 2):
+        try:
+            report = sc.verify_clean(control_path)
+            attempts.append({"number": number, "status": "PASS"})
+            atomic_control(local / "postflight-attempts.json", attempts)
+            return report
+        except PreflightFailure as exc:
+            attempts.append({"number": number, "status": "FAIL", "error": error(exc),
+                             "kind": exc.kind})
+            atomic_control(local / "postflight-attempts.json", attempts)
+            if number != 1 or exc.kind != "liveness_wrapper_error" or "scada" not in str(exc):
+                raise
+            # guest_read itself requires completion, prompt and a distinct
+            # nonce-bound liveness probe. This command has no PLC side effect.
+            try:
+                shell_probe("scada", "printf 'POSTFLIGHT_SHELL_READY\\n'",
+                            "postflight_transport_retry")
+                attempts.append({"event": "shell_probe", "status": "PASS"})
+            except BaseException as probe_exc:
+                attempts.append({"event": "shell_probe", "status": "FAIL",
+                                 "error": error(probe_exc)})
+                atomic_control(local / "postflight-attempts.json", attempts)
+                raise
+            atomic_control(local / "postflight-attempts.json", attempts)
+        except BaseException as exc:
+            attempts.append({"number": number, "status": "FAIL", "error": error(exc)})
+            atomic_control(local / "postflight-attempts.json", attempts)
+            raise
 
 
 def evidence_hashes(root, stdout_path=None):
@@ -196,6 +230,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
     monitor_path = control_path = None
     proxy = driver = None
     released = False
+    begun = False
     try:
         if case == "lane_hold":
             result["approval"] = sc.record_approval(preparation, approval_id)
@@ -215,6 +250,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
             sc.fixture_start(control_path, duration=180)
             sc.fixture_probe(control_path)
         sc.action(control_path, "begin")
+        begun = True
         result["checkpoint"] = sc.probe_checkpoint(control_path, timeout=90)
         proxy = proxy_start(local / "hmi-proxy.log")
         if case == "lane_hold":
@@ -278,6 +314,27 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
                     result["functional_outcome"] = (
                         "PASS" if collected["terminal"].get("status") == "complete" and
                         not collected.get("cleanup_error") else "FAIL")
+                # Preserve the terminal result before any operator reset clears
+                # PLC counters and transient package rows.
+                atomic_control(local / "outcome-before-reset.json", {
+                    "run_id": result["run_id"], "functional_outcome": result["functional_outcome"],
+                    "terminal": collected["terminal"],
+                    "recorded_utc": datetime.now(timezone.utc).isoformat()})
+                if case == "lane_hold":
+                    observations = []
+                    for line in (local / "stdout.log").read_text().splitlines():
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if "journal" in row and "rows" in row:
+                            observations.append(row)
+                    if len(observations) == 1:
+                        atomic_control(local / "scenario-output-before-reset.json", observations[0])
+                    else:
+                        result["errors"]["outcome_capture"] = (
+                            "exactly one structured package outcome is required")
+                        result["functional_outcome"] = "FAIL"
             except BaseException as exc:
                 result["errors"]["collection"] = error(exc)
                 result["functional_outcome"] = "FAIL"
@@ -300,16 +357,26 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
         if control_path is not None:
             try:
                 state = sc.state()
-                if need_recovery(state):
+                if (case == "lane_hold" and (begun or need_recovery(state))):
+                    if state["coils_880_920"][0]:
+                        raise RuntimeError("sorter still running before operator reset")
+                    if result["service_restoration"] != "PASS":
+                        raise RuntimeError("plant service not restored before operator reset")
+                    if not (local / "outcome-before-reset.json").exists():
+                        raise RuntimeError("terminal outcome not preserved before operator reset")
                     result["plc_recovery"] = "ATTEMPTED"
-                    output = sc.scada.run(["/home/kevin/opcua/bin/python", RECOVERY],
+                    output = sc.scada.run(["/home/kevin/opcua/bin/python", RECOVERY,
+                                           "--reset-run"],
                                           timeout=55)
                     result["plc_recovery"] = json.loads(output.splitlines()[-1])
-                result["postflight"] = sc.verify_clean(control_path)
+                result["postflight"] = verify_postflight(sc, control_path, local)
                 result["typed_postflight"] = "PASS"
                 result["orphans"] = "PASS"
             except BaseException as exc:
-                result["errors"]["postflight"] = error(exc)
+                key = "plc_recovery" if result["plc_recovery"] == "ATTEMPTED" else "postflight"
+                result["errors"][key] = error(exc)
+                if key == "plc_recovery":
+                    result["plc_recovery"] = "FAIL"
                 result["typed_postflight"] = "FAIL"
         result["completed_utc"] = datetime.now(timezone.utc).isoformat()
         if result["errors"] or result["functional_outcome"] != "PASS" or \

@@ -25,7 +25,7 @@ def coil(client, address, value):
         raise RuntimeError(f"PLC operator coil {address} write failed")
 
 
-def recover(client, journal_path, *, timeout=30):
+def recover(client, journal_path, *, timeout=30, reset_run=False):
     if not client.connect():
         raise ConnectionError("PLC Modbus unavailable for operator recovery")
     record = {"reset_requested": False, "epoch": None, "faults_before": None,
@@ -39,7 +39,10 @@ def recover(client, journal_path, *, timeout=30):
                                    "epoch": holding(client, 561)[0],
                                    "zone": holding(client, 788)[0]}
         slots = [holding(client, address + 4)[0] for address in (530, 542, 647)]
-        if any(slots) or any(record["faults_before"].values()):
+        # Completed runs retain counters and the published ready mask until
+        # operator reset, despite having no occupied slots or active faults.
+        if (reset_run or any(slots) or any(record["faults_before"].values()) or
+            any(holding(client, 214, 29)) or holding(client, 786)[0]):
             old_nonce = holding(client, 509)[0]
             coil(client, 910, True)
             record["reset_requested"] = True
@@ -66,7 +69,7 @@ def recover(client, journal_path, *, timeout=30):
         finally:
             with_journal.close()
     finally:
-        for address in (914, 915, 918, 919):
+        for address in (914, 915, 916, 917, 918, 919, 920):
             coil(client, address, False)
         coil(client, 880, False)
         record["faults_after"] = {"plant": holding(client, 591)[0],
@@ -75,8 +78,11 @@ def recover(client, journal_path, *, timeout=30):
         record["master_off"] = not client.read_coils(880, 1, slave=1).bits[0]
         record["slots_empty"] = not any(holding(client, address + 4)[0]
                                         for address in (530, 542, 647))
+        record["counters_zero"] = not any(holding(client, 214, 29))
+        record["zone_ready_zero"] = holding(client, 786)[0] == 0
         client.close()
-    if any(record["faults_after"].values()) or not record["slots_empty"]:
+    if (any(record["faults_after"].values()) or not record["slots_empty"] or
+        not record["counters_zero"] or not record["zone_ready_zero"]):
         raise RuntimeError(f"operator recovery incomplete: {record}")
     return record
 
@@ -85,6 +91,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--journal", type=Path,
                         default=Path.home() / "sorter-services/xle-outcomes.sqlite3")
+    parser.add_argument("--reset-run", action="store_true")
     args = parser.parse_args()
     print(json.dumps(recover(ModbusTcpClient("10.10.1.10", port=502, timeout=2),
-                             args.journal), sort_keys=True), flush=True)
+                             args.journal, reset_run=args.reset_run), sort_keys=True), flush=True)

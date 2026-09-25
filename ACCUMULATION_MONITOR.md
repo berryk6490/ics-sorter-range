@@ -286,6 +286,34 @@ HMI API, starts the existing serial HMI proxy, captures a real rendered browser
 screenshot through a command-owned geckodriver, releases the worker, collects
 all processes, performs documented
 operator reset/plant/XLe recovery if required, and runs typed postflight.
+For a lane attempt that reached `begin`, cleanup first collects the detached
+worker's terminal record and structured package/journal output to
+`outcome-before-reset.json` and `scenario-output-before-reset.json`. The
+worker has stopped the sorter and restored the normal plant service before
+the runner invokes the canonical SCADA `recover_accumulation_state.py
+--reset-run` helper. This pulses the documented operator reset, waits for
+scanner ACKs, performs the journal-backed epoch/plant handshake, turns off
+temporary plant/photoeye/block/accumulation controls, and checks counters and
+the zone-ready mask are zero. Only then is `typed-after.json` captured.
+Recovery failure is recorded as `plc_recovery=FAIL` with its own error;
+typed postflight and overall status remain FAIL even if package sorting was
+functionally complete. A smoke attempt performs no PLC recovery or write.
+The structured package output and terminal status remain in evidence across
+reset; cleanup never changes `functional_outcome` from FAIL to PASS.
+
+The preserved 20260925T213332_fac009eab47348e4b39df76c8a67e23f run
+functionally completed three Lane 1 packages. Its first postflight was
+blocked at a SCADA `liveness_wrapper_error` after the read-only process-list
+command: the serial wrapper returned no parseable JSON or stderr for the
+separate liveness probe. That is a bounded host/console transport failure;
+the preserved log does not identify a more specific cause. The old runner
+also skipped reset because all slots and faults were clear, despite retained
+run counters and zone-ready mask. A later documented reset and journal-backed
+handshake cleared them, and the same-run typed restoration passed 215 checks.
+For this one transport error, the runner now requires a fresh nonce-bound
+read-only SCADA shell probe, then allows exactly one new typed read. Both
+attempts and the probe are saved in `postflight-attempts.json`. No PLC write,
+other serial error, or genuine typed mismatch is retried.
 Changing position, dwell and event sequence are saved as telemetry and are
 not required to equal an older checkpoint. A read spanning two plant commits
 is classified as `InconsistentSnapshot` and retried up to eight times. A

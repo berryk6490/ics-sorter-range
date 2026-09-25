@@ -1,9 +1,12 @@
 """Focused lifecycle and committed-read tests; no live PLC or service calls."""
 import json
 import hashlib
+import importlib.util
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from types import ModuleType
 import sys
 import tempfile
 import unittest
@@ -13,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import check_accumulation_views as views
 import run_accumulation_attempt as attempt
 import accumulation_scenario_control as scenario
+from deployment_preflight import PreflightFailure
 from test_accumulation_state_snapshot import sample
 
 
@@ -23,6 +27,54 @@ class Reply:
 
     def isError(self):
         return False
+
+
+class RecoveryTests(unittest.TestCase):
+    def helper(self):
+        pymodbus = ModuleType("pymodbus")
+        client_module = ModuleType("pymodbus.client")
+        client_module.ModbusTcpClient = object
+        xle = ModuleType("xle")
+        xle.OutcomeJournal = lambda _path: SimpleNamespace(close=lambda: None)
+        xle.ensure_epoch = lambda _client, _journal: 1
+        spec = importlib.util.spec_from_file_location(
+            "recovery_under_test", Path(__file__).parent / "recover_accumulation_state.py")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"pymodbus": pymodbus,
+                                      "pymodbus.client": client_module, "xle": xle}):
+            spec.loader.exec_module(module)
+        return module
+
+    def test_completed_run_reset_clears_counters_ready_and_temporary_modes(self):
+        class PLC:
+            nonce = 18
+            counters = 3
+            ready = 7
+            writes = []
+            def connect(self): return True
+            def close(self): pass
+            def read_holding_registers(self, address, count, slave):
+                values = {249: 24113, 509: self.nonce, 786: self.ready,
+                          591: 0, 561: 0, 788: 0, 255: 0, 256: 0}
+                if address == 214:
+                    return Reply([self.counters] * count)
+                return Reply([values.get(address, 0)] * count)
+            def read_coils(self, address, count, slave): return Reply([False] * count)
+            def write_coil(self, address, value, slave):
+                self.writes.append((address, value))
+                if address == 910 and value:
+                    self.nonce += 1
+                    self.counters = 0
+                    self.ready = 0
+                return Reply([])
+        plc = PLC()
+        result = self.helper().recover(plc, "journal", reset_run=True)
+        self.assertTrue(result["reset_requested"])
+        self.assertTrue(result["counters_zero"])
+        self.assertTrue(result["zone_ready_zero"])
+        self.assertIn((910, True), plc.writes)
+        for address in (914, 915, 916, 917, 918, 919, 920):
+            self.assertIn((address, False), plc.writes)
 
 
 class FakePLC:
@@ -152,6 +204,7 @@ class LifecycleTests(unittest.TestCase):
                     return {"terminal": {"status": "complete"}, "orphan": False}
                 def state(self):
                     return {"slots": [[0] * 12 for _ in range(3)],
+                            "coils_880_920": [False] * 41,
                             "plant_faults": [0, 0, 0],
                             "run_identity": {"epoch_fault": 0},
                             "photoeye_faults": [0, 0, 0],
@@ -353,6 +406,10 @@ class DelayedReservationTests(unittest.TestCase):
                     return {"orphan": False, "cleanup_errors": []}
 
             class Scenario:
+                scada = SimpleNamespace(run=lambda argv, **_k:
+                    calls.append("operator_reset") or json.dumps({"reset_requested": True,
+                                                                   "counters_zero": True,
+                                                                   "zone_ready_zero": True}))
                 def record_approval(self, *_a):
                     calls.append("approval")
                     return {"run_id": prep.parent.name}
@@ -375,11 +432,13 @@ class DelayedReservationTests(unittest.TestCase):
                     return {"api": {}}
                 def collect(self, *_a, **_k):
                     calls.append("worker_collect")
+                    (prep.parent / "stdout.log").write_text(json.dumps({"journal": [], "rows": []}) + "\n")
                     return {"terminal": {"status": "complete",
                             "fixture_restoration": {"service_restored": True}},
                             "orphan": False}
                 def state(self):
                     return {"slots": [[0] * 12 for _ in range(3)],
+                            "coils_880_920": [False] * 41,
                             "plant_faults": [0, 0, 0],
                             "run_identity": {"epoch_fault": 0},
                             "photoeye_faults": [0, 0, 0],
@@ -405,6 +464,88 @@ class DelayedReservationTests(unittest.TestCase):
             self.assertLess(calls.index("checkpoint"), calls.index("browser"))
             self.assertLess(calls.index("browser"), calls.index("release"))
             self.assertLess(calls.index("release"), calls.index("worker_collect"))
+            self.assertLess(calls.index("worker_collect"), calls.index("operator_reset"))
+            self.assertLess(calls.index("operator_reset"), calls.index("postflight"))
+            self.assertTrue((prep.parent / "outcome-before-reset.json").exists())
+            self.assertEqual(result["plc_recovery"]["counters_zero"], True)
+
+    def test_postflight_transport_failure_gets_one_fresh_probe_and_retry(self):
+        with tempfile.TemporaryDirectory() as name:
+            calls = []
+            class Scenario:
+                def verify_clean(self, _path):
+                    calls.append("read")
+                    if calls.count("read") == 1:
+                        raise PreflightFailure("liveness_wrapper_error", "scada", "processes:scada")
+                    return {"restored": True}
+            result = attempt.verify_postflight(
+                Scenario(), Path(name) / "control", Path(name),
+                shell_probe=lambda *_a: calls.append("probe"))
+            self.assertTrue(result["restored"])
+            self.assertEqual(calls, ["read", "probe", "read"])
+            rows = json.loads((Path(name) / "postflight-attempts.json").read_text())
+            self.assertEqual([row["status"] for row in rows], ["FAIL", "PASS", "PASS"])
+
+    def test_typed_mismatch_is_not_retried(self):
+        with tempfile.TemporaryDirectory() as name:
+            calls = []
+            class Scenario:
+                def verify_clean(self, _path):
+                    calls.append("read")
+                    raise AssertionError("typed restoration failed: counters remain")
+            with self.assertRaisesRegex(AssertionError, "typed restoration failed"):
+                attempt.verify_postflight(Scenario(), Path(name) / "control", Path(name),
+                                          shell_probe=lambda *_a: calls.append("probe"))
+            self.assertEqual(calls, ["read"])
+
+    def test_failed_operator_reset_remains_separate_from_functional_outcome(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            prep = self.preparation(root, "lane_hold")
+            class Monitor:
+                def start(self, *_a, **_k): return root / "monitor.json"
+                def probe(self, *_a, **_k): return {"run_id": "monitor"}
+                def collect(self, *_a, **_k): return {"orphan": False, "cleanup_errors": []}
+            class Process:
+                def poll(self): return 0
+                def wait(self, **_k): return 0
+            class Scenario:
+                scada = SimpleNamespace(run=lambda *_a, **_k: (_ for _ in ()).throw(
+                    TimeoutError("scanner reset ACK timeout")))
+                def record_approval(self, *_a): return {"run_id": prep.parent.name}
+                def launch(self, *_a, **_k): return root / "control.json"
+                def probe_ready(self, *_a, **_k): pass
+                def pre_authorization_gate(self, *_a, **_k): return {"status": "PASS"}
+                def action(self, *_a): pass
+                def fixture_authorize(self, *_a): pass
+                def fixture_start(self, *_a, **_k): pass
+                def fixture_probe(self, *_a): pass
+                def probe_checkpoint(self, *_a, **_k): return {"sample": {"rows": []}}
+                def evidence(self, *_a, **_k): return {"api": {}}
+                def collect(self, *_a, **_k):
+                    (prep.parent / "stdout.log").write_text(json.dumps({"journal": [], "rows": []}) + "\n")
+                    return {"terminal": {"status": "complete",
+                            "fixture_restoration": {"service_restored": True}}, "orphan": False}
+                def state(self):
+                    return {"slots": [[0] * 12 for _ in range(3)],
+                            "coils_880_920": [False] * 41,
+                            "plant_faults": [0, 0, 0], "run_identity": {"epoch_fault": 0},
+                            "photoeye_faults": [0, 0, 0], "zone_view": [0] * 23}
+                def verify_clean(self, *_a):
+                    raise AssertionError("must not take typed snapshot before reset")
+            def browser(_case, path):
+                screenshot = path / "lane_hold.png"
+                screenshot.write_bytes(b"test")
+                return {"screenshot": str(screenshot)}
+            result = attempt.run_attempt(
+                prep, "receipt", scenario=Scenario(), monitor=Monitor(),
+                proxy_start=lambda _p: Process(), driver_start=lambda _p: Process(),
+                browser_run=browser)
+            self.assertEqual(result["functional_outcome"], "PASS")
+            self.assertEqual(result["plc_recovery"], "FAIL")
+            self.assertEqual(result["typed_postflight"], "FAIL")
+            self.assertIn("scanner reset ACK timeout", result["errors"]["plc_recovery"])
+            self.assertTrue((prep.parent / "outcome-before-reset.json").exists())
 
     def test_interrupted_evidence_aborts_and_never_passes(self):
         with tempfile.TemporaryDirectory() as name:
