@@ -198,7 +198,7 @@
       "canonical_destination": "/home/kevin/sorter-services/live_accumulation.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "0aad09f182688e7f7430ebcd50c0312eda450931b6cb4ff9cf41cd8c853e33f8",
+      "sha256": "878e3f18b3e646e7e44d3bf302d9938571676719eb32ea598e721fc61581ea6d",
       "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation.py"
     },
     {
@@ -216,7 +216,7 @@
       "canonical_destination": "/home/kevin/sorter-services/check_accumulation_views.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "88cf833b525ab2afe364a5c3287534fdd3a0b0006383444deeaf09157241a1f2",
+      "sha256": "15590693f4a53c5f548bcbe539912fb7acf82dcdd566a53586b9b4c1f743e3ad",
       "verification_command": "sha256sum /home/kevin/sorter-services/check_accumulation_views.py"
     },
     {
@@ -225,7 +225,7 @@
       "canonical_destination": "/home/kevin/sorter-services/read_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "ab18b63bd844748cc40921fd291c57515ee96eb2d314446c27b4ba67ddafe4b0",
+      "sha256": "f8174c134aa40fd9243b68193fe06ca1075267c704bd28377a40e715437ae27e",
       "verification_command": "sha256sum /home/kevin/sorter-services/read_accumulation_state.py"
     },
     {
@@ -234,7 +234,7 @@
       "canonical_destination": "/home/kevin/read_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "ab18b63bd844748cc40921fd291c57515ee96eb2d314446c27b4ba67ddafe4b0",
+      "sha256": "f8174c134aa40fd9243b68193fe06ca1075267c704bd28377a40e715437ae27e",
       "verification_command": "sha256sum /home/kevin/read_accumulation_state.py"
     },
     {
@@ -245,6 +245,33 @@
       "hash_policy": "exact",
       "sha256": "7c3da1a183a261e3a9a3d3cf23d646f0b839493b2432a0e55008594f7984b0db",
       "verification_command": "sha256sum /home/kevin/live_accumulation_monitor.py"
+    },
+    {
+      "repository_source": "tests/live_accumulation_detached.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/live_accumulation_detached.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "3f8dec9d7106f467414dc24feff1a5bec6024492253865acdb1e844e23ce7059",
+      "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation_detached.py"
+    },
+    {
+      "repository_source": "tests/live_accumulation_detached.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/live_accumulation_detached.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "3f8dec9d7106f467414dc24feff1a5bec6024492253865acdb1e844e23ce7059",
+      "verification_command": "sha256sum /home/kevin/live_accumulation_detached.py"
+    },
+    {
+      "repository_source": "tests/live_accumulation_fixture.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/live_accumulation_fixture.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "a5d0388ac85e72dc19c8e3aef3ccfe0155e00604b8c8d4d5605d03f512ebea74",
+      "verification_command": "sha256sum /home/kevin/live_accumulation_fixture.py"
     }
   ],
   "milestone": "phase-2a-accumulation-backpressure",

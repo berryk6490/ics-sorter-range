@@ -231,3 +231,15 @@ force, chute occupancy, package rotation, or jam physics. Phase 2B can use
 the reserved JAMMED motion value with an independently defined physical
 stall criterion; normal HELD_* and DRIVE_STOPPED values must never imply a
 jam. Jam injection, alarms, and package removal are outside Phase 2A.
+
+### Evidence coordination amendment, 2026-09-25
+
+For lane/merge/drive screenshots, the former foreground SCADA serial runner
+conflicts with `serial_hmi_proxy.py`, which needs that same exclusive console.
+Use the detached gate/checkpoint/release workflow in `ACCUMULATION_MONITOR.md`.
+The PLC/plant process contract and earlier Phase 2A package results are
+unchanged. The new checkpoint is accepted only after PLC-validated held or
+stopped state appears; the independent drives monitor and direct OPC UA/HMI
+reads must corroborate it before the proxy/browser capture is called live.
+The runner's foreground form remains available for non-browser normal runs.
+No lane, merge, or drive scenario was rerun in this coordination milestone.

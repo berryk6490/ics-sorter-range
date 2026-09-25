@@ -86,8 +86,9 @@ async def probe(motion, timeout):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--motion", type=int, choices=(2, 3, 4), required=True)
+    parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    result = asyncio.run(probe(args.motion, 90))
+    result = asyncio.run(probe(args.motion, args.timeout))
     args.output.write_text(json.dumps(result, sort_keys=True) + "\n")
     print(json.dumps(result, sort_keys=True), flush=True)

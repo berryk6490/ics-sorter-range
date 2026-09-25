@@ -28,6 +28,8 @@ def main():
                           "lanes": regs(644, 2) + regs(659, 1),
                           "plant_faults": regs(591, 3),
                           "photoeye_faults": regs(748, 3),
+                          "scanner_state": regs(255, 1)[0],
+                          "scanner_fault_mask": regs(256, 1)[0],
                           "zone_view": regs(766, 23),
                           "zone_raw": regs(751, 15) + regs(784, 2),
                           "plant_raw": [regs(600, 10), regs(610, 10), regs(660, 10)],

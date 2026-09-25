@@ -109,7 +109,59 @@ def cleanup_run(plc, original, xle, asx, journal):
     return errors
 
 
-def run(case, hold_marker=None):
+def checkpoint_sample(plc, case, epoch, nonce, block, lanes, zone, drive_feedback,
+                      inducted, full_wait):
+    """PLC-validated, identity-bound observation at an evidence hold."""
+    rows = []
+    for slot in range(3):
+        row = block[slot * 12:(slot + 1) * 12]
+        z = zone[slot * 5:(slot + 1) * 5] + [zone[15 + slot]]
+        lane = lanes[slot]
+        rows.append({"slot": slot, "lane": lane, "token": row[0],
+                     "serial": row[1], "scanner_sequence": row[2],
+                     "barcode": row[3], "state": row[4],
+                     "destination": row[5], "actual": row[6],
+                     "package_id": (f"l{lane}-{epoch[0]+epoch[1]*30000}-{nonce}-"
+                                    f"{row[0]}-{row[1]}") if row[0] else None,
+                     "zone": z[0], "motion": z[1], "hold_reason": z[2],
+                     "dwell": z[3], "sequence": z[4], "quality": z[5]})
+    return {"case": case, "epoch": epoch, "nonce": nonce,
+            "observed_wall_ns": time.time_ns(),
+            "observed_monotonic_ns": time.monotonic_ns(),
+            "rows": rows, "inducted": inducted, "full_wait_samples": full_wait,
+            "raw_ready_mask": holding(plc, 784)[0],
+            "commit_sequence": holding(plc, 785)[0],
+            "validated_ready_mask": holding(plc, 786)[0],
+            "zone_age": holding(plc, 787)[0], "zone_fault": holding(plc, 788)[0],
+            "plant_fault": holding(plc, 591)[0],
+            "photoeye_faults": holding(plc, 748, 3),
+            "master": coils(plc, 880)[0],
+            "counters": holding(plc, 222, 9),
+            "drive_feedback": drive_feedback[-8:]}
+
+
+def checkpoint_valid(case, sample):
+    rows = sample["rows"]
+    if sample["zone_fault"] or sample["plant_fault"] or any(sample["photoeye_faults"]):
+        return False
+    if case == "lane_hold":
+        return sum(r["lane"] == 1 and r["state"] in ACTIVE and
+                   r["quality"] == 1 and r["motion"] == 2 and
+                   r["zone"] in (1, 2, 3) and r["dwell"] >= 10 for r in rows) >= 1
+    if case == "merge_hold":
+        return (sample["inducted"] == 3 and sample["full_wait_samples"] >= 5 and
+                all(r["state"] in ACTIVE and r["quality"] == 1 and
+                    r["zone"] == 4 and r["motion"] == 3 for r in rows) and
+                {r["lane"] for r in rows} == {1, 2, 3})
+    if case == "drive_stop":
+        return any(r["state"] in ACTIVE and r["quality"] == 1 and
+                   r["motion"] == 4 for r in rows) and bool(
+                       sample["drive_feedback"] and
+                       sample["drive_feedback"][-1][0] == 0)
+    return False
+
+
+def run(case, hold_marker=None, evidence_hold=None, cleanup_report=None):
     config = CASES[case]
     plc = ModbusTcpClient("10.10.1.10", port=502, timeout=2)
     if not plc.connect():
@@ -185,6 +237,7 @@ def run(case, hold_marker=None):
         drive_stopped = drive_restarted = False
         drive_feedback = []
         drive_stop_at = 0.0
+        checkpoint_done = False
         counters_before_confirmation = None
         last_event_seq = holding(plc, 585)[0]
         last_hmi = 0.0
@@ -264,14 +317,23 @@ def run(case, hold_marker=None):
                     drive_feedback.append(sample)
             if held and hold_marker and not Path(hold_marker).exists():
                 Path(hold_marker).write_text(str(time.time()) + "\n")
+            if evidence_hold is not None and not checkpoint_done:
+                sample = checkpoint_sample(plc, case, epoch, nonce, block, lanes,
+                                           zone, drive_feedback, inducted, full_wait)
+                if checkpoint_valid(case, sample):
+                    evidence_hold(sample)
+                    checkpoint_done = True
             for a in range(len(outbound)):
                 for b in range(a + 1, len(outbound)):
                     if outbound[a][1] == outbound[b][1]:
                         gap = abs(outbound[a][2] - outbound[b][2])
                         min_spacing = gap if min_spacing is None else min(min_spacing, gap)
                         assert gap >= 32, outbound  # required 3.2-cell clearance
-            if drive_stopped and not drive_restarted and time.monotonic() - drive_stop_at >= 8:
+            if drive_stopped and not drive_restarted and evidence_hold is None and time.monotonic() - drive_stop_at >= 8:
                 assert any(s["motion"] == 4 for h in zone_samples.values() for s in h)
+                set_coil(plc, 882, True)
+                drive_restarted = True
+            if drive_stopped and checkpoint_done and not drive_restarted:
                 set_coil(plc, 882, True)
                 drive_restarted = True
             if time.monotonic() - last_hmi > .5:
@@ -293,6 +355,8 @@ def run(case, hold_marker=None):
                 break
             time.sleep(.2)
         assert len(rows) == config["count"], rows
+        if evidence_hold is not None:
+            assert checkpoint_done, "required evidence checkpoint was never reached"
         assert max_slots <= 3 and (case != "merge_hold" or
                                    (max_slots == 3 and full_wait >= 5 and max_held == 3))
         assert set(config["lanes"]) <= hmi_seen
@@ -359,6 +423,9 @@ def run(case, hold_marker=None):
         raise
     finally:
         cleanup_errors = cleanup_run(plc, original, xle, asx, journal)
+        if cleanup_report is not None:
+            cleanup_report.update({"errors": cleanup_errors,
+                                   "original_failure": repr(failure)})
         if drive is not None:
             drive.close()
         print(json.dumps({"cleanup": "ok" if not cleanup_errors else "failed",

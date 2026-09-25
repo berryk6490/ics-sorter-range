@@ -140,3 +140,127 @@ Both are covered by focused tests and fixed in the host controller. Its
 records were collected after natural completion. The final smoke above
 observed readiness **before** completion and stopped the monitor by its
 validated PID. No package scenario was run by Codex in this milestone.
+
+## Detached SCADA scenario coordination (2026-09-25)
+
+The earlier `scenario` subcommand runs the SCADA case in the foreground and
+therefore monopolizes the one SCADA serial console. It remains for the normal
+three-lane regression. For live hold screenshots use
+`tests/accumulation_scenario_control.py` and the canonical guest
+`/home/kevin/sorter-services/live_accumulation_detached.py`. A repository
+launcher starts a new session with stdin closed and output in a unique guest
+log, then returns the shell promptly. There is no inline background shell
+program. The worker imports the runner, verifies its manifest hash and PLC
+identity 24113, and reads stopped/empty preconditions before writing a
+`ready.json` marker. It cannot call the scenario runner until the host first
+proves both this marker and the independent drives monitor ready, writes an
+identity-bound `authorize.json`, and then writes `begin.json`.
+
+All lifecycle JSON files contain `run_id`, `scenario`, `pid`, and Linux
+`start_ticks`. `pid.json` adds repository commit, runner hash and timestamp;
+`ready.json` adds the read-only preflight and `mutation_started=false`;
+`checkpoint.json` adds the PLC-validated slot/zone/hold/dwell/ready/block,
+commit/counter/fault sample; `release.json` records the host's explicit
+release. `terminal.json` keeps `status`, `original_error`, `cleanup`, and
+`cleanup_failed` separately. Files are created durably and never overwritten.
+`inspect`, `authorize`, `begin`, `release`, and `abort` all verify PID,
+start ticks, command line, script, user, run ID, and case. `abort` signals
+only that matching PID. A wrong or stale release fails the worker. Missing
+release times out after at most 60 seconds; the live runner's `finally`
+stops the sorter, XLe and ASX, resets occupied slots through the documented
+operator reset, and restores the recorded operator settings.
+
+For lane and merge cases, the separate drives helper
+`/home/kevin/live_accumulation_fixture.py` is a bounded supervisor. It
+accepts only the fixed lane-1 premerge or shared-merge plant fixture. After
+`authorize` and before `begin`, it stops the normal plant service, starts
+that fixture, and writes its own PID/ready markers. On signal, natural
+expiry, or host disconnect, its `finally` stops the fixture, starts
+`sorter-plant.service`, and verifies one unflagged plant process. The
+service stop/start commands are exactly `sudo -n systemctl stop
+sorter-plant.service` and `sudo -n systemctl start sorter-plant.service`.
+An administrator must preapprove only those two commands for guest user
+`kevin`; do not grant generic sudo or run the fixture if `sudo -n` refuses.
+The no-package smoke and drive-stop case never invoke this helper.
+
+### Canonical Hermes command order
+
+Deploy only test tooling and verify exact hashes:
+
+```sh
+cd /home/kevin/vm/sorter
+python3 tests/serial_copy.py scada tests/live_accumulation.py:/home/kevin/sorter-services/live_accumulation.py tests/live_accumulation_detached.py:/home/kevin/sorter-services/live_accumulation_detached.py
+python3 tests/serial_copy.py drives tests/live_accumulation_detached.py:/home/kevin/live_accumulation_detached.py tests/live_accumulation_fixture.py:/home/kevin/live_accumulation_fixture.py
+python3 tests/deployment_preflight.py --live
+```
+
+First run the monitor `start` and `probe` commands above. Substitute its
+printed control path for `$MONITOR_CONTROL`. The scenario controller prints
+its own control path for `$SCENARIO_CONTROL`:
+
+```sh
+python3 tests/accumulation_scenario_control.py launch --evidence-dir /home/kevin/vm/sorter-evidence/phase2a-hermes --case lane_hold --monitor-control "$MONITOR_CONTROL" --startup-timeout 30 --hold-timeout 30
+python3 tests/accumulation_scenario_control.py probe-ready --control "$SCENARIO_CONTROL"
+python3 tests/accumulation_scenario_control.py authorize --control "$SCENARIO_CONTROL"
+python3 tests/accumulation_scenario_control.py fixture-start --control "$SCENARIO_CONTROL" --duration 150
+python3 tests/accumulation_scenario_control.py begin --control "$SCENARIO_CONTROL"
+python3 tests/accumulation_scenario_control.py probe-checkpoint --control "$SCENARIO_CONTROL" --timeout 90
+```
+
+For `merge_hold`, substitute that case. For `drive_stop`, omit
+`fixture-start`. For a harmless no-package `smoke`, also omit it. The
+`probe-checkpoint` reads current independent monitor Modbus samples and
+calls the canonical `check_accumulation_views.py --motion {2,3,4}` through a
+short SCADA serial attachment to compare OPC UA and HMI with PLC validated
+state. After it returns, run `python3 tests/serial_hmi_proxy.py` on the host in a separate
+terminal, collect `GET http://127.0.0.1:18000/api`, and run
+`python3 tests/browser_accumulation.py {lane_hold,merge_hold} --output-dir
+$EVIDENCE_DIR` for a genuine rendered screenshot. The `stale` browser case
+uses an injected fixture and must not be labeled live. Stop the proxy
+before using the SCADA serial console again. Save the screenshot and HMI
+API response, then run:
+
+```sh
+python3 tests/accumulation_scenario_control.py evidence --control "$SCENARIO_CONTROL" --screenshot "$EVIDENCE_DIR/lane_hold.png"
+python3 tests/accumulation_scenario_control.py release --control "$SCENARIO_CONTROL"
+python3 tests/accumulation_scenario_control.py wait --control "$SCENARIO_CONTROL" --timeout 240
+python3 tests/accumulation_scenario_control.py collect --control "$SCENARIO_CONTROL" --timeout 240
+python3 tests/accumulation_scenario_control.py fixture-stop --control "$SCENARIO_CONTROL" --timeout 25
+python3 tests/accumulation_monitor_control.py stop --control "$MONITOR_CONTROL" --timeout 20
+python3 tests/accumulation_scenario_control.py verify-clean --control "$SCENARIO_CONTROL"
+```
+
+For `smoke` and `drive_stop`, omit `fixture-stop`. On browser/proxy failure,
+call `abort`, `fixture-stop` when applicable, monitor `stop`, then
+`verify-clean`; if the host disconnects, the scenario evidence hold and
+fixture supervisor expire independently. The scenario's terminal status,
+fixture terminal, monitor cleanup, and final-state proof must all be saved,
+including failures. Hash the outside-Git evidence directory with
+`sha256sum` after collection. The checkpoint is a trigger for evidence,
+not evidence of HMI rendering by itself. Accept live HMI evidence only when
+its PLC-backed zone rows and identity agree with the direct PLC and OPC UA
+read within 15 dwell scans; the API does not expose the raw QW785 commit
+sequence, so record that limitation rather than claiming an API commit match.
+
+### Detached no-package smoke result, 2026-09-25 UTC
+
+Outside-Git evidence:
+`/home/kevin/vm/sorter-evidence/phase2a-detached-smoke-20260925T0210Z/`
+(`SHA256SUMS`, 22 hashed files). The drives monitor run
+`20260925T021043_19de24a245974ab7b63bac9e5d6b2460` was independently
+ready at 02:11:01.672629 UTC, with PLC 24113, master off, accumulation
+mode off, ready mask 0, three empty slots, and no zone/plant fault. The
+SCADA detached smoke run
+`20260925T021107_4cbc987cf5fe4ba8b378bd036ea8cfc4` returned its shell,
+passed read-only preflight, and reached its checkpoint at 02:11:38.282006
+UTC. While that PID was waiting, the existing `serial_hmi_proxy.py`
+successfully attached to SCADA and returned a real HMI `/api` response at
+02:11:59.055652 UTC: connected, sorter stopped, accumulation mode off,
+zone fault 0, and all nine trailer counters 0. The proxy exited before the
+explicit release. The guest terminal was `complete` at 02:12:07.275964
+UTC. Collection found no detached-runner orphan; monitor terminal was
+`complete` with 576 JSONL records and no orphan. Final PLC state matched
+all saved operator coils, setpoints, seed, slots, counters, and faults;
+`sorter-plant.service` remained active. No package was inducted, no plant
+service was stopped, and no fixture was launched. Lane, merge, and drive
+checkpoint evidence remain for independent Hermes validation.
