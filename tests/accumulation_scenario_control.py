@@ -101,10 +101,10 @@ def validate_unchanged_plc(before, current):
         raise ValueError("PLC no longer at safe stopped baseline")
     if any(current["process_214_242"][i] for i in (*range(7), *range(8, 29))):
         raise ValueError("PLC process counter changed")
-    if any(current["scanner_counters_250_254"]) or any(
-            current["zone_view"][i] for i in (0, 1, 2, 3, 5, 6, 7, 8,
-                                              10, 11, 12, 13, 15, 16, 17, 18)):
-        raise ValueError("scanner count or validated zone state changed")
+    # Inactive historical zone payload is not a package or a ready state.
+    # The fault/ready bits and empty PLC slots above are the safety gate.
+    if any(current["scanner_counters_250_254"]):
+        raise ValueError("scanner count changed")
 
 
 def service_groups():

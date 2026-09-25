@@ -150,6 +150,15 @@ class SnapshotTests(unittest.TestCase):
         new["plc"]["zone_view"][20] = 1  # active validated readiness remains unsafe
         self.assertEqual(snap.compare(old, new)["status"], "FAIL")
 
+    def test_post_ready_gate_ignores_inactive_historical_zone_payload(self):
+        old = sample()["plc"]
+        current = deepcopy(old)
+        current["zone_view"][:18] = [2, 2, 1, 284, 444, 1] * 3
+        scenario.validate_unchanged_plc(old, current)
+        current["zone_view"][20] = 1
+        with self.assertRaisesRegex(ValueError, "safe stopped baseline"):
+            scenario.validate_unchanged_plc(old, current)
+
     def test_unsettled_or_faulted_drive(self):
         self.check_failure(lambda s: s["plc"]["vfds"]["induct1"].__setitem__(
             "feedback_rpm", 100), "feedback_rpm")
