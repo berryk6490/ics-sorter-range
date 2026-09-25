@@ -172,16 +172,43 @@ operator reset, and restores the recorded operator settings.
 
 For lane and merge cases, the separate drives helper
 `/home/kevin/live_accumulation_fixture.py` is a bounded supervisor. It
-accepts only the fixed lane-1 premerge or shared-merge plant fixture. After
-`authorize` and before `begin`, it stops the normal plant service, starts
-that fixture, and writes its own PID/ready markers. On signal, natural
-expiry, or host disconnect, its `finally` stops the fixture, starts
-`sorter-plant.service`, and verifies one unflagged plant process. The
-service stop/start commands are exactly `sudo -n systemctl stop
-sorter-plant.service` and `sudo -n systemctl start sorter-plant.service`.
-An administrator must preapprove only those two commands for guest user
-`kevin`; do not grant generic sudo or run the fixture if `sudo -n` refuses.
-The no-package smoke and drive-stop case never invoke this helper.
+accepts only the fixed lane-1 premerge or shared-merge plant fixture. Hermes
+must obtain **one fresh operator approval immediately before fixture-start**.
+The approval must identify the unique run ID and scenario and explicitly
+cover both exact guest commands:
+
+```text
+sudo -n /usr/bin/systemctl stop sorter-plant.service
+sudo -n /usr/bin/systemctl start sorter-plant.service
+```
+
+The first command starts the bounded fixture; the second restores the
+canonical service during normal completion, abort, failure, or timeout.
+The approval covers only these two transitions for this one run. Hermes
+passes its approval receipt ID to `fixture-authorize`; that command records
+the run ID, scenario, unit, both argument vectors, approval ID, guest
+authorization timestamp, expiry (30–180 seconds), and initial active
+service/process state in a unique guest `authorization.json`. The helper
+checks that record again before the first stop and atomically claims it
+once. A missing, stale, mismatched, reused, or malformed record blocks the
+stop. The guest also stores the receipt's SHA256 in
+`/home/kevin/.local/state/sorter-fixture-approvals.jsonl` under a file lock;
+the same receipt cannot authorize another run or scenario. A receipt claimed
+before a failed record write is spent and requires a new operator approval.
+The expiry gates **starting** the fixture; the previously approved
+restorative start remains available after expiry so emergency cleanup never
+waits for a second interactive approval. The helper attempts that exact
+start in `finally`, then verifies the service active and exactly one
+unflagged plant process. Terminal evidence records the original failure
+and restoration errors separately. The host's `wait` also requests fixture
+stop after the scenario terminal; on host disconnect the guest supervisor
+restores independently at its bounded deadline.
+
+The approval receipt is an operator attestation supplied by Hermes; the
+script validates its scope and lifetime, not the identity of the approving
+person. Do not grant generic sudo, wildcard sudoers rules, Hermes YOLO mode,
+or a broader command allowlist. The no-package smoke and drive-stop case
+never invoke this helper.
 
 ### Canonical Hermes command order
 
@@ -201,7 +228,19 @@ its own control path for `$SCENARIO_CONTROL`:
 ```sh
 python3 tests/accumulation_scenario_control.py launch --evidence-dir /home/kevin/vm/sorter-evidence/phase2a-hermes --case lane_hold --monitor-control "$MONITOR_CONTROL" --startup-timeout 30 --hold-timeout 30
 python3 tests/accumulation_scenario_control.py probe-ready --control "$SCENARIO_CONTROL"
+```
+
+Run a **fresh preflight** now (controller ready/monitor proof, manifest
+hashes, stopped/empty PLC, normal plant service). Hermes then requests one
+operator approval naming this run ID, `lane_hold`, and the exact stop and
+start commands above. Only after approval, record its unique receipt ID and
+continue. If the bounded worker startup wait expires while approval is
+pending, launch a new run and obtain a fresh run-bound approval; never reuse
+the old receipt:
+
+```sh
 python3 tests/accumulation_scenario_control.py authorize --control "$SCENARIO_CONTROL"
+python3 tests/accumulation_scenario_control.py fixture-authorize --control "$SCENARIO_CONTROL" --approval-id "$APPROVAL_RECEIPT_ID" --valid-for 180
 python3 tests/accumulation_scenario_control.py fixture-start --control "$SCENARIO_CONTROL" --duration 150
 python3 tests/accumulation_scenario_control.py begin --control "$SCENARIO_CONTROL"
 python3 tests/accumulation_scenario_control.py probe-checkpoint --control "$SCENARIO_CONTROL" --timeout 90
@@ -230,10 +269,12 @@ python3 tests/accumulation_monitor_control.py stop --control "$MONITOR_CONTROL" 
 python3 tests/accumulation_scenario_control.py verify-clean --control "$SCENARIO_CONTROL"
 ```
 
-For `smoke` and `drive_stop`, omit `fixture-stop`. On browser/proxy failure,
-call `abort`, `fixture-stop` when applicable, monitor `stop`, then
-`verify-clean`; if the host disconnects, the scenario evidence hold and
-fixture supervisor expire independently. The scenario's terminal status,
+For `smoke` and `drive_stop`, omit `fixture-authorize`, `fixture-start`, and
+`fixture-stop`. On browser/proxy failure, stop the proxy, call `abort`, then
+`wait` (which requests restorative fixture stop), `fixture-stop` for
+collection, monitor `stop`, and `verify-clean`. No second operator approval
+is requested during cleanup. If the host disconnects, the scenario evidence
+hold and fixture supervisor expire independently. The scenario's terminal status,
 fixture terminal, monitor cleanup, and final-state proof must all be saved,
 including failures. Hash the outside-Git evidence directory with
 `sha256sum` after collection. The checkpoint is a trigger for evidence,

@@ -243,3 +243,12 @@ stopped state appears; the independent drives monitor and direct OPC UA/HMI
 reads must corroborate it before the proxy/browser capture is called live.
 The runner's foreground form remains available for non-browser normal runs.
 No lane, merge, or drive scenario was rerun in this coordination milestone.
+
+For OT operators and Hermes, the manual service stop/start examples above are
+historical evidence commands, not the current lane/merge validation procedure.
+The current procedure is the one-run fixture authorization lifecycle in
+`ACCUMULATION_MONITOR.md`: one fresh approval covers only the exact
+`sudo -n /usr/bin/systemctl stop sorter-plant.service` and restorative
+`sudo -n /usr/bin/systemctl start sorter-plant.service` for the identified
+run ID and scenario. Cleanup, including timeout cleanup, uses that same
+approval and must not ask the operator for a second approval.

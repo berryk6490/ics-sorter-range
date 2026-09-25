@@ -19,6 +19,9 @@ RUNNER = "/home/kevin/sorter-services/live_accumulation.py"
 DRIVES_PYTHON = "/home/kevin/venv/bin/python"
 DRIVES_STATE = "/home/kevin/read_accumulation_state.py"
 DRIVES_FIXTURE = "/home/kevin/live_accumulation_fixture.py"
+FIXTURE_UNIT = "sorter-plant.service"
+FIXTURE_STOP = ["sudo", "-n", "/usr/bin/systemctl", "stop", FIXTURE_UNIT]
+FIXTURE_START = ["sudo", "-n", "/usr/bin/systemctl", "start", FIXTURE_UNIT]
 CASES = ("smoke", "lane_hold", "merge_hold", "drive_stop", "normal")
 
 
@@ -169,9 +172,26 @@ class ScenarioController:
             raise ValueError("fixture duration out of bounds")
         if not (Path(control["local_dir"]) / "scenario-ready-proof.json").exists():
             raise RuntimeError("scenario startup gate missing")
-        if not self._file(control, "authorize.json"):
-            raise RuntimeError("scenario authorization missing")
+        valid(self._file(control, "authorize.json"), control)
+        authorization_file = Path(control["local_dir"]) / "fixture-authorization.json"
+        if not authorization_file.exists():
+            raise RuntimeError("one-run fixture authorization missing")
+        approved = json.loads(authorization_file.read_text())
+        if (approved.get("run_id") != control["run_id"] or
+            approved.get("scenario") != control["scenario"] or
+            approved.get("unit") != FIXTURE_UNIT or
+            approved.get("stop_argv") != FIXTURE_STOP or
+            approved.get("start_argv") != FIXTURE_START or
+            approved.get("initial_service_state") != "active"):
+            raise ValueError("fixture authorization binding mismatch")
+        if (Path(control["local_dir"]) / "fixture-control.json").exists():
+            raise ValueError("fixture authorization was already used")
         guest_dir = f"/tmp/sorter-accumulation-fixture-{control['run_id']}"
+        if approved.get("guest_directory") != guest_dir:
+            raise ValueError("fixture authorization guest directory mismatch")
+        remote = json.loads(self.drives.read_file(f"{guest_dir}/authorization.json"))
+        if remote != approved:
+            raise ValueError("guest fixture authorization differs from approved record")
         argv = [DRIVES_PYTHON, DRIVES_FIXTURE, "launch", "--directory", guest_dir,
                 "--run-id", control["run_id"], "--case", control["scenario"],
                 "--duration", duration]
@@ -180,6 +200,42 @@ class ScenarioController:
                    "pid": launched["pid"], "guest_dir": guest_dir}
         atomic_control(Path(control["local_dir"]) / "fixture-control.json", fixture)
         return self.fixture_probe(path)
+
+    def fixture_authorize(self, path, approval_id, valid_for=180):
+        """Record one already granted operator approval for this exact run."""
+        control = json.loads(Path(path).read_text())
+        if control["scenario"] not in ("lane_hold", "merge_hold"):
+            raise ValueError("scenario has no service fixture")
+        if not 30 <= valid_for <= 180:
+            raise ValueError("fixture authorization expiry out of bounds")
+        manifest = json.loads(Path("deploy/deployment_manifest.json").read_text())
+        component = next(item for item in manifest["components"] if
+                         item["repository_source"] == "tests/live_accumulation_fixture.py")
+        expected_hash = component["sha256"]
+        if hashlib.sha256(Path("tests/live_accumulation_fixture.py").read_bytes()).hexdigest() != expected_hash:
+            raise ValueError("repository fixture hash differs from deployment manifest")
+        deployed = self.drives.run(["sha256sum", component["canonical_destination"]])
+        if not any(line.startswith(expected_hash + "  " + component["canonical_destination"])
+                   for line in deployed.splitlines()):
+            raise ValueError("deployed fixture hash differs from deployment manifest")
+        self.probe_ready(path)
+        valid(self._file(control, "authorize.json"), control)
+        guest_dir = f"/tmp/sorter-accumulation-fixture-{control['run_id']}"
+        argv = [DRIVES_PYTHON, DRIVES_FIXTURE, "authorize", "--directory", guest_dir,
+                "--run-id", control["run_id"], "--case", control["scenario"],
+                "--approval-id", approval_id, "--valid-for", valid_for]
+        approved = json.loads(self.drives.run(argv).splitlines()[-1])
+        if (approved.get("run_id") != control["run_id"] or
+            approved.get("scenario") != control["scenario"] or
+            approved.get("approval_id") != approval_id or
+            approved.get("guest_directory") != guest_dir or
+            approved.get("unit") != FIXTURE_UNIT or
+            approved.get("stop_argv") != FIXTURE_STOP or
+            approved.get("start_argv") != FIXTURE_START or
+            approved.get("initial_service_state") != "active"):
+            raise ValueError("guest fixture authorization response mismatch")
+        atomic_control(Path(control["local_dir"]) / "fixture-authorization.json", approved)
+        return approved
 
     def fixture_probe(self, path, timeout=12):
         control = json.loads(Path(path).read_text())
@@ -193,11 +249,22 @@ class ScenarioController:
                     raise ValueError("fixture PID mismatch")
                 if any(ready.get(k) != pid[k] for k in ("run_id", "pid", "start_ticks")):
                     raise ValueError("fixture ready identity mismatch")
+                approved = json.loads((Path(control["local_dir"]) /
+                                       "fixture-authorization.json").read_text())
+                if ready.get("authorization_id") != approved["authorization_id"]:
+                    raise ValueError("fixture ready authorization mismatch")
                 fixture["start_ticks"] = pid["start_ticks"]
                 (Path(control["local_dir"]) / "fixture-control.json").write_text(
                     json.dumps(fixture, sort_keys=True, indent=2) + "\n")
                 return ready
             except GuestCommandError:
+                try:
+                    terminal = json.loads(self.drives.read_file(
+                        f"{fixture['guest_dir']}/terminal.json"))
+                except GuestCommandError:
+                    pass
+                else:
+                    raise RuntimeError(f"fixture exited before ready: {terminal}")
                 time.sleep(.1)
         raise TimeoutError("bounded plant fixture did not start")
 
@@ -205,7 +272,12 @@ class ScenarioController:
         control = json.loads(Path(path).read_text())
         fixture = json.loads((Path(control["local_dir"]) / "fixture-control.json").read_text())
         if "start_ticks" not in fixture:
-            raise RuntimeError("fixture PID ownership unproven")
+            pid = json.loads(self.drives.read_file(f"{fixture['guest_dir']}/pid.json"))
+            if pid.get("run_id") != fixture["run_id"] or pid.get("pid") != fixture["pid"]:
+                raise RuntimeError("fixture PID ownership unproven")
+            fixture["start_ticks"] = pid["start_ticks"]
+            (Path(control["local_dir"]) / "fixture-control.json").write_text(
+                json.dumps(fixture, sort_keys=True, indent=2) + "\n")
         argv = [DRIVES_PYTHON, DRIVES_FIXTURE, "stop", "--directory", fixture["guest_dir"],
                 "--run-id", fixture["run_id"], "--case", fixture["scenario"],
                 "--pid", fixture["pid"], "--start-ticks", fixture["start_ticks"]]
@@ -216,13 +288,32 @@ class ScenarioController:
                 terminal = json.loads(self.drives.read_file(f"{fixture['guest_dir']}/terminal.json"))
                 if terminal["run_id"] != fixture["run_id"] or terminal["pid"] != fixture["pid"]:
                     raise ValueError("fixture terminal identity mismatch")
+                approved = json.loads((Path(control["local_dir"]) /
+                                       "fixture-authorization.json").read_text())
+                if terminal.get("authorization_id") != approved["authorization_id"]:
+                    raise ValueError("fixture terminal authorization mismatch")
+                process = self.fixture_inspect(fixture)
+                if process.get("alive"):
+                    time.sleep(.1)
+                    continue
+                atomic_control(Path(control["local_dir"]) / "fixture-terminal.json", terminal)
                 if not terminal["service_restored"]:
                     raise RuntimeError("plant service was not restored")
-                atomic_control(Path(control["local_dir"]) / "fixture-terminal.json", terminal)
+                if terminal.get("status") != "complete":
+                    raise RuntimeError(f"fixture ended with {terminal.get('status')}: {terminal.get('error')}")
                 return terminal
             except GuestCommandError:
                 time.sleep(.1)
         raise TimeoutError("fixture did not exit and restore service")
+
+    def fixture_inspect(self, fixture):
+        argv = [DRIVES_PYTHON, DRIVES_FIXTURE, "inspect", "--directory", fixture["guest_dir"],
+                "--run-id", fixture["run_id"], "--case", fixture["scenario"],
+                "--pid", fixture["pid"], "--start-ticks", fixture["start_ticks"]]
+        state = json.loads(self.drives.run(argv).splitlines()[-1])
+        if any(state.get(key) != fixture[key] for key in ("run_id", "pid", "start_ticks")):
+            raise ValueError("fixture process identity mismatch")
+        return state
 
     def probe_checkpoint(self, path, timeout=90):
         control = json.loads(Path(path).read_text())
@@ -318,6 +409,18 @@ class ScenarioController:
             except GuestCommandError:
                 terminal = None
             if terminal and not state["alive"]:
+                fixture_path = Path(control["local_dir"]) / "fixture-control.json"
+                if fixture_path.exists():
+                    try:
+                        restored = self.fixture_stop(path)
+                        terminal["fixture_restoration"] = restored
+                    except Exception as exc:
+                        failure = f"{type(exc).__name__}: {exc}"
+                        atomic_control(Path(control["local_dir"]) /
+                                       "fixture-restoration-failure.json",
+                                       {**identity(control), "error": failure,
+                                        "scenario_terminal": terminal})
+                        terminal["fixture_restoration_error"] = failure
                 return terminal
             time.sleep(.25)
         raise TimeoutError("scenario has no terminal exit")
@@ -336,7 +439,8 @@ class ScenarioController:
         state = self._inspect(control)
         if state["alive"]:
             raise RuntimeError("orphan detached scenario")
-        return {"terminal": terminal, "orphan": False, "local_dir": str(local)}
+        return {"terminal": terminal, "orphan": False, "local_dir": str(local),
+                "cleanup_error": terminal.get("fixture_restoration_error")}
 
     def verify_clean(self, path):
         control = json.loads(Path(path).read_text())
@@ -359,14 +463,20 @@ class ScenarioController:
         monitor_state = self.monitor._inspect(monitor_control)
         if monitor_state.get("alive"):
             raise AssertionError("readiness monitor orphan remains")
-        service = self.drives.run(["systemctl", "is-active", "sorter-plant.service"]).splitlines()[-1]
+        service = self.drives.run(["/usr/bin/systemctl", "is-active",
+                                   "sorter-plant.service"]).splitlines()[-1]
         if service != "active":
             raise AssertionError("canonical plant service inactive")
         fixture_path = Path(control["local_dir"]) / "fixture-control.json"
         if fixture_path.exists():
             fixture = json.loads(fixture_path.read_text())
-            if not (Path(control["local_dir"]) / "fixture-terminal.json").exists():
+            fixture_terminal = Path(control["local_dir"]) / "fixture-terminal.json"
+            if not fixture_terminal.exists():
                 raise AssertionError("fixture cleanup proof missing")
+            if not json.loads(fixture_terminal.read_text()).get("service_restored"):
+                raise AssertionError("fixture service restoration failed")
+            if self.fixture_inspect(fixture).get("alive"):
+                raise AssertionError("fixture supervisor orphan remains")
         guest_patterns = ((self.scada, "^/home/kevin/opcua/bin/python /home/kevin/sorter-services/xle.py"),
                           (self.scada, "^/home/kevin/opcua/bin/python /home/kevin/sorter-services/asx.py"),
                           (self.drives, "^/home/kevin/venv/bin/python /home/kevin/plant.py --block-"))
@@ -405,7 +515,8 @@ def main(argv=None):
     p.add_argument("--startup-timeout", type=float, default=30)
     p.add_argument("--hold-timeout", type=float, default=30)
     for name in ("probe-ready", "authorize", "begin", "probe-checkpoint", "release", "wait",
-                 "collect", "abort", "evidence", "verify-clean", "fixture-start", "fixture-stop"):
+                 "collect", "abort", "evidence", "verify-clean", "fixture-authorize",
+                 "fixture-start", "fixture-stop"):
         p = sub.add_parser(name)
         p.add_argument("--control", required=True)
         p.add_argument("--timeout", type=float, default=15)
@@ -413,6 +524,9 @@ def main(argv=None):
             p.add_argument("--screenshot")
         if name == "fixture-start":
             p.add_argument("--duration", type=float, default=150)
+        if name == "fixture-authorize":
+            p.add_argument("--approval-id", required=True)
+            p.add_argument("--valid-for", type=float, default=180)
     args = cli.parse_args(argv)
     control = ScenarioController()
     try:
@@ -428,6 +542,9 @@ def main(argv=None):
             result = control.evidence(args.control, screenshot=args.screenshot)
         elif args.action == "fixture-start":
             result = control.fixture_start(args.control, args.duration)
+        elif args.action == "fixture-authorize":
+            result = control.fixture_authorize(args.control, args.approval_id,
+                                               args.valid_for)
         elif args.action == "fixture-stop":
             result = control.fixture_stop(args.control, args.timeout)
         elif args.action in ("authorize", "begin", "release", "abort"):
@@ -452,6 +569,9 @@ def main(argv=None):
                             "cleanup": "pending_or_separate", "recorded_utc": datetime.now(timezone.utc).isoformat()})
         raise
     print(json.dumps(result, sort_keys=True, default=str), flush=True)
+    if isinstance(result, dict) and (result.get("cleanup_error") or
+                                    result.get("fixture_restoration_error")):
+        return 1
     return 0
 
 

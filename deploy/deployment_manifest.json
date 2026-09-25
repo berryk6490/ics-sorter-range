@@ -270,7 +270,7 @@
       "canonical_destination": "/home/kevin/live_accumulation_fixture.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "a5d0388ac85e72dc19c8e3aef3ccfe0155e00604b8c8d4d5605d03f512ebea74",
+      "sha256": "572dce0ee26bb35da47ea48a947a3aaf1e07e66f0491772bb6671620427c86dd",
       "verification_command": "sha256sum /home/kevin/live_accumulation_fixture.py"
     }
   ],
