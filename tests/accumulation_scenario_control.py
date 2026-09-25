@@ -1,8 +1,10 @@
 """Host control of detached SCADA validation, over the existing serial shell."""
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -34,6 +36,8 @@ GATE_READERS = {
     "drives": (DRIVES_PYTHON, "/home/kevin/read_authorization_gate.py"),
     "scada": (SCADA_PYTHON, "/home/kevin/sorter-services/read_authorization_gate.py"),
 }
+APPROVAL_LIFETIME = 300
+APPROVAL_LEDGER = Path.home() / "vm" / "sorter-evidence" / "phase2a-host-approval-ledger.jsonl"
 
 
 def validate_unchanged_plc(before, current):
@@ -83,14 +87,55 @@ def validate_typed_launch(evidence_root, typed_baseline, monitor_control, prefli
         raise ValueError("full deployment preflight receipt is missing or mismatched")
     report_time = datetime.fromisoformat(full["completed_utc"])
     baseline_time = datetime.fromisoformat(baseline["captured_utc"])
-    monitor_time = datetime.fromisoformat(load_control(monitor_control)["launched_utc"])
     age = (datetime.now(timezone.utc) - baseline_time).total_seconds()
-    if not 0 <= age <= 600 or not report_time <= baseline_time < monitor_time:
-        raise ValueError("full preflight and typed baseline must precede monitor launch")
+    if not 0 <= age <= 600 or not report_time <= baseline_time:
+        raise ValueError("full preflight must precede a fresh typed baseline")
+    if monitor_control:
+        monitor_time = datetime.fromisoformat(load_control(monitor_control)["launched_utc"])
+        if baseline_time >= monitor_time:
+            raise ValueError("typed baseline must precede monitor launch")
     baseline_report = typed_compare(baseline, baseline)
     if baseline_report["status"] != "PASS":
         raise ValueError(f"unsafe typed baseline: {baseline_report['differences']}")
     return baseline, baseline_report
+
+
+def claim_host_approval(approval_id, run_id, case):
+    """Spend an operator receipt before launch, even if the guest is never reached."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,96}", approval_id):
+        raise ValueError("invalid operator approval receipt ID")
+    APPROVAL_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(approval_id.encode()).hexdigest()
+    fd = os.open(APPROVAL_LEDGER, os.O_CREAT | os.O_RDWR | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a+", encoding="utf-8") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        stream.seek(0)
+        if any(json.loads(line)["approval_sha256"] == digest for line in stream):
+            raise ValueError("operator approval receipt was already used")
+        stream.seek(0, os.SEEK_END)
+        stream.write(json.dumps({"approval_sha256": digest, "run_id": run_id,
+                                 "scenario": case, "recorded_utc": datetime.now(timezone.utc).isoformat()},
+                                sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def valid_preapproval(preparation, approval, *, now=None):
+    """Validate the exact prelaunch approval; a failed launch spends its receipt."""
+    now = time.time_ns() if now is None else now
+    if (approval.get("version") != 1 or approval.get("run_id") != preparation["run_id"] or
+        approval.get("scenario") != preparation["scenario"] or
+        approval.get("unit") != FIXTURE_UNIT or approval.get("stop_argv") != FIXTURE_STOP or
+        approval.get("start_argv") != FIXTURE_START or
+        approval.get("initial_service_state") != "active" or
+        approval.get("scope") != "one stop and its restorative start for this run only" or
+        not re.fullmatch(r"[A-Za-z0-9_-]{8,96}", str(approval.get("approval_id", ""))) or
+        type(approval.get("approved_wall_ns")) is not int or
+        type(approval.get("expires_wall_ns")) is not int or
+        not 0 < approval["expires_wall_ns"] - approval["approved_wall_ns"] <= APPROVAL_LIFETIME * 10**9 or
+        not approval["approved_wall_ns"] <= now < approval["expires_wall_ns"]):
+        raise ValueError("prelaunch operator approval missing, mismatched, or expired")
+    return approval
 
 
 def identity(control):
@@ -123,8 +168,51 @@ class ScenarioController:
                 "--pid", control["pid"], "--start-ticks", control["start_ticks"]]
         return valid(json.loads(self.scada.run(args).splitlines()[-1]), control)
 
+    def prepare(self, evidence_dir, case, typed_baseline, preflight_report):
+        """Reserve the run identity before requesting human approval."""
+        if case not in ("lane_hold", "merge_hold"):
+            raise ValueError("prelaunch approval is only for a plant fixture scenario")
+        root = Path(evidence_dir).resolve()
+        validate_typed_launch(root, typed_baseline, None, preflight_report)
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
+        local = root / run_id
+        local.mkdir(parents=True, mode=0o700, exist_ok=False)
+        record = {"version": 1, "run_id": run_id, "scenario": case,
+                  "typed_baseline": str(Path(typed_baseline).resolve()),
+                  "preflight_report": str(Path(preflight_report).resolve()),
+                  "prepared_utc": datetime.now(timezone.utc).isoformat()}
+        path = local / "preparation.json"
+        atomic_control(path, record)
+        return path
+
+    def record_approval(self, preparation_path, approval_id, valid_for=APPROVAL_LIFETIME):
+        """Record one fresh operator attestation before any worker is launched."""
+        if not 30 <= valid_for <= APPROVAL_LIFETIME:
+            raise ValueError("prelaunch approval expiry out of bounds")
+        path = Path(preparation_path).resolve()
+        preparation = json.loads(path.read_text())
+        local = path.parent
+        if path.name != "preparation.json" or local.name != preparation["run_id"]:
+            raise ValueError("preparation identity mismatch")
+        if (local / "operator-approval.json").exists() or (local / "scenario-control.json").exists():
+            raise ValueError("run already approved or launched")
+        validate_typed_launch(local.parent, preparation["typed_baseline"], None,
+                              preparation["preflight_report"])
+        claim_host_approval(approval_id, preparation["run_id"], preparation["scenario"])
+        now = time.time_ns()
+        approval = {"version": 1, "run_id": preparation["run_id"],
+                    "scenario": preparation["scenario"], "approval_id": approval_id,
+                    "unit": FIXTURE_UNIT, "stop_argv": FIXTURE_STOP, "start_argv": FIXTURE_START,
+                    "initial_service_state": "active",
+                    "approved_wall_ns": now, "expires_wall_ns": now + int(valid_for * 1e9),
+                    "scope": "one stop and its restorative start for this run only"}
+        atomic_control(local / "operator-approval.json", approval)
+        return {"run_id": preparation["run_id"], "scenario": preparation["scenario"],
+                "approval_record": str(local / "operator-approval.json"),
+                "expires_wall_ns": approval["expires_wall_ns"]}
+
     def launch(self, evidence_dir, case, monitor_control, typed_baseline, preflight_report,
-               startup_timeout=120, hold_timeout=30):
+               startup_timeout=120, hold_timeout=30, preparation_path=None):
         if case not in CASES or not 1 <= startup_timeout <= 120 or not 1 <= hold_timeout <= 60:
             raise ValueError("invalid scenario or timeout")
         manifest = json.loads(Path("deploy/deployment_manifest.json").read_text())
@@ -132,8 +220,37 @@ class ScenarioController:
                         if c["repository_source"] == "tests/live_accumulation.py")
         if hashlib.sha256(Path("tests/live_accumulation.py").read_bytes()).hexdigest() != expected:
             raise ValueError("local runner does not match deployment manifest")
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
         evidence_root = Path(evidence_dir).resolve()
+        if case in ("lane_hold", "merge_hold"):
+            try:
+                if preparation_path is None:
+                    raise ValueError("fixture scenario requires prelaunch operator approval")
+                preparation_file = Path(preparation_path).resolve()
+                preparation = json.loads(preparation_file.read_text())
+                if (preparation_file.name != "preparation.json" or
+                    preparation_file.parent.parent != evidence_root or
+                    preparation.get("scenario") != case or
+                    preparation.get("typed_baseline") != str(Path(typed_baseline).resolve()) or
+                    preparation.get("preflight_report") != str(Path(preflight_report).resolve())):
+                    raise ValueError("preparation differs from launch parameters")
+                run_id = preparation["run_id"]
+                if preparation_file.parent.name != run_id:
+                    raise ValueError("prepared run identity mismatch")
+                valid_preapproval(preparation, json.loads((preparation_file.parent / "operator-approval.json").read_text()))
+                if (preparation_file.parent / "launch-claimed.json").exists():
+                    raise ValueError("approved run was already launched")
+            except Exception as exc:
+                try:
+                    cleanup = self.monitor.collect(monitor_control, timeout=20, stop=True)
+                except Exception as cleanup_exc:
+                    raise RuntimeError(f"prelaunch approval refused: {exc}; monitor cleanup failed: {cleanup_exc}") from exc
+                if cleanup.get("cleanup_errors") or cleanup.get("orphan"):
+                    raise RuntimeError(f"prelaunch approval refused: {exc}; monitor cleanup: {cleanup}") from exc
+                raise
+        else:
+            if preparation_path is not None:
+                raise ValueError("non-fixture scenario cannot use a fixture approval")
+            run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
         gate = RESTORATION_GATE
         try:
             baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
@@ -156,6 +273,10 @@ class ScenarioController:
                 row[4] for row in initial["slots"]):
             raise ValueError("PLC is not at a stopped, empty baseline")
         atomic_control(local / "initial-state.json", initial)
+        if preparation_path:
+            # A failed or interrupted launch cannot replay this approved run.
+            atomic_control(local / "launch-claimed.json", {"run_id": run_id, "scenario": case,
+                           "claimed_utc": datetime.now(timezone.utc).isoformat()})
         guest_dir = f"/tmp/sorter-accumulation-scenario-{run_id}"
         commit = __import__("subprocess").check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         argv = [SCADA_PYTHON, GUEST, "launch", "--directory", guest_dir,
@@ -268,6 +389,10 @@ class ScenarioController:
         started = time.monotonic()
         control = json.loads(Path(path).read_text())
         try:
+            if control["scenario"] in ("lane_hold", "merge_hold"):
+                preparation = json.loads((Path(control["local_dir"]) / "preparation.json").read_text())
+                approval = json.loads((Path(control["local_dir"]) / "operator-approval.json").read_text())
+                valid_preapproval(preparation, approval)
             ready_path = Path(control["local_dir"]) / "scenario-ready-proof.json"
             if ready_path.exists():
                 proof = json.loads(ready_path.read_text())
@@ -334,6 +459,8 @@ class ScenarioController:
             duration = time.monotonic() - started
             if duration > timeout or remaining < MIN_AUTHORIZATION_MARGIN:
                 raise TimeoutError(f"authorization window expired: gate={duration:.3f}s remaining={remaining:.3f}s")
+            if control["scenario"] in ("lane_hold", "merge_hold"):
+                valid_preapproval(preparation, approval)
             result = {**identity(control), "status": "PASS", "duration_seconds": round(duration, 3),
                       "authorization_remaining_seconds": round(remaining, 3),
                       "services_checked": checked_services, "plc_identity": current["identity"],
@@ -354,6 +481,10 @@ class ScenarioController:
                 gate = valid(json.loads(gate_path.read_text()), control)
                 if gate.get("status") != "PASS":
                     raise RuntimeError("post-ready gate did not pass")
+                if control["scenario"] in ("lane_hold", "merge_hold"):
+                    local = Path(control["local_dir"])
+                    valid_preapproval(json.loads((local / "preparation.json").read_text()),
+                                      json.loads((local / "operator-approval.json").read_text()))
                 monitor = load_control(control["monitor_control"])
                 monitor_state = self.monitor._inspect(monitor)
                 if not monitor_state.get("alive") or not monitor_state.get("matches"):
@@ -414,6 +545,11 @@ class ScenarioController:
         remote = json.loads(self.drives.read_file(f"{guest_dir}/authorization.json"))
         if remote != approved:
             raise ValueError("guest fixture authorization differs from approved record")
+        worker = self._inspect(control)
+        if (not worker.get("alive") or not worker.get("matches") or
+            worker.get("authorization_remaining_seconds", 0) < MIN_AUTHORIZATION_MARGIN):
+            cleanup = self._abort_failed_gate(path, "worker authorization window expired before fixture launch")
+            raise RuntimeError(f"fixture launch refused: worker authorization window expired; cleanup={cleanup}")
         argv = [DRIVES_PYTHON, DRIVES_FIXTURE, "launch", "--directory", guest_dir,
                 "--run-id", control["run_id"], "--case", control["scenario"],
                 "--duration", duration]
@@ -424,12 +560,35 @@ class ScenarioController:
         return self.fixture_probe(path)
 
     def fixture_authorize(self, path, approval_id, valid_for=180):
+        try:
+            return self._fixture_authorize_checked(path, approval_id, valid_for)
+        except Exception as exc:
+            control = json.loads(Path(path).read_text())
+            if not (Path(control["local_dir"]) / "fixture-control.json").exists():
+                cleanup = self._abort_failed_gate(path, f"fixture authorization: {type(exc).__name__}: {exc}")
+                raise RuntimeError(f"fixture authorization refused: {exc}; cleanup={cleanup}") from exc
+            raise
+
+    def _fixture_authorize_checked(self, path, approval_id, valid_for=180):
         """Record one already granted operator approval for this exact run."""
         control = json.loads(Path(path).read_text())
         if control["scenario"] not in ("lane_hold", "merge_hold"):
             raise ValueError("scenario has no service fixture")
         if not 30 <= valid_for <= 180:
             raise ValueError("fixture authorization expiry out of bounds")
+        local = Path(control["local_dir"])
+        if not (local / "post-ready-gate.json").exists():
+            raise ValueError("post-ready gate missing")
+        valid(json.loads((local / "post-ready-gate.json").read_text()), control)
+        preparation = json.loads((local / "preparation.json").read_text())
+        prior = valid_preapproval(preparation, json.loads((local / "operator-approval.json").read_text()))
+        if prior["approval_id"] != approval_id:
+            raise ValueError("operator approval receipt differs from prepared run")
+        if (local / "fixture-authorization-claimed.json").exists():
+            raise ValueError("operator approval already claimed for this fixture")
+        remaining = (prior["expires_wall_ns"] - time.time_ns()) / 1e9
+        if remaining < 55:
+            raise ValueError("operator approval expires before fixture startup")
         manifest = json.loads(Path("deploy/deployment_manifest.json").read_text())
         component = next(item for item in manifest["components"] if
                          item["repository_source"] == "tests/live_accumulation_fixture.py")
@@ -442,6 +601,16 @@ class ScenarioController:
             raise ValueError("deployed fixture hash differs from deployment manifest")
         self.probe_ready(path)
         valid(self._file(control, "authorize.json"), control)
+        valid_preapproval(preparation, prior)
+        # Guest issuance uses a bounded 20-second serial round trip. Reserve
+        # 25 seconds so guest stop permission cannot outlive host approval.
+        valid_for = min(valid_for, (prior["expires_wall_ns"] - time.time_ns()) / 1e9 - 25)
+        if valid_for < 30:
+            raise ValueError("operator approval expires before guest authorization")
+        atomic_control(local / "fixture-authorization-claimed.json",
+                       {"run_id": control["run_id"], "scenario": control["scenario"],
+                        "approval_sha256": hashlib.sha256(approval_id.encode()).hexdigest(),
+                        "claimed_utc": datetime.now(timezone.utc).isoformat()})
         guest_dir = f"/tmp/sorter-accumulation-fixture-{control['run_id']}"
         argv = [DRIVES_PYTHON, DRIVES_FIXTURE, "authorize", "--directory", guest_dir,
                 "--run-id", control["run_id"], "--case", control["scenario"],
@@ -740,12 +909,22 @@ class ScenarioController:
 def main(argv=None):
     cli = argparse.ArgumentParser()
     sub = cli.add_subparsers(dest="action", required=True)
+    p = sub.add_parser("prepare")
+    p.add_argument("--evidence-dir", required=True)
+    p.add_argument("--case", choices=("lane_hold", "merge_hold"), required=True)
+    p.add_argument("--typed-baseline", required=True)
+    p.add_argument("--preflight-report", required=True)
+    p = sub.add_parser("record-approval")
+    p.add_argument("--preparation", required=True)
+    p.add_argument("--approval-id", required=True)
+    p.add_argument("--valid-for", type=float, default=APPROVAL_LIFETIME)
     p = sub.add_parser("launch")
     p.add_argument("--evidence-dir", required=True)
     p.add_argument("--case", choices=CASES, required=True)
     p.add_argument("--monitor-control", required=True)
     p.add_argument("--typed-baseline", required=True)
     p.add_argument("--preflight-report", required=True)
+    p.add_argument("--preparation")
     p.add_argument("--startup-timeout", type=float, default=120)
     p.add_argument("--hold-timeout", type=float, default=30)
     for name in ("probe-ready", "post-ready-gate", "authorize", "begin", "probe-checkpoint", "release", "wait",
@@ -766,11 +945,17 @@ def main(argv=None):
     args = cli.parse_args(argv)
     control = ScenarioController()
     try:
-        if args.action == "launch":
+        if args.action == "prepare":
+            result = {"preparation": str(control.prepare(args.evidence_dir, args.case,
+                                                          args.typed_baseline, args.preflight_report))}
+        elif args.action == "record-approval":
+            result = control.record_approval(args.preparation, args.approval_id, args.valid_for)
+        elif args.action == "launch":
             result = {"control": str(control.launch(args.evidence_dir, args.case,
                                                     args.monitor_control, args.typed_baseline,
                                                     args.preflight_report,
-                                                    args.startup_timeout, args.hold_timeout))}
+                                                    args.startup_timeout, args.hold_timeout,
+                                                    args.preparation))}
         elif args.action == "probe-ready":
             result = control.probe_ready(args.control, args.timeout)
         elif args.action == "post-ready-gate":
@@ -795,7 +980,7 @@ def main(argv=None):
         else:
             result = control.verify_clean(args.control)
     except Exception as exc:
-        if args.action != "launch":
+        if args.action not in ("launch", "prepare", "record-approval"):
             record = json.loads(Path(args.control).read_text())
             category = ("evidence_failure" if args.action in ("evidence", "probe-checkpoint") else
                         "monitor_failure" if args.action in ("probe-ready", "post-ready-gate", "authorize") else

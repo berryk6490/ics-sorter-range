@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -22,6 +23,16 @@ class HostGateTest(unittest.TestCase):
                         "pid": 42, "start_ticks": 55, "guest_dir": "/tmp/fake",
                         "local_dir": str(self.root), "monitor_control": str(self.root / "monitor.json")}
         self.path.write_text(json.dumps(self.control))
+        (self.root / "preparation.json").write_text(json.dumps({"run_id": self.control["run_id"],
+                                                               "scenario": "lane_hold"}))
+        now = time.time_ns()
+        (self.root / "operator-approval.json").write_text(json.dumps({
+            "version": 1, "run_id": self.control["run_id"], "scenario": "lane_hold",
+            "approval_id": "receipt_12345678", "unit": host.FIXTURE_UNIT,
+            "stop_argv": host.FIXTURE_STOP, "start_argv": host.FIXTURE_START,
+            "initial_service_state": "active",
+            "approved_wall_ns": now, "expires_wall_ns": now + 300 * 10**9,
+            "scope": "one stop and its restorative start for this run only"}))
         self.scada = Mock()
         self.manager = host.ScenarioController(scada=self.scada, drives=Mock(), monitor=Mock())
 
@@ -40,6 +51,23 @@ class HostGateTest(unittest.TestCase):
         with patch.object(self.manager, "_file", return_value=host.identity(self.control)):
             with self.assertRaisesRegex(RuntimeError, "authorization missing"):
                 self.manager.fixture_start(self.path)
+        self.manager.drives.run.assert_not_called()
+
+    def test_fixture_start_refuses_expired_worker_without_service_stop(self):
+        (self.root / "scenario-ready-proof.json").write_text("{}")
+        row = {"run_id": self.control["run_id"], "scenario": "lane_hold",
+               "unit": host.FIXTURE_UNIT, "stop_argv": host.FIXTURE_STOP,
+               "start_argv": host.FIXTURE_START, "initial_service_state": "active",
+               "guest_directory": f"/tmp/sorter-accumulation-fixture-{self.control['run_id']}"}
+        (self.root / "fixture-authorization.json").write_text(json.dumps(row))
+        self.manager.drives.read_file.return_value = json.dumps(row)
+        with patch.object(self.manager, "_file", return_value=host.identity(self.control)), \
+             patch.object(self.manager, "_inspect", return_value={
+                 "alive": True, "matches": True, "authorization_remaining_seconds": 1}), \
+             patch.object(self.manager, "_abort_failed_gate", return_value={"orphan": False}) as cleanup:
+            with self.assertRaisesRegex(RuntimeError, "fixture launch refused"):
+                self.manager.fixture_start(self.path)
+        cleanup.assert_called_once()
         self.manager.drives.run.assert_not_called()
 
     def test_wrong_run_response_is_rejected(self):
@@ -176,6 +204,22 @@ class HostGateTest(unittest.TestCase):
                 cleanup.assert_called_once()
                 fixture_stop.assert_not_called()
 
+    def test_prelaunch_approval_expiring_after_launch_fails_gate(self):
+        from contextlib import ExitStack
+        row_path = self.root / "operator-approval.json"
+        row = json.loads(row_path.read_text())
+        row["expires_wall_ns"] = 1
+        row_path.write_text(json.dumps(row))
+        with ExitStack() as stack:
+            for item in self._gate_ready():
+                stack.enter_context(item)
+            cleanup = stack.enter_context(patch.object(self.manager, "_abort_failed_gate",
+                                                       return_value={"orphan": False}))
+            with self.assertRaisesRegex(RuntimeError, "post-ready gate failed"):
+                self.manager.pre_authorization_gate(self.path)
+        cleanup.assert_called_once()
+        self.scada.run.assert_not_called()
+
     def test_failed_gate_cleanup_stops_only_worker_and_monitor(self):
         self.control["scenario"] = "smoke"
         self.path.write_text(json.dumps(self.control))
@@ -234,6 +278,142 @@ class FixtureCleanupTest(unittest.TestCase):
             self.assertIn("fixture unavailable", terminal["error"])
             self.assertEqual(terminal["cleanup_errors"], [])
             self.assertTrue(terminal["service_restored"])
+
+
+class PrelaunchApprovalTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.manager = host.ScenarioController(scada=Mock(), drives=Mock(), monitor=Mock())
+        self.baseline = self.root / "baseline.json"
+        self.preflight = self.root / "preflight.json"
+        self.baseline.write_text("{}")
+        self.preflight.write_text("{}")
+
+    def prepared(self, case="lane_hold"):
+        with patch.object(host, "validate_typed_launch", return_value=({}, {"status": "PASS"})):
+            path = self.manager.prepare(self.root, case, self.baseline, self.preflight)
+        return path
+
+    def approved(self, case="lane_hold"):
+        path = self.prepared(case)
+        with patch.object(host, "validate_typed_launch", return_value=({}, {"status": "PASS"})), \
+             patch.object(host, "APPROVAL_LEDGER", self.root / "host-ledger.jsonl"):
+            self.manager.record_approval(path, "receipt_12345678")
+        return path
+
+    def test_slow_human_approval_precedes_worker_launch(self):
+        path = self.prepared()
+        self.manager.scada.run.assert_not_called()
+        # A 92-second inventory and a simulated 200-second human wait are outside
+        # the worker timer; the receipt lifetime begins only at record-approval.
+        future = time.time_ns() + 200 * 10**9
+        with patch.object(host, "validate_typed_launch", return_value=({}, {"status": "PASS"})), \
+             patch.object(host, "APPROVAL_LEDGER", self.root / "host-ledger.jsonl"), \
+             patch.object(host.time, "time_ns", return_value=future):
+            self.manager.record_approval(path, "receipt_12345678")
+        self.manager.scada.run.assert_not_called()
+        approval = json.loads((path.parent / "operator-approval.json").read_text())
+        self.assertEqual(approval["run_id"], json.loads(path.read_text())["run_id"])
+        self.assertEqual(approval["stop_argv"], host.FIXTURE_STOP)
+        self.assertEqual(approval["approved_wall_ns"], future)
+
+    def test_expired_or_wrong_run_approval_rejected_before_launch(self):
+        path = self.approved()
+        row = json.loads((path.parent / "operator-approval.json").read_text())
+        for key, value in (("expires_wall_ns", 1), ("run_id", "another_run"),
+                           ("scenario", "merge_hold")):
+            with self.subTest(key=key):
+                changed = dict(row, **{key: value})
+                with self.assertRaisesRegex(ValueError, "prelaunch operator approval"):
+                    host.valid_preapproval(json.loads(path.read_text()), changed)
+
+    def test_same_receipt_cannot_be_prepared_for_another_run(self):
+        first = self.approved()
+        second = self.prepared("merge_hold")
+        with patch.object(host, "validate_typed_launch", return_value=({}, {"status": "PASS"})), \
+             patch.object(host, "APPROVAL_LEDGER", self.root / "host-ledger.jsonl"):
+            with self.assertRaisesRegex(ValueError, "already used"):
+                self.manager.record_approval(second, "receipt_12345678")
+        self.assertFalse((second.parent / "operator-approval.json").exists())
+        self.assertTrue((first.parent / "operator-approval.json").exists())
+
+    def test_launch_rejects_expired_approval_and_stops_monitor(self):
+        path = self.approved()
+        self.manager.monitor.collect.return_value = {"cleanup_errors": [], "orphan": False}
+        row_path = path.parent / "operator-approval.json"
+        row = json.loads(row_path.read_text())
+        row["expires_wall_ns"] = 1
+        row_path.write_text(json.dumps(row))
+        with self.assertRaisesRegex(ValueError, "expired"):
+            self.manager.launch(self.root, "lane_hold", "monitor", self.baseline,
+                                self.preflight, preparation_path=path)
+        self.manager.monitor.collect.assert_called_once_with("monitor", timeout=20, stop=True)
+        self.manager.scada.run.assert_not_called()
+
+    def test_expiry_after_launch_refuses_fixture_and_aborts(self):
+        path = self.approved()
+        control = {"run_id": json.loads(path.read_text())["run_id"],
+                   "scenario": "lane_hold", "local_dir": str(path.parent),
+                   "pid": 42, "start_ticks": 5}
+        control_path = path.parent / "scenario-control.json"
+        control_path.write_text(json.dumps(control))
+        row_path = path.parent / "operator-approval.json"
+        row = json.loads(row_path.read_text())
+        row["expires_wall_ns"] = 1
+        row_path.write_text(json.dumps(row))
+        (path.parent / "post-ready-gate.json").write_text(json.dumps({**host.identity(control),
+                                                                   "status": "PASS"}))
+        with patch.object(self.manager, "_abort_failed_gate", return_value={"orphan": False}) as cleanup, \
+             patch.object(self.manager, "fixture_stop") as fixture_stop:
+            with self.assertRaisesRegex(RuntimeError, "fixture authorization refused"):
+                self.manager.fixture_authorize(control_path, "receipt_12345678")
+        cleanup.assert_called_once()
+        fixture_stop.assert_not_called()
+        self.manager.drives.run.assert_not_called()
+
+    def test_failed_gate_never_reaches_guest_fixture_ledger(self):
+        path = self.approved()
+        control = {"run_id": json.loads(path.read_text())["run_id"],
+                   "scenario": "lane_hold", "local_dir": str(path.parent),
+                   "pid": 42, "start_ticks": 5}
+        control_path = path.parent / "scenario-control.json"
+        control_path.write_text(json.dumps(control))
+        with patch.object(self.manager, "_abort_failed_gate", return_value={"orphan": False}):
+            with self.assertRaisesRegex(RuntimeError, "fixture authorization refused"):
+                self.manager.fixture_authorize(control_path, "receipt_12345678")
+        self.manager.drives.run.assert_not_called()
+
+    def test_timely_approval_issues_exact_run_bound_guest_record(self):
+        path = self.approved()
+        run_id = json.loads(path.read_text())["run_id"]
+        control = {"run_id": run_id, "scenario": "lane_hold", "local_dir": str(path.parent),
+                   "guest_dir": "/tmp/scenario", "pid": 42, "start_ticks": 5}
+        control_path = path.parent / "scenario-control.json"
+        control_path.write_text(json.dumps(control))
+        (path.parent / "post-ready-gate.json").write_text(json.dumps({**host.identity(control),
+                                                                   "status": "PASS"}))
+        guest_dir = f"/tmp/sorter-accumulation-fixture-{run_id}"
+        expected = {"run_id": run_id, "scenario": "lane_hold", "approval_id": "receipt_12345678",
+                    "guest_directory": guest_dir, "unit": host.FIXTURE_UNIT,
+                    "stop_argv": host.FIXTURE_STOP, "start_argv": host.FIXTURE_START,
+                    "initial_service_state": "active"}
+        self.manager._file = Mock(return_value=host.identity(control))
+        self.manager.probe_ready = Mock()
+        with patch.object(self.manager, "_abort_failed_gate") as abort:
+            manifest = json.loads(Path("deploy/deployment_manifest.json").read_text())
+            component = next(x for x in manifest["components"] if
+                             x["repository_source"] == "tests/live_accumulation_fixture.py")
+            self.manager.drives.run.side_effect = [
+                component["sha256"] + "  " + component["canonical_destination"], json.dumps(expected)]
+            result = self.manager.fixture_authorize(control_path, "receipt_12345678")
+        self.assertEqual(result["run_id"], run_id)
+        self.assertTrue((path.parent / "fixture-authorization-claimed.json").exists())
+        abort.assert_not_called()
+        guest_argv = self.manager.drives.run.call_args_list[1].args[0]
+        self.assertEqual(guest_argv[guest_argv.index("--run-id") + 1], run_id)
+        self.assertEqual(guest_argv[guest_argv.index("--case") + 1], "lane_hold")
 
 
 if __name__ == "__main__":

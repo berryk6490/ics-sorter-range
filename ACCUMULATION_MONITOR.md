@@ -186,8 +186,9 @@ operator reset, and restores the recorded operator settings.
 For lane and merge cases, the separate drives helper
 `/home/kevin/live_accumulation_fixture.py` is a bounded supervisor. It
 accepts only the fixed lane-1 premerge or shared-merge plant fixture. Hermes
-must obtain **one fresh operator approval immediately before fixture-start**.
-The approval must identify the unique run ID and scenario and explicitly
+must obtain **one fresh operator approval after the full preflight and typed
+baseline, but before launching the monitor or worker**. `prepare` reserves the
+unique run ID and scenario first. The approval must name that ID and scenario and explicitly
 cover both exact guest commands:
 
 ```text
@@ -198,9 +199,14 @@ sudo -n /usr/bin/systemctl start sorter-plant.service
 The first command starts the bounded fixture; the second restores the
 canonical service during normal completion, abort, failure, or timeout.
 The approval covers only these two transitions for this one run. Hermes
-passes its approval receipt ID to `fixture-authorize`; that command records
+passes its approval receipt ID to `record-approval` before launch; the host
+spends its SHA256 in a locked one-use ledger, binds it to the prepared run,
+scenario, exact commands and a maximum 300-second lifetime. A failed or
+expired attempt cannot reuse it. After worker readiness and a passing gate,
+Hermes passes the same receipt ID to `fixture-authorize`; that command records
 the run ID, scenario, unit, both argument vectors, approval ID, guest
-authorization timestamp, expiry (30–180 seconds), and initial active
+authorization timestamp, expiry (30–180 seconds, never beyond the prelaunch
+approval), and initial active
 service/process state in a unique guest `authorization.json`. The helper
 checks that record again before the first stop and atomically claims it
 once. A missing, stale, mismatched, reused, or malformed record blocks the
@@ -219,7 +225,9 @@ restores independently at its bounded deadline.
 
 The approval receipt is an operator attestation supplied by Hermes; the
 script validates its scope and lifetime, not the identity of the approving
-person. Do not grant generic sudo, wildcard sudoers rules, Hermes YOLO mode,
+person. Human response time is outside the worker's 120-second authorization
+timer. If the operator has not approved before launch, no worker starts.
+Do not grant generic sudo, wildcard sudoers rules, Hermes YOLO mode,
 or a broader command allowlist. The no-package smoke and drive-stop case
 never invoke this helper.
 
@@ -251,13 +259,31 @@ the monitor and detached worker launch. The unfiltered preflight receipt binds
 the manifest hash, PLC identity, result and completion time. It is not run
 again while the worker waits for authorization. The conflicting second run
 originated in this document's former “Run a fresh preflight now” paragraph
-after `probe-ready`; it was not a worker requirement. First run the monitor `start`
-and `probe` commands above. Substitute its
-printed control path for `$MONITOR_CONTROL`. The scenario controller prints
-its own control path for `$SCENARIO_CONTROL`:
+after `probe-ready`; it was not a worker requirement. Reserve the scenario
+identity before requesting approval:
 
 ```sh
-python3 tests/accumulation_scenario_control.py launch --evidence-dir /home/kevin/vm/sorter-evidence/phase2a-hermes --case lane_hold --monitor-control "$MONITOR_CONTROL" --typed-baseline "$EVIDENCE_DIR/typed-before.json" --preflight-report "$EVIDENCE_DIR/deployment-preflight.json" --startup-timeout 120 --hold-timeout 30
+python3 tests/accumulation_scenario_control.py prepare --evidence-dir "$EVIDENCE_DIR" --case lane_hold --typed-baseline "$EVIDENCE_DIR/typed-before.json" --preflight-report "$EVIDENCE_DIR/deployment-preflight.json"
+```
+
+Use the printed `$PREPARATION` path and its run ID to request **one** operator
+approval for this `lane_hold` run and the two exact commands above. Waiting for
+the operator happens here, before any monitor or worker launch. When approval
+arrives, record its unique receipt immediately; the 300-second lifetime starts
+when this command records it. Then start and probe the monitor using the
+monitor commands above, and substitute its printed path for `$MONITOR_CONTROL`.
+The scenario controller prints `$SCENARIO_CONTROL` at launch. If approval expires, discard this run and obtain a new receipt
+for a new prepared run. Never reuse an old receipt.
+
+```sh
+python3 tests/accumulation_scenario_control.py record-approval --preparation "$PREPARATION" --approval-id "$APPROVAL_RECEIPT_ID" --valid-for 300
+```
+
+Start and probe the drives monitor now, using the commands earlier in this
+document. Only after its ready proof exists, launch the worker:
+
+```sh
+python3 tests/accumulation_scenario_control.py launch --evidence-dir "$EVIDENCE_DIR" --case lane_hold --preparation "$PREPARATION" --monitor-control "$MONITOR_CONTROL" --typed-baseline "$EVIDENCE_DIR/typed-before.json" --preflight-report "$EVIDENCE_DIR/deployment-preflight.json" --startup-timeout 120 --hold-timeout 30
 python3 tests/accumulation_scenario_control.py probe-ready --control "$SCENARIO_CONTROL"
 python3 tests/accumulation_scenario_control.py post-ready-gate --control "$SCENARIO_CONTROL" --timeout 25
 ```
@@ -284,15 +310,23 @@ release and terminal collection passed. The matching worker and monitor exited
 without orphans; `verify-clean` passed. Evidence is under
 `/home/kevin/vm/sorter-evidence/phase2a-timing-smoke-120s-20260925/`.
 
+The approval-order tooling smoke on 2026-09-25 used the no-fixture `smoke`
+scenario. Its 31-component preflight took 97.658 seconds before monitor/worker
+launch. The post-ready gate took 9.020 seconds with 102.996 seconds left in
+the worker window. `authorize` completed in 2.539 seconds; an intentional
+abort then yielded a terminal `scenario_failure`, followed by successful
+collection, monitor stop, and `verify-clean` (restored, no orphan). No plant
+service transition or package run occurred. Evidence is under
+`/home/kevin/vm/sorter-evidence/phase2a-approval-smoke-20260925/`.
+
 The 120-second authorization bound replaces the former 60-second bound, which
-left only 31.946 seconds after the first measured batched gate. It leaves time
-for the separate operator approval and still expires automatically. The begin
-and evidence-release waits remain separately bounded. Hermes then requests one
-operator approval naming this run ID, `lane_hold`, and the exact stop and
-start commands above. Only after approval, record its unique receipt ID and
-continue. If the bounded worker startup wait expires while approval is
-pending, launch a new run and obtain a fresh run-bound approval; never reuse
-the old receipt:
+left only 31.946 seconds after the first measured batched gate. It bounds
+machine coordination only; no human approval wait occurs inside it. The begin
+and evidence-release waits remain separately bounded. Immediately after a
+passing post-ready gate, use the already recorded receipt. If its 300-second
+prelaunch lifetime or the worker window expires, the controller aborts the
+worker and monitor without starting the fixture; prepare a new run and request
+a new approval:
 
 ```sh
 python3 tests/accumulation_scenario_control.py authorize --control "$SCENARIO_CONTROL"

@@ -60,18 +60,25 @@ python3 tests/accumulation_state_snapshot.py capture --output "$EVIDENCE_DIR/typ
 python3 tests/accumulation_state_snapshot.py compare --before "$EVIDENCE_DIR/typed-before.json" --after "$EVIDENCE_DIR/typed-before.json" --output "$EVIDENCE_DIR/typed-baseline-check.json"
 ```
 
-Then start/probe the drives monitor. Launch the detached scenario with
+For a service fixture scenario, first run `prepare` to reserve its run ID,
+obtain one fresh operator approval for that ID, then run `record-approval`.
+The receipt is bound to that run and expires within 300 seconds. Only then
+start/probe the drives monitor. Launch the detached scenario with
+`--preparation "$PREPARATION"` and
 `--typed-baseline "$EVIDENCE_DIR/typed-before.json"` and
 `--preflight-report "$EVIDENCE_DIR/deployment-preflight.json"` in addition to the
 documented arguments. The baseline must be safe, less than ten minutes old,
 and both full preflight and baseline must precede monitor launch. After the
-worker is ready, run `post-ready-gate` before approval; it is the sole
+worker is ready, run `post-ready-gate` before issuing the guest fixture
+authorization; it is the sole
 post-ready state check and does not repeat deployment hashes. Launch writes a `PENDING` restoration
 gate at `/home/kevin/vm/sorter-evidence/phase2a-restoration-gate.json`.
 Only a passing `verify-clean` changes it to `PASS`. An unresolved gate blocks
 the next scenario even when it uses a different evidence directory.
-If the ten-minute baseline window expires, stop the monitor, capture a new
-baseline while no validation process remains, and start a new monitor/run.
+If the ten-minute baseline window or the prelaunch approval expires, stop the
+monitor, capture a new baseline while no validation process remains, prepare a
+new run, and obtain a new receipt. The old receipt cannot be reused. Human
+approval is never awaited inside the detached worker's 120-second timer.
 
 After release or abort, wait/collect, restore the fixture if used, stop and
 collect the monitor, and call `verify-clean`. It saves `typed-after.json` and
