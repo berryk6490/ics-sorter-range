@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).parent))
 import accumulation_scenario_control as host
 import live_accumulation_fixture as fixture
+from test_accumulation_state_snapshot import sample as typed_sample
 
 
 class HostGateTest(unittest.TestCase):
@@ -111,6 +112,102 @@ class HostGateTest(unittest.TestCase):
             result = self.manager.fixture_stop(self.path, timeout=2)
         self.assertTrue(result["service_restored"])
         self.assertEqual(inspect.call_count, 2)
+
+    def _gate_ready(self, plc=None, remaining=40):
+        self.control.update(commit="test-commit", runner_sha256="runner-hash")
+        self.path.write_text(json.dumps(self.control))
+        (self.root / "typed-before.json").write_text(json.dumps({"plc": typed_sample()["plc"]}))
+        ready = {**host.identity(self.control), "repository_commit": "test-commit",
+                 "mutation_started": False, "preflight": {"runner_sha256": "runner-hash"}}
+        self.manager.probe_ready = Mock(return_value={"ready": ready})
+        self.manager._inspect = Mock(return_value={"alive": True, "matches": True,
+                            "authorization_remaining_seconds": remaining})
+        self.manager.monitor._inspect.return_value = {"alive": True, "matches": True}
+        current = plc or typed_sample()["plc"]
+
+        def guest(vm, command, label):
+            rows = processes(vm)
+            return json.dumps({"schema_version": 1, "role": vm,
+                "plc": current if vm == "drives" else None,
+                "services": {"sorter-plant.service": "active"} if vm == "drives" else
+                            {"openplc.service": "active"} if vm == "plc" else
+                            {"sorter-hmi.service": "active"}, "processes": rows})
+
+        def processes(vm):
+            if vm == "drives":
+                return [{"pid": 101, "args": "/home/kevin/venv/bin/python /home/kevin/plant.py"},
+                        {"pid": 77, "args": "/home/kevin/venv/bin/python /home/kevin/live_accumulation_monitor.py monitor"}]
+            if vm == "plc":
+                return []
+            return [{"pid": 42, "args": "/home/kevin/opcua/bin/python /home/kevin/sorter-services/live_accumulation_detached.py worker"}]
+
+        return (patch.object(host, "load_control", return_value={"run_id": "monitor_12345678", "pid": 77}),
+                patch.object(host, "guest_read", side_effect=guest),
+                patch.object(host, "service_groups", return_value={
+                    "drives": ["sorter-plant.service"], "plc": ["openplc.service"],
+                    "scada": ["sorter-hmi.service"]}),
+                patch.object(host.subprocess, "run", return_value=Mock(stdout="", returncode=0)))
+
+    def test_post_ready_gate_is_bounded_and_does_not_inventory_hashes(self):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            reads = [stack.enter_context(p) for p in self._gate_ready()]
+            result = self.manager.pre_authorization_gate(self.path)
+        self.assertEqual(result["status"], "PASS")
+        self.assertGreater(result["authorization_remaining_seconds"], 25)
+        self.assertEqual(result["services_checked"], 3)
+        self.assertEqual(reads[1].call_count, 3)
+        self.assertFalse(any("sha256sum" in call.args[1] for call in reads[1].call_args_list))
+
+    def test_changed_plc_or_expired_window_aborts_without_fixture_stop(self):
+        from contextlib import ExitStack
+        for changed, remaining in ((True, 40), (False, 1)):
+            with self.subTest(changed=changed, remaining=remaining), ExitStack() as stack:
+                plc = typed_sample()["plc"]
+                if changed:
+                    plc["coils_880_920"][0] = True
+                for p in self._gate_ready(plc, remaining):
+                    stack.enter_context(p)
+                cleanup = stack.enter_context(patch.object(self.manager, "_abort_failed_gate",
+                                                          return_value={"worker": "stopped", "monitor": "stopped"}))
+                fixture_stop = stack.enter_context(patch.object(self.manager, "fixture_stop"))
+                with self.assertRaisesRegex(RuntimeError, "post-ready gate failed"):
+                    self.manager.pre_authorization_gate(self.path)
+                cleanup.assert_called_once()
+                fixture_stop.assert_not_called()
+
+    def test_failed_gate_cleanup_stops_only_worker_and_monitor(self):
+        self.control["scenario"] = "smoke"
+        self.path.write_text(json.dumps(self.control))
+        terminal = {**host.identity(self.control), "status": "scenario_failure"}
+        with patch.object(self.manager, "action", return_value={"abort_sent": True}) as abort, \
+             patch.object(self.manager, "_inspect", return_value={"alive": False}), \
+             patch.object(self.manager, "_file", return_value=terminal), \
+             patch.object(self.manager, "fixture_stop") as fixture_stop:
+            self.manager.monitor.collect.return_value = {"cleanup_errors": [], "orphan": False}
+            outcome = self.manager._abort_failed_gate(self.path, "changed state")
+        abort.assert_called_once_with(self.path, "abort")
+        fixture_stop.assert_not_called()
+        self.manager.monitor.collect.assert_called_once()
+        self.assertEqual(outcome["errors"], [])
+        self.assertFalse(outcome["monitor"]["orphan"])
+
+    def test_authorization_window_expiry_aborts_before_any_fixture(self):
+        self.control["scenario"] = "smoke"
+        self.path.write_text(json.dumps(self.control))
+        (self.root / "post-ready-gate.json").write_text(json.dumps({
+            **host.identity(self.control), "status": "PASS"}))
+        with patch.object(self.manager, "probe_ready"), \
+             patch.object(self.manager, "_inspect", return_value={
+                 "alive": True, "matches": True, "authorization_remaining_seconds": 1}), \
+             patch.object(self.manager, "_abort_failed_gate", return_value={
+                 "worker_terminal": "stopped", "monitor": "stopped"}) as cleanup, \
+             patch.object(self.manager, "fixture_stop") as fixture_stop:
+            with self.assertRaisesRegex(RuntimeError, "authorization refused"):
+                self.manager.action(self.path, "authorize")
+        cleanup.assert_called_once()
+        fixture_stop.assert_not_called()
+        self.scada.run.assert_not_called()
 
 
 class FixtureCleanupTest(unittest.TestCase):

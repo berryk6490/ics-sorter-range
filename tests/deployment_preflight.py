@@ -1,12 +1,16 @@
 """Read-only hash, PLC identity, VM and service preflight over serial consoles."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import secrets
 import subprocess
 import sys
+import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "deploy" / "deployment_manifest.json"
@@ -82,6 +86,7 @@ def service_read_command(name):
 
 
 def check(guest=None, live=False):
+    started = time.monotonic()
     manifest = json.loads(MANIFEST.read_text())
     entries = [e for e in manifest["components"] if not guest or e["guest"] == guest]
     services = {}
@@ -119,15 +124,39 @@ def check(guest=None, live=False):
                     raise PreflightFailure("service_not_active", vm, name, output[-400:])
     print(f"deployment preflight: {len(entries)} source hashes" +
           (" and guest hashes; PLC identity, VMs and services verified" if live else ""))
+    return {"schema_version": 1, "status": "PASS", "live": live,
+            "completed_utc": datetime.now(timezone.utc).isoformat(),
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "manifest_sha256": hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
+            "source_and_guest_hashes": len(entries),
+            "program_identity": manifest["plc_program_identity"]}
+
+
+def save_report(path, report):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp-" + uuid.uuid4().hex)
+    with temporary.open("x") as stream:
+        json.dump(report, stream, sort_keys=True, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, target)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--guest", choices=("plc", "drives", "scada"))
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--report", help="write a successful full-live preflight receipt")
     args = parser.parse_args()
     try:
-        check(args.guest, args.live)
+        if args.report and (not args.live or args.guest):
+            raise PreflightFailure("invalid_report_scope", "host", "--report",
+                                   "requires an unfiltered --live check")
+        report = check(args.guest, args.live)
+        if args.report:
+            save_report(args.report, report)
     except PreflightFailure as exc:
         print(f"deployment preflight failed: {exc}", file=sys.stderr)
         raise SystemExit(1)

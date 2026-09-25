@@ -140,8 +140,12 @@ def worker(args):
         atomic(folder["pid"], {**own, "repository_commit": args.commit,
                                "runner_sha256": args.runner_sha256, **stamp()})
         proof = preflight(args.case, args.runner_sha256)
+        ready_stamp = stamp()
         atomic(folder["ready"], {**own, "repository_commit": args.commit,
-                                 "preflight": proof, "mutation_started": False, **stamp()})
+                                 "preflight": proof, "mutation_started": False,
+                                 "authorization_deadline_monotonic_ns":
+                                 ready_stamp["monotonic_ns"] + int(args.startup_timeout * 1e9),
+                                 **ready_stamp})
         wait_marker(folder["authorize"], own, args.startup_timeout, "authorization")
         wait_marker(folder["begin"], own, args.startup_timeout, "scenario begin")
         if args.case == "smoke":
@@ -176,7 +180,7 @@ def worker(args):
 def launch(args):
     if not RUN_ID.fullmatch(args.run_id) or args.case not in CASES:
         raise ValueError("invalid run ID or scenario")
-    if not 1 <= args.hold_timeout <= 60 or not 1 <= args.startup_timeout <= 60:
+    if not 1 <= args.hold_timeout <= 60 or not 1 <= args.startup_timeout <= 120:
         raise ValueError("unbounded timeout")
     directory = Path(args.directory)
     directory.mkdir(mode=0o700)
@@ -202,6 +206,12 @@ def marker_action(args):
     state = inspect(args.directory, expected)
     folder = paths(args.directory)
     if args.action == "inspect":
+        if folder["ready"].exists():
+            ready = validate_identity(json.loads(folder["ready"].read_text()), expected)
+            deadline = ready.get("authorization_deadline_monotonic_ns")
+            if deadline is not None:
+                state["authorization_remaining_seconds"] = max(
+                    0.0, (deadline - time.monotonic_ns()) / 1e9)
         print(json.dumps(state, sort_keys=True))
         return 0
     if args.action == "abort":
@@ -234,7 +244,7 @@ def main(argv=None):
         p.add_argument("--case", required=True, choices=CASES)
         p.add_argument("--commit", required=True)
         p.add_argument("--runner-sha256", required=True)
-        p.add_argument("--startup-timeout", type=float, default=30)
+        p.add_argument("--startup-timeout", type=float, default=120)
         p.add_argument("--hold-timeout", type=float, default=30)
     for name in ("inspect", "authorize", "begin", "release", "abort"):
         p = sub.add_parser(name)

@@ -50,7 +50,8 @@ register in the PLC operator map.
 ## Required detached lifecycle
 
 First deploy the changed guest reader to its two manifest destinations and
-run `python3 tests/deployment_preflight.py --live`. Before launching the
+run `python3 tests/deployment_preflight.py --live --report "$EVIDENCE_DIR/deployment-preflight.json"`.
+Before launching the
 readiness monitor or requesting operator approval, capture and validate a
 safe baseline:
 
@@ -60,9 +61,12 @@ python3 tests/accumulation_state_snapshot.py compare --before "$EVIDENCE_DIR/typ
 ```
 
 Then start/probe the drives monitor. Launch the detached scenario with
-`--typed-baseline "$EVIDENCE_DIR/typed-before.json"` in addition to the
+`--typed-baseline "$EVIDENCE_DIR/typed-before.json"` and
+`--preflight-report "$EVIDENCE_DIR/deployment-preflight.json"` in addition to the
 documented arguments. The baseline must be safe, less than ten minutes old,
-and timestamped before monitor launch. Launch writes a `PENDING` restoration
+and both full preflight and baseline must precede monitor launch. After the
+worker is ready, run `post-ready-gate` before approval; it is the sole
+post-ready state check and does not repeat deployment hashes. Launch writes a `PENDING` restoration
 gate at `/home/kevin/vm/sorter-evidence/phase2a-restoration-gate.json`.
 Only a passing `verify-clean` changes it to `PASS`. An unresolved gate blocks
 the next scenario even when it uses a different evidence directory.

@@ -64,7 +64,7 @@ The only new guest deployment is the read-only monitor script on drives:
 ```sh
 python3 tests/serial_copy.py drives \
   tests/live_accumulation_monitor.py:/home/kevin/live_accumulation_monitor.py
-python3 tests/deployment_preflight.py --live
+python3 tests/deployment_preflight.py --live --report "$EVIDENCE_DIR/deployment-preflight.json"
 
 The canonical read-only deployment preflight requires each serial command to
 finish with its nonce-bound completion marker and the existing guest prompt.
@@ -238,20 +238,56 @@ Deploy only test tooling and verify exact hashes:
 cd /home/kevin/vm/sorter
 python3 tests/serial_copy.py scada tests/live_accumulation.py:/home/kevin/sorter-services/live_accumulation.py tests/live_accumulation_detached.py:/home/kevin/sorter-services/live_accumulation_detached.py
 python3 tests/serial_copy.py drives tests/live_accumulation_detached.py:/home/kevin/live_accumulation_detached.py tests/live_accumulation_fixture.py:/home/kevin/live_accumulation_fixture.py
-python3 tests/deployment_preflight.py --live
+python3 tests/serial_copy.py plc tests/read_authorization_gate.py:/home/kevin/read_authorization_gate.py
+python3 tests/serial_copy.py drives tests/read_authorization_gate.py:/home/kevin/read_authorization_gate.py
+python3 tests/serial_copy.py scada tests/read_authorization_gate.py:/home/kevin/sorter-services/read_authorization_gate.py
+python3 tests/deployment_preflight.py --live --report "$EVIDENCE_DIR/deployment-preflight.json"
+python3 tests/accumulation_state_snapshot.py capture --output "$EVIDENCE_DIR/typed-before.json"
+python3 tests/accumulation_state_snapshot.py compare --before "$EVIDENCE_DIR/typed-before.json" --after "$EVIDENCE_DIR/typed-before.json" --output "$EVIDENCE_DIR/typed-baseline-check.json"
 ```
 
-First run the monitor `start` and `probe` commands above. Substitute its
+The full hash/service inventory and 215-check typed baseline complete **before**
+the monitor and detached worker launch. The unfiltered preflight receipt binds
+the manifest hash, PLC identity, result and completion time. It is not run
+again while the worker waits for authorization. The conflicting second run
+originated in this document's former “Run a fresh preflight now” paragraph
+after `probe-ready`; it was not a worker requirement. First run the monitor `start`
+and `probe` commands above. Substitute its
 printed control path for `$MONITOR_CONTROL`. The scenario controller prints
 its own control path for `$SCENARIO_CONTROL`:
 
 ```sh
-python3 tests/accumulation_scenario_control.py launch --evidence-dir /home/kevin/vm/sorter-evidence/phase2a-hermes --case lane_hold --monitor-control "$MONITOR_CONTROL" --typed-baseline "$EVIDENCE_DIR/typed-before.json" --startup-timeout 30 --hold-timeout 30
+python3 tests/accumulation_scenario_control.py launch --evidence-dir /home/kevin/vm/sorter-evidence/phase2a-hermes --case lane_hold --monitor-control "$MONITOR_CONTROL" --typed-baseline "$EVIDENCE_DIR/typed-before.json" --preflight-report "$EVIDENCE_DIR/deployment-preflight.json" --startup-timeout 120 --hold-timeout 30
 python3 tests/accumulation_scenario_control.py probe-ready --control "$SCENARIO_CONTROL"
+python3 tests/accumulation_scenario_control.py post-ready-gate --control "$SCENARIO_CONTROL" --timeout 25
 ```
 
-Run a **fresh preflight** now (controller ready/monitor proof, manifest
-hashes, stopped/empty PLC, normal plant service). Hermes then requests one
+The post-ready gate rechecks matching live worker PID/start ticks, run/scenario,
+runner commit/hash and `mutation_started=false`; independent monitor readiness;
+unchanged stopped PLC identity, operator settings, counters, slots and faults;
+all 13 required service states and relevant processes in three batched
+noninteractive guest reads; one unflagged plant process; and absence of competing workers, fixtures, XLe/ASX
+and proxy processes. It performs no hash inventory or service mutation. Its
+record includes elapsed time and guest-measured authorization seconds left;
+fewer than 25 seconds left fails closed. A failed gate or expired authorization
+aborts the matching worker, stops/collects the monitor, records both failures,
+and never starts fixture-stop or a service transition. After such a failure,
+run `verify-clean --control "$SCENARIO_CONTROL"` to compare postflight state
+and release the global restoration gate; investigate any failed comparison
+before launching another run.
+
+On 2026-09-25 the final no-package coordination smoke used a full 31-component
+preflight lasting 96.105 seconds before launch. The post-ready gate took 9.834
+seconds and the guest reported 101.919 seconds remaining in the 120-second
+authorization window. Authorization, checkpoint, live HMI proxy evidence,
+release and terminal collection passed. The matching worker and monitor exited
+without orphans; `verify-clean` passed. Evidence is under
+`/home/kevin/vm/sorter-evidence/phase2a-timing-smoke-120s-20260925/`.
+
+The 120-second authorization bound replaces the former 60-second bound, which
+left only 31.946 seconds after the first measured batched gate. It leaves time
+for the separate operator approval and still expires automatically. The begin
+and evidence-release waits remain separately bounded. Hermes then requests one
 operator approval naming this run ID, `lane_hold`, and the exact stop and
 start commands above. Only after approval, record its unique receipt ID and
 continue. If the bounded worker startup wait expires while approval is

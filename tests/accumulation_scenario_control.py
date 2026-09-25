@@ -14,6 +14,8 @@ from accumulation_monitor_control import (Controller as MonitorController, Seria
                                           SCADA_PYTHON, GuestCommandError,
                                           atomic_control, load_control)
 from accumulation_state_snapshot import capture as typed_capture, compare as typed_compare, save as typed_save
+from accumulation_state_snapshot import PLANT, TEMPORARY
+from deployment_preflight import guest_read, MANIFEST
 
 GUEST = "/home/kevin/sorter-services/live_accumulation_detached.py"
 RUNNER = "/home/kevin/sorter-services/live_accumulation.py"
@@ -25,18 +27,66 @@ FIXTURE_STOP = ["sudo", "-n", "/usr/bin/systemctl", "stop", FIXTURE_UNIT]
 FIXTURE_START = ["sudo", "-n", "/usr/bin/systemctl", "start", FIXTURE_UNIT]
 CASES = ("smoke", "lane_hold", "merge_hold", "drive_stop", "normal")
 RESTORATION_GATE = Path.home() / "vm" / "sorter-evidence" / "phase2a-restoration-gate.json"
+MIN_AUTHORIZATION_MARGIN = 25.0
+POST_READY_GATE_TIMEOUT = 25.0
+GATE_READERS = {
+    "plc": ("/usr/bin/python3", "/home/kevin/read_authorization_gate.py"),
+    "drives": (DRIVES_PYTHON, "/home/kevin/read_authorization_gate.py"),
+    "scada": (SCADA_PYTHON, "/home/kevin/sorter-services/read_authorization_gate.py"),
+}
 
 
-def validate_typed_launch(evidence_root, typed_baseline, monitor_control):
+def validate_unchanged_plc(before, current):
+    """Short pre-authorization subset of the typed baseline, with no VFD inventory."""
+    if current.get("identity") != before.get("identity") or current.get("identity") != 24113:
+        raise ValueError("PLC program identity changed")
+    for key in ("coils_880_920", "setpoints_200_210", "seed", "photoeye_config_744_747"):
+        if current.get(key) != before.get(key):
+            raise ValueError(f"PLC operator configuration changed: {key}")
+    if current["coils_880_920"][0] or any(row[4] for row in current["slots"]):
+        raise ValueError("PLC master or package slot changed")
+    if (any(current["lanes"]) or any(current["trailer_counters"]) or
+        any(current["photoeye_faults"]) or current["plant_faults"][:2] != [0, 0] or
+        current["scanner_state"] or current["scanner_fault_mask"] or
+        current["run_identity"]["epoch_fault"] or current["xle_health"][1] or
+        current["zone_view"][20] or current["zone_view"][22]):
+        raise ValueError("PLC no longer at safe stopped baseline")
+    if any(current["process_214_242"][i] for i in (*range(7), *range(8, 29))):
+        raise ValueError("PLC process counter changed")
+    if any(current["scanner_counters_250_254"]) or any(
+            current["zone_view"][i] for i in (0, 1, 2, 3, 5, 6, 7, 8,
+                                              10, 11, 12, 13, 15, 16, 17, 18)):
+        raise ValueError("scanner count or validated zone state changed")
+
+
+def service_groups():
+    manifest = json.loads(MANIFEST.read_text())
+    result = {}
+    for entry in manifest["components"]:
+        result.setdefault(entry["guest"], set()).update(entry["associated_service"])
+    return {vm: sorted(names) for vm, names in result.items() if names}
+
+
+def validate_typed_launch(evidence_root, typed_baseline, monitor_control, preflight_report):
     gate = RESTORATION_GATE
     if gate.exists() and json.loads(gate.read_text()).get("status") != "PASS":
         raise ValueError("previous scenario has no passing typed restoration comparison")
     baseline = json.loads(Path(typed_baseline).read_text())
+    full = json.loads(Path(preflight_report).read_text())
+    manifest = Path("deploy/deployment_manifest.json")
+    expected_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    expected_count = len(json.loads(manifest.read_text())["components"])
+    if (full.get("schema_version") != 1 or full.get("status") != "PASS" or
+        full.get("live") is not True or full.get("manifest_sha256") != expected_hash or
+        full.get("source_and_guest_hashes") != expected_count or
+        full.get("program_identity") != baseline.get("program_identity")):
+        raise ValueError("full deployment preflight receipt is missing or mismatched")
+    report_time = datetime.fromisoformat(full["completed_utc"])
     baseline_time = datetime.fromisoformat(baseline["captured_utc"])
     monitor_time = datetime.fromisoformat(load_control(monitor_control)["launched_utc"])
     age = (datetime.now(timezone.utc) - baseline_time).total_seconds()
-    if not 0 <= age <= 600 or baseline_time >= monitor_time:
-        raise ValueError("typed baseline must be fresh and precede monitor launch")
+    if not 0 <= age <= 600 or not report_time <= baseline_time < monitor_time:
+        raise ValueError("full preflight and typed baseline must precede monitor launch")
     baseline_report = typed_compare(baseline, baseline)
     if baseline_report["status"] != "PASS":
         raise ValueError(f"unsafe typed baseline: {baseline_report['differences']}")
@@ -73,9 +123,9 @@ class ScenarioController:
                 "--pid", control["pid"], "--start-ticks", control["start_ticks"]]
         return valid(json.loads(self.scada.run(args).splitlines()[-1]), control)
 
-    def launch(self, evidence_dir, case, monitor_control, typed_baseline,
-               startup_timeout=30, hold_timeout=30):
-        if case not in CASES or not 1 <= startup_timeout <= 60 or not 1 <= hold_timeout <= 60:
+    def launch(self, evidence_dir, case, monitor_control, typed_baseline, preflight_report,
+               startup_timeout=120, hold_timeout=30):
+        if case not in CASES or not 1 <= startup_timeout <= 120 or not 1 <= hold_timeout <= 60:
             raise ValueError("invalid scenario or timeout")
         manifest = json.loads(Path("deploy/deployment_manifest.json").read_text())
         expected = next(c["sha256"] for c in manifest["components"]
@@ -85,8 +135,15 @@ class ScenarioController:
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex
         evidence_root = Path(evidence_dir).resolve()
         gate = RESTORATION_GATE
-        baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
-                                                          monitor_control)
+        try:
+            baseline, baseline_report = validate_typed_launch(evidence_root, typed_baseline,
+                                                              monitor_control, preflight_report)
+        except Exception:
+            # The monitor is already running when launch is requested.
+            cleanup = self.monitor.collect(monitor_control, timeout=20, stop=True)
+            if cleanup.get("cleanup_errors"):
+                raise RuntimeError(f"launch preflight failed; monitor cleanup: {cleanup['cleanup_errors']}")
+            raise
         local = evidence_root / run_id
         local.mkdir(parents=True, mode=0o700)
         typed_save(local / "typed-before.json", baseline)
@@ -165,11 +222,148 @@ class ScenarioController:
                 time.sleep(.15)
         raise TimeoutError("detached runner did not pass startup gates")
 
+    def _abort_failed_gate(self, path, original_error):
+        """No fixture exists at this stage; never call fixture_stop here."""
+        control = json.loads(Path(path).read_text())
+        cleanup = {"abort": None, "worker_terminal": None, "monitor": None, "errors": []}
+        if (Path(control["local_dir"]) / "fixture-control.json").exists():
+            cleanup["errors"].append("unexpected fixture before authorization gate")
+        try:
+            if control.get("start_ticks") is None:
+                pid = self._file(control, "pid.json")
+                if pid.get("run_id") != control["run_id"] or pid.get("pid") != control["pid"]:
+                    raise ValueError("worker PID ownership cannot be established")
+                control["start_ticks"] = pid["start_ticks"]
+                atomic_control(Path(path), control)
+            cleanup["abort"] = self.action(path, "abort")
+            end = time.monotonic() + 20
+            while time.monotonic() < end:
+                state = self._inspect(control)
+                try:
+                    terminal = valid(self._file(control, "terminal.json"), control)
+                except GuestCommandError:
+                    terminal = None
+                if terminal and not state.get("alive"):
+                    cleanup["worker_terminal"] = terminal
+                    break
+                time.sleep(.15)
+            if cleanup["worker_terminal"] is None:
+                cleanup["errors"].append("worker did not terminate after abort")
+        except Exception as exc:
+            cleanup["errors"].append(f"worker abort: {type(exc).__name__}: {exc}")
+        try:
+            cleanup["monitor"] = self.monitor.collect(control["monitor_control"], timeout=20, stop=True)
+            cleanup["errors"].extend(cleanup["monitor"].get("cleanup_errors", []))
+        except Exception as exc:
+            cleanup["errors"].append(f"monitor stop: {type(exc).__name__}: {exc}")
+        atomic_control(Path(control["local_dir"]) / "post-ready-gate-failure.json",
+                       {**identity(control), "error": original_error, "cleanup": cleanup,
+                        "recorded_utc": datetime.now(timezone.utc).isoformat()})
+        return cleanup
+
+    def pre_authorization_gate(self, path, timeout=POST_READY_GATE_TIMEOUT):
+        """Bounded live-state check after readiness; no repeat hash inventory."""
+        if not 1 <= timeout <= POST_READY_GATE_TIMEOUT:
+            raise ValueError("post-ready gate timeout out of bounds")
+        started = time.monotonic()
+        control = json.loads(Path(path).read_text())
+        try:
+            ready_path = Path(control["local_dir"]) / "scenario-ready-proof.json"
+            if ready_path.exists():
+                proof = json.loads(ready_path.read_text())
+                if (proof.get("run_id") != control["run_id"] or
+                    proof.get("pid_alive") is not True or
+                    proof.get("monitor_ready") is not True):
+                    raise ValueError("saved readiness proof mismatched")
+            else:
+                proof = self.probe_ready(path, timeout=min(8, timeout))
+            control = json.loads(Path(path).read_text())
+            ready = proof["ready"]
+            if (ready.get("repository_commit") != control["commit"] or
+                ready.get("mutation_started") is not False or
+                ready.get("preflight", {}).get("runner_sha256") != control["runner_sha256"] or
+                any(ready.get(k) != control[k] for k in ("run_id", "scenario", "pid", "start_ticks"))):
+                raise ValueError("worker ready record changed or mismatched")
+            monitor = load_control(control["monitor_control"])
+            worker_state = self._inspect(control)
+            if not worker_state.get("alive") or not worker_state.get("matches"):
+                raise ValueError("worker is no longer live")
+            monitor_state = self.monitor._inspect(monitor)
+            if not monitor_state.get("alive") or not monitor_state.get("matches"):
+                raise ValueError("monitor is no longer ready and live")
+            if (Path(control["local_dir"]) / "fixture-control.json").exists() or \
+               (Path(control["local_dir"]) / "fixture-authorization.json").exists():
+                raise ValueError("fixture authorization or service transition started before gate")
+            before = json.loads((Path(control["local_dir"]) / "typed-before.json").read_text())["plc"]
+            checked_services = 0
+            current = None
+            for vm, (python, script) in GATE_READERS.items():
+                output = guest_read(vm, f"{python} {script} {vm}", f"post_ready:{vm}")
+                observation = json.loads(output.splitlines()[-1])
+                if observation.get("schema_version") != 1 or observation.get("role") != vm:
+                    raise ValueError(f"post-ready reader mismatch: {vm}")
+                names = service_groups()[vm]
+                if (set(observation["services"]) != set(names) or
+                    any(value != "active" for value in observation["services"].values())):
+                    raise ValueError(f"required service changed on {vm}: {observation['services']}")
+                checked_services += len(names)
+                if vm == "drives":
+                    current = observation["plc"]
+                    validate_unchanged_plc(before, current)
+                rows = observation["processes"]
+                if vm in ("drives", "scada"):
+                    expected_pid = monitor["pid"] if vm == "drives" else control["pid"]
+                    temporary = [row for row in rows if TEMPORARY.search(row["args"])]
+                    if len(temporary) != 1 or temporary[0]["pid"] != expected_pid:
+                        raise ValueError(f"competing or missing validation process on {vm}: {temporary}")
+                if vm == "drives":
+                    plant = [row for row in rows if PLANT.match(row["args"])]
+                    if len(plant) != 1 or "--block-" in plant[0]["args"]:
+                        raise ValueError("canonical unflagged plant process changed")
+                if time.monotonic() - started > timeout:
+                    raise TimeoutError("post-ready gate exceeded its bound")
+            host_ps = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True,
+                                     text=True, timeout=5, check=True).stdout
+            if any(re.match(r"\s*\d+\s+python(?:3(?:\.\d+)?)?\s+tests/serial_hmi_proxy\.py(?:\s|$)", line)
+                   for line in host_ps.splitlines()):
+                raise ValueError("HMI proxy occupies validation console")
+            state = self._inspect(control)
+            if not state.get("alive") or not state.get("matches"):
+                raise ValueError("worker exited during post-ready gate")
+            remaining = state.get("authorization_remaining_seconds", 0)
+            duration = time.monotonic() - started
+            if duration > timeout or remaining < MIN_AUTHORIZATION_MARGIN:
+                raise TimeoutError(f"authorization window expired: gate={duration:.3f}s remaining={remaining:.3f}s")
+            result = {**identity(control), "status": "PASS", "duration_seconds": round(duration, 3),
+                      "authorization_remaining_seconds": round(remaining, 3),
+                      "services_checked": checked_services, "plc_identity": current["identity"],
+                      "monitor_run_id": monitor["run_id"], "checked_utc": datetime.now(timezone.utc).isoformat()}
+            atomic_control(Path(control["local_dir"]) / "post-ready-gate.json", result)
+            return result
+        except Exception as exc:
+            cleanup = self._abort_failed_gate(path, f"{type(exc).__name__}: {exc}")
+            raise RuntimeError(f"post-ready gate failed: {exc}; cleanup={cleanup}") from exc
+
     def action(self, path, action):
         control = json.loads(Path(path).read_text())
         if action == "authorize":
-            self.probe_ready(path)
-            control = json.loads(Path(path).read_text())
+            try:
+                gate_path = Path(control["local_dir"]) / "post-ready-gate.json"
+                if not gate_path.exists():
+                    raise RuntimeError("post-ready gate proof missing")
+                gate = valid(json.loads(gate_path.read_text()), control)
+                if gate.get("status") != "PASS":
+                    raise RuntimeError("post-ready gate did not pass")
+                monitor = load_control(control["monitor_control"])
+                monitor_state = self.monitor._inspect(monitor)
+                if not monitor_state.get("alive") or not monitor_state.get("matches"):
+                    raise RuntimeError("monitor died before authorization")
+                state = self._inspect(control)
+                if state.get("authorization_remaining_seconds", 0) < MIN_AUTHORIZATION_MARGIN:
+                    raise TimeoutError("authorization window expired before approval")
+            except Exception as exc:
+                cleanup = self._abort_failed_gate(path, f"{type(exc).__name__}: {exc}")
+                raise RuntimeError(f"authorization refused: {exc}; cleanup={cleanup}") from exc
         if action not in ("authorize", "begin", "release", "abort"):
             raise ValueError(action)
         if action == "begin" and control["scenario"] in ("lane_hold", "merge_hold"):
@@ -551,14 +745,17 @@ def main(argv=None):
     p.add_argument("--case", choices=CASES, required=True)
     p.add_argument("--monitor-control", required=True)
     p.add_argument("--typed-baseline", required=True)
-    p.add_argument("--startup-timeout", type=float, default=30)
+    p.add_argument("--preflight-report", required=True)
+    p.add_argument("--startup-timeout", type=float, default=120)
     p.add_argument("--hold-timeout", type=float, default=30)
-    for name in ("probe-ready", "authorize", "begin", "probe-checkpoint", "release", "wait",
+    for name in ("probe-ready", "post-ready-gate", "authorize", "begin", "probe-checkpoint", "release", "wait",
                  "collect", "abort", "evidence", "verify-clean", "fixture-authorize",
                  "fixture-start", "fixture-stop"):
         p = sub.add_parser(name)
         p.add_argument("--control", required=True)
         p.add_argument("--timeout", type=float, default=15)
+        if name == "post-ready-gate":
+            p.set_defaults(timeout=POST_READY_GATE_TIMEOUT)
         if name == "evidence":
             p.add_argument("--screenshot")
         if name == "fixture-start":
@@ -572,9 +769,12 @@ def main(argv=None):
         if args.action == "launch":
             result = {"control": str(control.launch(args.evidence_dir, args.case,
                                                     args.monitor_control, args.typed_baseline,
+                                                    args.preflight_report,
                                                     args.startup_timeout, args.hold_timeout))}
         elif args.action == "probe-ready":
             result = control.probe_ready(args.control, args.timeout)
+        elif args.action == "post-ready-gate":
+            result = control.pre_authorization_gate(args.control, args.timeout)
         elif args.action == "probe-checkpoint":
             result = control.probe_checkpoint(args.control, args.timeout)
         elif args.action == "evidence":
@@ -598,7 +798,7 @@ def main(argv=None):
         if args.action != "launch":
             record = json.loads(Path(args.control).read_text())
             category = ("evidence_failure" if args.action in ("evidence", "probe-checkpoint") else
-                        "monitor_failure" if args.action in ("probe-ready", "authorize") else
+                        "monitor_failure" if args.action in ("probe-ready", "post-ready-gate", "authorize") else
                         "cleanup_failure" if args.action in ("collect", "fixture-stop", "verify-clean") else
                         "scenario_failure")
             atomic_control(Path(record["local_dir"]) / ("validation-failure-" + uuid.uuid4().hex + ".json"),

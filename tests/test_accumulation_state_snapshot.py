@@ -1,12 +1,13 @@
 """Typed Phase 2A restoration contract with no live Modbus traffic."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import accumulation_state_snapshot as snap
@@ -160,20 +161,62 @@ class SnapshotTests(unittest.TestCase):
             baseline["captured_utc"] = (now - timedelta(seconds=20)).isoformat()
             source = root / "before.json"
             source.write_text(json.dumps(baseline))
+            preflight = root / "preflight.json"
+            preflight.write_text(json.dumps({"schema_version": 1, "status": "PASS", "live": True,
+                "completed_utc": (now - timedelta(seconds=125)).isoformat(),
+                "duration_seconds": 92,
+                "manifest_sha256": hashlib.sha256(snap.MANIFEST.read_bytes()).hexdigest(),
+                "source_and_guest_hashes": len(json.loads(snap.MANIFEST.read_text())["components"]),
+                "program_identity": 24113}))
             with patch.object(scenario, "RESTORATION_GATE", root / "global-gate.json"), \
                  patch.object(scenario, "load_control", return_value={
                     "launched_utc": (now - timedelta(seconds=10)).isoformat()}):
-                self.assertEqual(scenario.validate_typed_launch(root, source, "monitor")[0],
+                self.assertEqual(scenario.validate_typed_launch(root, source, "monitor", preflight)[0],
                                  baseline)
                 (root / "global-gate.json").write_text('{"status":"PENDING"}')
                 with self.assertRaisesRegex(ValueError, "previous scenario"):
-                    scenario.validate_typed_launch(root / "another-run", source, "monitor")
+                    scenario.validate_typed_launch(root / "another-run", source, "monitor", preflight)
                 (root / "global-gate.json").unlink()
             with patch.object(scenario, "RESTORATION_GATE", root / "global-gate.json"), \
                  patch.object(scenario, "load_control", return_value={
                     "launched_utc": (now - timedelta(seconds=30)).isoformat()}):
                 with self.assertRaisesRegex(ValueError, "precede monitor"):
-                    scenario.validate_typed_launch(root, source, "monitor")
+                    scenario.validate_typed_launch(root, source, "monitor", preflight)
+
+    def test_92_second_full_preflight_finishes_before_worker_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = datetime.now(timezone.utc)
+            baseline = sample()
+            baseline["captured_utc"] = (now - timedelta(seconds=22)).isoformat()
+            source = root / "typed-before.json"
+            source.write_text(json.dumps(baseline))
+            receipt = root / "preflight.json"
+            receipt.write_text(json.dumps({"schema_version": 1, "status": "PASS", "live": True,
+                "completed_utc": (now - timedelta(seconds=32)).isoformat(),
+                "duration_seconds": 92.0,
+                "manifest_sha256": hashlib.sha256(snap.MANIFEST.read_bytes()).hexdigest(),
+                "source_and_guest_hashes": len(json.loads(snap.MANIFEST.read_text())["components"]),
+                "program_identity": 24113}))
+            scada = Mock()
+
+            def launch_worker(argv):
+                self.assertEqual(json.loads(receipt.read_text())["duration_seconds"], 92.0)
+                run_id = argv[argv.index("--run-id") + 1]
+                return json.dumps({"run_id": run_id, "scenario": "smoke", "pid": 42})
+
+            scada.run.side_effect = launch_worker
+            manager = scenario.ScenarioController(scada=scada, drives=Mock(), monitor=Mock())
+            manager.state = Mock(return_value={"identity": 24113,
+                         "coils_880_920": [False] * 41,
+                         "slots": [[0] * 12 for _ in range(3)]})
+            with patch.object(scenario, "RESTORATION_GATE", root / "gate.json"), \
+                 patch.object(scenario, "load_control", return_value={
+                     "launched_utc": (now - timedelta(seconds=12)).isoformat()}):
+                control = manager.launch(root / "evidence", "smoke", "monitor-control",
+                                         source, receipt)
+            self.assertTrue(control.exists())
+            scada.run.assert_called_once()
 
 
 if __name__ == "__main__":
