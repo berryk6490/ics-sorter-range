@@ -28,6 +28,31 @@ def load_runner():
 
 
 class RunnerCleanupTest(unittest.TestCase):
+    def test_new_case_contracts_use_existing_fixture_and_package_assertions(self):
+        runner = load_runner()
+        sys.path.insert(0, str(Path(__file__).parent))
+        import live_accumulation_fixture as fixture
+        merge = runner.CASES["merge_hold"]
+        drive = runner.CASES["drive_stop"]
+        self.assertEqual((merge["count"], merge["destinations"]),
+                         (4, {1: 1, 2: 2, 3: 3, 4: 1}))
+        self.assertEqual((drive["count"], drive["destinations"]), (1, {1: 2}))
+        self.assertIn("--block-merge", fixture.fixture_command("merge_hold"))
+        with self.assertRaisesRegex(ValueError, "no plant fixture"):
+            fixture.fixture_command("drive_stop")
+        rows = [{"lane": lane, "state": 1, "quality": 1, "zone": 4,
+                 "motion": 3} for lane in (1, 2, 3)]
+        sample = {"rows": rows, "inducted": 3, "full_wait_samples": 5,
+                  "zone_fault": 0, "plant_fault": 0, "photoeye_faults": [0, 0, 0]}
+        self.assertTrue(runner.checkpoint_valid("merge_hold", sample))
+        sample["full_wait_samples"] = 4
+        self.assertFalse(runner.checkpoint_valid("merge_hold", sample))
+        sample.update(rows=[{"lane": 1, "state": 1, "quality": 1, "motion": 4}],
+                      drive_feedback=[(0, 4)])
+        self.assertTrue(runner.checkpoint_valid("drive_stop", sample))
+        sample["drive_feedback"] = [(25, 4)]
+        self.assertFalse(runner.checkpoint_valid("drive_stop", sample))
+
     def test_failure_stops_processes_resets_occupied_slots_then_restores(self):
         runner = load_runner()
         actions = []

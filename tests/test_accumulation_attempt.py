@@ -2,7 +2,9 @@
 import json
 import hashlib
 import importlib.util
+import io
 from copy import deepcopy
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import check_accumulation_views as views
 import run_accumulation_attempt as attempt
 import accumulation_scenario_control as scenario
+import browser_accumulation as browser
 from deployment_preflight import PreflightFailure
 from test_accumulation_state_snapshot import sample
 
@@ -75,6 +78,24 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn((910, True), plc.writes)
         for address in (914, 915, 916, 917, 918, 919, 920):
             self.assertIn((address, False), plc.writes)
+
+
+class BrowserDispatchTests(unittest.TestCase):
+    def test_drive_stop_uses_live_motion_four_and_screenshot(self):
+        with tempfile.TemporaryDirectory() as name:
+            output = io.StringIO()
+            def capture(_session, path):
+                path.write_bytes(b"rendered test image")
+                return str(path)
+            with patch.object(browser, "request", return_value={"value": {"sessionId": "fake"}}), \
+                 patch.object(browser, "wd", return_value=None), \
+                 patch.object(browser, "snapshot", return_value={"nodes": [
+                     {"motion": "4", "status": "live", "id": "l1-1-18-1-1"}]}), \
+                 patch.object(browser, "capture", side_effect=capture), redirect_stdout(output):
+                browser.run("drive_stop", Path(name))
+            record = json.loads(output.getvalue().splitlines()[-1])
+            self.assertEqual(record["case"], "drive_stop")
+            self.assertTrue(Path(record["screenshot"]).is_file())
 
 
 class FakePLC:
@@ -227,6 +248,118 @@ class LifecycleTests(unittest.TestCase):
             self.assertLess(calls.index("evidence"), calls.index("release"))
             self.assertLess(calls.index("worker_collect"), calls.index("postflight"))
 
+    def dispatch_case(self, case, failure=None, output_case=None):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        prep = self.preparation(root, case)
+        calls = []
+        class Monitor:
+            def start(self, *_a, **_k): return root / "monitor.json"
+            def probe(self, *_a, **_k): return {"run_id": "monitor"}
+            def collect(self, *_a, **_k):
+                calls.append("monitor_collect")
+                return {"orphan": False, "cleanup_errors": []}
+        class Process:
+            def poll(self): return 0
+            def wait(self, **_k): return 0
+        class Scenario:
+            scada = SimpleNamespace(run=lambda *_a, **_k:
+                (_ for _ in ()).throw(TimeoutError("reset failed")) if failure == "recovery" else
+                (calls.append("operator_reset") or json.dumps({"reset_requested": True,
+                                                                 "counters_zero": True})))
+            def record_approval(self, *_a):
+                calls.append("approval")
+                return {"run_id": prep.parent.name}
+            def launch(self, _root, selected, *_a, **_k):
+                calls.append("launch:" + selected)
+                return root / "control.json"
+            def probe_ready(self, *_a, **_k): pass
+            def pre_authorization_gate(self, *_a, **_k): return {"status": "PASS"}
+            def action(self, _path, action): calls.append(action)
+            def fixture_authorize(self, *_a): calls.append("fixture_authorize")
+            def fixture_start(self, *_a, **_k): calls.append("fixture_start")
+            def fixture_probe(self, *_a): calls.append("fixture_probe")
+            def probe_checkpoint(self, *_a, **_k):
+                calls.append("checkpoint")
+                if failure in ("checkpoint", "timeout"):
+                    raise TimeoutError("checkpoint timeout")
+                return {"sample": {"case": case}}
+            def evidence(self, *_a, **_k):
+                calls.append("evidence")
+                if failure == "evidence":
+                    raise AssertionError("HMI evidence mismatch")
+                return {"api": {}}
+            def collect(self, *_a, **_k):
+                calls.append("collect")
+                (prep.parent / "stdout.log").write_text(
+                    json.dumps({"case": output_case or case, "journal": [], "rows": []}) + "\n")
+                return {"terminal": {"status": "complete",
+                         "fixture_restoration": {"service_restored": True}}, "orphan": False}
+            def state(self):
+                return {"slots": [[0] * 12 for _ in range(3)],
+                        "coils_880_920": [False] * 41,
+                        "plant_faults": [0, 0, 0], "run_identity": {"epoch_fault": 0},
+                        "photoeye_faults": [0, 0, 0], "zone_view": [0] * 23}
+            def verify_clean(self, *_a):
+                calls.append("postflight")
+                return {"restored": True}
+        def browser(selected, path):
+            calls.append("browser:" + selected)
+            screenshot = path / (selected + ".png")
+            screenshot.write_bytes(b"fake")
+            return {"screenshot": str(screenshot)}
+        result = attempt.run_attempt(prep, "receipt_12345678" if case == "merge_hold" else None,
+            scenario=Scenario(), monitor=Monitor(), proxy_start=lambda _p: Process(),
+            driver_start=lambda _p: Process(), browser_run=browser)
+        return result, calls, prep
+
+    def test_merge_dispatch_uses_fixture_browser_and_reset(self):
+        result, calls, prep = self.dispatch_case("merge_hold")
+        self.assertEqual(result["status"], "PASS")
+        self.assertIn("launch:merge_hold", calls)
+        self.assertIn("fixture_start", calls)
+        self.assertIn("browser:merge_hold", calls)
+        self.assertLess(calls.index("collect"), calls.index("operator_reset"))
+        self.assertLess(calls.index("operator_reset"), calls.index("postflight"))
+        self.assertEqual(json.loads((prep.parent / "scenario-output-before-reset.json").read_text())["case"],
+                         "merge_hold")
+
+    def test_drive_dispatch_uses_normal_service_and_vfd_runner(self):
+        result, calls, _prep = self.dispatch_case("drive_stop")
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["service_restoration"], "NOT_APPLICABLE")
+        self.assertIn("launch:drive_stop", calls)
+        self.assertIn("browser:drive_stop", calls)
+        self.assertIn("operator_reset", calls)
+        self.assertNotIn("fixture_start", calls)
+        self.assertNotIn("fixture_authorize", calls)
+
+    def test_mismatched_guest_scenario_cannot_pass(self):
+        result, calls, prep = self.dispatch_case("merge_hold", output_case="lane_hold")
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["functional_outcome"], "FAIL")
+        self.assertIn("matching structured package outcome", result["errors"]["outcome_capture"])
+        self.assertIn("operator_reset", calls)
+        self.assertFalse((prep.parent / "scenario-output-before-reset.json").exists())
+
+    def test_new_cases_cleanup_on_checkpoint_evidence_timeout_and_reset_failure(self):
+        for case in ("merge_hold", "drive_stop"):
+            for failure in ("checkpoint", "evidence", "timeout", "recovery"):
+                with self.subTest(case=case, failure=failure):
+                    result, calls, _prep = self.dispatch_case(case, failure)
+                    self.assertEqual(result["status"], "FAIL")
+                    self.assertIn("collect", calls)
+                    self.assertIn("monitor_collect", calls)
+                    if failure == "recovery":
+                        self.assertEqual(result["functional_outcome"], "PASS")
+                        self.assertEqual(result["plc_recovery"], "FAIL")
+                        self.assertEqual(result["typed_postflight"], "FAIL")
+                        self.assertNotIn("postflight", calls)
+                    else:
+                        self.assertEqual(result["functional_outcome"], "FAIL")
+                        self.assertIn("abort", calls)
+                        self.assertIn("operator_reset", calls)
+
 
 class DelayedReservationTests(unittest.TestCase):
     def preparation(self, root, case):
@@ -294,6 +427,47 @@ class DelayedReservationTests(unittest.TestCase):
         record["reserved_utc"] = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
         reservation.write_text(json.dumps(record))
         return reservation
+
+    def test_new_scenarios_reserve_through_cli_and_dispatch_claimed_run(self):
+        for case in ("merge_hold", "drive_stop"):
+            with self.subTest(case=case):
+                output = io.StringIO()
+                with patch.object(scenario, "ScenarioController", return_value=self.sc), \
+                     redirect_stdout(output):
+                    self.assertEqual(scenario.main(["reserve", "--evidence-dir",
+                                                    str(self.root / case), "--case", case]), 0)
+                reservation = Path(json.loads(output.getvalue().splitlines()[-1])["reservation"])
+                self.assertEqual(json.loads(reservation.read_text())["scenario"], case)
+                dispatched = []
+                with patch.object(attempt, "run_attempt", side_effect=lambda prep, receipt, **_k:
+                                  dispatched.append((json.loads(prep.read_text())["scenario"], receipt)) or
+                                  {"status": "PASS", "functional_outcome": "PASS"}):
+                    outcome = attempt.run_reserved(
+                        reservation, datetime.now(timezone.utc).isoformat(),
+                        "receipt_12345678" if case == "merge_hold" else None,
+                        scenario=self.sc, preflight_run=self.preflight, capture=self.capture)
+                self.assertEqual(outcome["status"], "PASS")
+                self.assertEqual(dispatched, [(case, "receipt_12345678" if case == "merge_hold" else None)])
+                with self.assertRaisesRegex(ValueError, "scope mismatch"):
+                    self.sc.claim_reservation(reservation)
+
+    def test_new_scenarios_reject_wrong_approval_scope_and_tampered_case(self):
+        merge = self.sc.reserve(self.root / "merge", "merge_hold")
+        result = attempt.run_reserved(merge, datetime.now(timezone.utc).isoformat(),
+                                      scenario=self.sc, preflight_run=self.preflight,
+                                      capture=self.capture)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("approval receipt", result["error"])
+        drive = self.sc.reserve(self.root / "drive", "drive_stop")
+        result = attempt.run_reserved(drive, datetime.now(timezone.utc).isoformat(),
+                                      "wrong_receipt_123", scenario=self.sc,
+                                      preflight_run=self.preflight, capture=self.capture)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("no plant-service approval", result["error"])
+        (self.root / "prepared").mkdir()
+        prep = self.preparation(self.root / "prepared", "drive_stop")
+        with self.assertRaisesRegex(ValueError, "approval"):
+            attempt.run_attempt(prep, "wrong_receipt_123")
 
     def test_late_human_then_fresh_baseline_runs_no_package_lifecycle(self):
         reservation = self.reserve_aged()
@@ -432,7 +606,7 @@ class DelayedReservationTests(unittest.TestCase):
                     return {"api": {}}
                 def collect(self, *_a, **_k):
                     calls.append("worker_collect")
-                    (prep.parent / "stdout.log").write_text(json.dumps({"journal": [], "rows": []}) + "\n")
+                    (prep.parent / "stdout.log").write_text(json.dumps({"case": "lane_hold", "journal": [], "rows": []}) + "\n")
                     return {"terminal": {"status": "complete",
                             "fixture_restoration": {"service_restored": True}},
                             "orphan": False}
@@ -523,7 +697,7 @@ class DelayedReservationTests(unittest.TestCase):
                 def probe_checkpoint(self, *_a, **_k): return {"sample": {"rows": []}}
                 def evidence(self, *_a, **_k): return {"api": {}}
                 def collect(self, *_a, **_k):
-                    (prep.parent / "stdout.log").write_text(json.dumps({"journal": [], "rows": []}) + "\n")
+                    (prep.parent / "stdout.log").write_text(json.dumps({"case": "lane_hold", "journal": [], "rows": []}) + "\n")
                     return {"terminal": {"status": "complete",
                             "fixture_restoration": {"service_restored": True}}, "orphan": False}
                 def state(self):

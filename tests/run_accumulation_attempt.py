@@ -20,6 +20,9 @@ PROXY = ROOT / "serial_hmi_proxy.py"
 BROWSER = ROOT / "browser_accumulation.py"
 RECOVERY = "/home/kevin/sorter-services/recover_accumulation_state.py"
 PREFLIGHT = ROOT / "deployment_preflight.py"
+FIXTURE_CASES = ("lane_hold", "merge_hold")
+PACKAGE_CASES = FIXTURE_CASES + ("drive_stop",)
+ATTEMPT_CASES = PACKAGE_CASES + ("smoke",)
 
 
 def error(exc):
@@ -115,10 +118,10 @@ def run_reserved(reservation, approved_at, approval_id=None, *, scenario=None,
     baseline = reservation.with_suffix(".typed-before.json")
     approval = None
     try:
-        if case == "lane_hold" and not approval_id:
-            raise ValueError("fresh approval receipt ID required for lane fixture")
-        if case == "smoke" and approval_id:
-            raise ValueError("smoke must not spend a service approval receipt")
+        if case in FIXTURE_CASES and not approval_id:
+            raise ValueError("fresh approval receipt ID required for plant fixture")
+        if case not in FIXTURE_CASES and approval_id:
+            raise ValueError("scenario has no plant-service approval receipt")
         approval = approval_age(approved_at)
         start = time.monotonic()
         preflight_run(preflight, reservation.with_suffix(".preflight.log"))
@@ -212,19 +215,19 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
     preparation = Path(preparation).resolve()
     reserved = json.loads(preparation.read_text())
     case = reserved["scenario"]
-    if case not in ("lane_hold", "smoke"):
-        raise ValueError("canonical attempt supports lane_hold or smoke")
-    if case == "lane_hold" and not approval_id:
+    if case not in ATTEMPT_CASES:
+        raise ValueError("unsupported canonical attempt scenario")
+    if case in FIXTURE_CASES and not approval_id:
         raise ValueError("fresh run-bound operator approval ID required")
-    if case == "smoke" and approval_id:
-        raise ValueError("no service approval is used by smoke")
+    if case not in FIXTURE_CASES and approval_id:
+        raise ValueError("scenario has no plant-service approval receipt")
     local = preparation.parent
     sc = scenario or ScenarioController()
     mc = monitor or MonitorController()
     result = {"run_id": reserved["run_id"], "scenario": case,
               "started_utc": datetime.now(timezone.utc).isoformat(),
               "functional_outcome": "NOT_STARTED", "evidence_quality": "NOT_CAPTURED",
-              "service_restoration": "NOT_APPLICABLE" if case == "smoke" else "UNKNOWN",
+              "service_restoration": "NOT_APPLICABLE" if case not in FIXTURE_CASES else "UNKNOWN",
               "plc_recovery": "NOT_NEEDED", "typed_postflight": "NOT_RUN",
               "orphans": "UNKNOWN", "errors": {}, "artifacts": {}}
     monitor_path = control_path = None
@@ -232,7 +235,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
     released = False
     begun = False
     try:
-        if case == "lane_hold":
+        if case in FIXTURE_CASES:
             result["approval"] = sc.record_approval(preparation, approval_id)
         monitor_path = mc.start(local.parent / "monitor", duration=360)
         result["artifacts"]["monitor_control"] = str(monitor_path)
@@ -245,7 +248,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
         sc.probe_ready(control_path, timeout=12)
         result["post_ready_gate"] = sc.pre_authorization_gate(control_path)
         sc.action(control_path, "authorize")
-        if case == "lane_hold":
+        if case in FIXTURE_CASES:
             sc.fixture_authorize(control_path, approval_id)
             sc.fixture_start(control_path, duration=180)
             sc.fixture_probe(control_path)
@@ -253,7 +256,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
         begun = True
         result["checkpoint"] = sc.probe_checkpoint(control_path, timeout=90)
         proxy = proxy_start(local / "hmi-proxy.log")
-        if case == "lane_hold":
+        if case in PACKAGE_CASES:
             driver = driver_start(local / "geckodriver.log")
             if browser_run is None:
                 completed = subprocess.run(
@@ -307,7 +310,8 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
                 result["terminal"] = collected["terminal"]
                 result["orphans"] = "FAIL" if collected["orphan"] else "PASS"
                 result["service_restoration"] = (
-                    "PASS" if case == "smoke" or
+                    "NOT_APPLICABLE" if case not in FIXTURE_CASES else
+                    "PASS" if
                     collected["terminal"].get("fixture_restoration", {}).get("service_restored")
                     else "FAIL")
                 if result["functional_outcome"] != "FAIL":
@@ -320,7 +324,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
                     "run_id": result["run_id"], "functional_outcome": result["functional_outcome"],
                     "terminal": collected["terminal"],
                     "recorded_utc": datetime.now(timezone.utc).isoformat()})
-                if case == "lane_hold":
+                if case in PACKAGE_CASES:
                     observations = []
                     for line in (local / "stdout.log").read_text().splitlines():
                         try:
@@ -329,16 +333,16 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
                             continue
                         if "journal" in row and "rows" in row:
                             observations.append(row)
-                    if len(observations) == 1:
+                    if len(observations) == 1 and observations[0].get("case") == case:
                         atomic_control(local / "scenario-output-before-reset.json", observations[0])
                     else:
                         result["errors"]["outcome_capture"] = (
-                            "exactly one structured package outcome is required")
+                            "exactly one matching structured package outcome is required")
                         result["functional_outcome"] = "FAIL"
             except BaseException as exc:
                 result["errors"]["collection"] = error(exc)
                 result["functional_outcome"] = "FAIL"
-                if case == "lane_hold":
+                if case in FIXTURE_CASES:
                     try:
                         result["fixture_terminal"] = sc.fixture_stop(control_path, timeout=25)
                         result["service_restoration"] = "PASS"
@@ -357,10 +361,10 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
         if control_path is not None:
             try:
                 state = sc.state()
-                if (case == "lane_hold" and (begun or need_recovery(state))):
+                if (case in PACKAGE_CASES and (begun or need_recovery(state))):
                     if state["coils_880_920"][0]:
                         raise RuntimeError("sorter still running before operator reset")
-                    if result["service_restoration"] != "PASS":
+                    if case in FIXTURE_CASES and result["service_restoration"] != "PASS":
                         raise RuntimeError("plant service not restored before operator reset")
                     if not (local / "outcome-before-reset.json").exists():
                         raise RuntimeError("terminal outcome not preserved before operator reset")

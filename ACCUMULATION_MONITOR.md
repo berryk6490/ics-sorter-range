@@ -237,7 +237,7 @@ Do not grant generic sudo, wildcard sudoers rules, Hermes YOLO mode,
 or a broader command allowlist. The no-package smoke and drive-stop case
 never invoke this helper.
 
-### Canonical Lane 1 command (supersedes the manual sequence below)
+### Canonical single-command scenarios (supersedes the manual sequence below)
 
 After recovering the 2026-09-25 failed attempt, the host command
 `tests/run_accumulation_attempt.py` owns the entire bounded attempt. Hermes
@@ -246,6 +246,25 @@ reserves a unique run ID using a read-only stopped PLC observation:
 ```sh
 python3 tests/accumulation_scenario_control.py reserve --evidence-dir "$EVIDENCE_DIR" --case lane_hold
 ```
+
+Use `--case merge_hold` or `--case drive_stop` for the other documented
+package scenarios. The same command entry point accepts all three cases;
+`smoke` remains the only no-package lifecycle. `normal` is not a
+single-command reservation case.
+
+| Case | Live action and required approval | Checkpoint and completion proof |
+| --- | --- | --- |
+| `lane_hold` | Fresh run-specific approval and receipt for the exact plant-service stop and restorative start; the drives supervisor runs its bounded lane-1 premerge block. | PLC-validated downstream hold, live OPC UA/HMI API and rendered screenshot; three Lane-1 packages reach trailer 2. |
+| `merge_hold` | The same two exact service transitions require a separate fresh approval and receipt for this merge run; the supervisor runs its bounded shared-merge block. | Three occupied lanes wait at the merge while a fourth waits for a slot; live OPC UA/HMI API and rendered screenshot; existing runner checks FIFO, slot reuse, at least 3.2-cell shared-outbound clearance, journal and trailer 1/2/3/1 outcomes. |
+| `drive_stop` | No plant-service stop/start and no plant-service approval receipt. The existing live runner stops and resumes induct-1 through its PLC enable control (coil 882), with VFD feedback checked. | PLC-validated DRIVE_STOPPED motion and zero feedback, live OPC UA/HMI API and rendered screenshot; the existing runner checks safe resume, one trailer-2 confirmation, journal and no duplicate outcome. |
+
+All package cases use the same independent readiness monitor, identity-bound
+worker/checkpoint/release, terminal outcome capture, operator reset and
+journal-backed handshake, typed restoration, and no-orphan cleanup. `drive_stop`
+does not create a service fixture. The worker's own package assertions remain
+authoritative for destination, spacing, confirmation-only trailer counters,
+scanner/XLe/ASX identities, and journal outcomes; the host additionally
+requires the structured result to name the reserved case.
 
 No monitor, worker, fixture, approval receipt, or expiring typed baseline
 exists while waiting for the operator. The operator approves that run ID and
@@ -257,7 +276,9 @@ sudo -n /usr/bin/systemctl start sorter-plant.service
 ```
 
 After approval, record its UTC response timestamp (ISO 8601 with timezone)
-and unique receipt ID. Preserve the actual response time; do not regenerate
+and unique receipt ID for `lane_hold` or `merge_hold`. `drive_stop` needs a
+fresh response timestamp for the same post-approval preflight, but no
+plant-service receipt. Preserve the actual response time; do not regenerate
 the timestamp when invoking the command later.
 Invoke one command. It spends the reservation, runs the full deployment
 preflight and fresh typed capture, compares critical PLC state with the
@@ -271,6 +292,10 @@ during cleanup.
 python3 tests/run_accumulation_attempt.py --reservation "$RESERVATION" --approved-at "$APPROVAL_UTC" --approval-id "$APPROVAL_RECEIPT_ID"
 ```
 
+Omit `--approval-id` for `drive_stop` and `smoke`. Supplying one to either
+case fails before a worker or service action begins. A receipt for the wrong
+run or scenario is rejected and cannot be reused.
+
 The evidence root contains `reservations/<run_id>.json`, an exclusive
 `.claim.json`, fresh `.preflight.json` and `.typed-before.json`, plus the
 activated `<run_id>/preparation.json`. A reservation may wait beyond ten
@@ -280,13 +305,13 @@ host and guest ledgers and exact sudo argv remain unchanged. The former
 
 The command starts and proves the drives monitor, launches the detached
 worker, checks its existing post-ready gate, authorizes and starts the bounded
-fixture, waits for a PLC checkpoint, obtains a commit-consistent direct Modbus
+fixture for the two block cases, waits for a PLC checkpoint, obtains a commit-consistent direct Modbus
 snapshot, compares stable package identities and safety state with OPC UA and
 HMI API, starts the existing serial HMI proxy, captures a real rendered browser
 screenshot through a command-owned geckodriver, releases the worker, collects
 all processes, performs documented
 operator reset/plant/XLe recovery if required, and runs typed postflight.
-For a lane attempt that reached `begin`, cleanup first collects the detached
+For any package attempt that reached `begin`, cleanup first collects the detached
 worker's terminal record and structured package/journal output to
 `outcome-before-reset.json` and `scenario-output-before-reset.json`. The
 worker has stopped the sorter and restored the normal plant service before

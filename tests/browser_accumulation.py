@@ -92,6 +92,11 @@ def run(case, output_dir):
                         n["zone"] == "4" and n["status"] == "live"]
                 if len(held) == 3 and len({n["id"].split("-")[0] for n in held}) == 3:
                     break
+            elif case == "drive_stop":
+                stopped = [n for n in nodes if n["motion"] == "4" and
+                           n["status"] == "live" and n["id"]]
+                if stopped:
+                    break
             else:
                 raise ValueError(case)
             time.sleep(.35)
@@ -111,7 +116,7 @@ def run(case, output_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("case", choices=("lane_hold", "merge_hold", "stale"))
+    parser.add_argument("case", choices=("lane_hold", "merge_hold", "drive_stop", "stale"))
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     run(args.case, args.output_dir)
