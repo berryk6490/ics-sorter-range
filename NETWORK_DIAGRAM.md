@@ -1,4 +1,33 @@
-# Milestone 1 network diagram — deployed Case A lab
+# Sorter network diagram — current dedicated XLe VM and historical Case A
+
+## Current service and zone topology (26 September 2026)
+
+```mermaid
+flowchart LR
+    subgraph L1[Level 1 isolated bridge]
+        D[drives: plant, six VFDs, three scanners] <-->|device Modbus 502| P[PLC: OpenPLC]
+    end
+    subgraph L2[Level 2 isolated bridge]
+        X[xle 10.10.2.20: XLe, ASX loopback, journal, sort plan]
+        S[scada 10.10.2.10: OPC UA and HMI only]
+    end
+    subgraph L3[Level 3 isolated bridge]
+        A[analyst 10.10.3.10]
+    end
+    X -->|source-bound Modbus 502 via fw| P
+    S -->|PLC and VFD reads via fw| P
+    S -->|VFD feedback via fw| D
+    A -->|documented Case A exposure| X
+```
+
+The firewall retains default-deny forwarding. XLe cannot connect directly
+to scanners or VFDs; ASX listens only on XLe loopback TCP 8089. SCADA does
+not run XLe or ASX and does not originate route writes. HMI state flows only
+from PLC validation through OPC UA on SCADA. The current measured contract is
+[48 source-bound flows](tests/network_flows.json); the migration, packet
+evidence, and resource budget are in [XLE_VM_MIGRATION.md](XLE_VM_MIGRATION.md).
+
+## Historical Milestone 1 diagram (23 September 2026)
 
 This diagram describes the **lab range**, not a production sorter network. It
 reflects the inventory and firewall rules measured in
