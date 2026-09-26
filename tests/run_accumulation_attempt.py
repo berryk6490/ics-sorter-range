@@ -13,6 +13,7 @@ from urllib.request import urlopen
 from accumulation_monitor_control import Controller as MonitorController, atomic_control
 from accumulation_scenario_control import ScenarioController, APPROVAL_LIFETIME
 from accumulation_state_snapshot import capture as typed_capture, save as typed_save
+from browser_accumulation import LIVE_CASES
 from deployment_preflight import PreflightFailure, guest_read
 
 ROOT = Path(__file__).resolve().parent
@@ -23,6 +24,15 @@ PREFLIGHT = ROOT / "deployment_preflight.py"
 FIXTURE_CASES = ("lane_hold", "merge_hold")
 PACKAGE_CASES = FIXTURE_CASES + ("drive_stop",)
 ATTEMPT_CASES = PACKAGE_CASES + ("smoke",)
+BROWSER_CASES = {"lane_hold": "lane_hold", "merge_hold": "merge_hold",
+                 "drive_stop": "drive_stop"}
+
+
+def browser_argv(case, output_dir):
+    mapped = BROWSER_CASES.get(case)
+    if mapped not in LIVE_CASES:
+        raise ValueError(f"unsupported live browser scenario: {case}")
+    return [sys.executable, str(BROWSER), mapped, "--output-dir", str(output_dir)]
 
 
 def error(exc):
@@ -113,6 +123,10 @@ def run_reserved(reservation, approved_at, approval_id=None, *, scenario=None,
     reservation, record = sc.claim_reservation(reservation)
     root = reservation.parent.parent
     run_id, case = record["run_id"], record["scenario"]
+    if case not in ATTEMPT_CASES:
+        raise ValueError("unsupported canonical attempt scenario")
+    if case in PACKAGE_CASES:
+        browser_argv(case, reservation.parent.parent / run_id)
     result_path = reservation.with_suffix(".result.json")
     preflight = reservation.with_suffix(".preflight.json")
     baseline = reservation.with_suffix(".typed-before.json")
@@ -217,6 +231,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
     case = reserved["scenario"]
     if case not in ATTEMPT_CASES:
         raise ValueError("unsupported canonical attempt scenario")
+    browser_args = browser_argv(case, preparation.parent) if case in PACKAGE_CASES else None
     if case in FIXTURE_CASES and not approval_id:
         raise ValueError("fresh run-bound operator approval ID required")
     if case not in FIXTURE_CASES and approval_id:
@@ -260,11 +275,13 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
             driver = driver_start(local / "geckodriver.log")
             if browser_run is None:
                 completed = subprocess.run(
-                    [sys.executable, str(BROWSER), "lane_hold", "--output-dir", str(local)],
+                    browser_args,
                     capture_output=True, text=True, timeout=35, check=True)
                 observation = json.loads(completed.stdout.splitlines()[-1])
             else:
                 observation = browser_run(case, local)
+            if observation.get("case") != BROWSER_CASES[case]:
+                raise ValueError("browser evidence scenario mismatch")
             screenshot = Path(observation["screenshot"])
             result["artifacts"]["screenshot"] = str(screenshot)
         else:

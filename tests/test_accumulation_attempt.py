@@ -3,6 +3,10 @@ import json
 import hashlib
 import importlib.util
 import io
+import base64
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import subprocess
+import threading
 from copy import deepcopy
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -96,6 +100,65 @@ class BrowserDispatchTests(unittest.TestCase):
             record = json.loads(output.getvalue().splitlines()[-1])
             self.assertEqual(record["case"], "drive_stop")
             self.assertTrue(Path(record["screenshot"]).is_file())
+
+    def test_real_browser_cli_with_fake_live_hmi_dom(self):
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=")
+        for case in ("merge_hold", "drive_stop"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as name:
+                class Handler(BaseHTTPRequestHandler):
+                    seen_url = None
+                    def log_message(self, *_args): pass
+                    def answer(self, value):
+                        data = json.dumps({"value": value}).encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(data)))
+                        self.end_headers()
+                        self.wfile.write(data)
+                    def do_POST(self):
+                        length = int(self.headers.get("Content-Length", 0))
+                        payload = json.loads(self.rfile.read(length) or b"{}")
+                        if self.path == "/session":
+                            self.answer({"sessionId": "fake"})
+                        elif self.path.endswith("/url"):
+                            Handler.seen_url = payload["url"]
+                            self.answer(None)
+                        elif self.path.endswith("/execute/sync"):
+                            nodes = ([{"id": f"l{lane}-1-18-{lane}-{lane}",
+                                       "motion": "3", "zone": "4", "status": "live"}
+                                      for lane in (1, 2, 3)] if case == "merge_hold" else
+                                     [{"id": "l1-1-18-1-1", "motion": "4", "zone": "2",
+                                       "status": "live"}])
+                            self.answer({"state": "live", "nodes": nodes})
+                        else:
+                            self.send_error(404)
+                    def do_GET(self):
+                        if self.path.endswith("/screenshot"):
+                            self.answer(base64.b64encode(png).decode())
+                        else:
+                            self.send_error(404)
+                    def do_DELETE(self): self.answer(None)
+                server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    command = [sys.executable, str(browser.__file__), case,
+                               "--output-dir", name, "--webdriver-url",
+                               f"http://127.0.0.1:{server.server_port}",
+                               "--hmi-url", "http://fake-hmi.invalid/live"]
+                    completed = subprocess.run(command, capture_output=True, text=True,
+                                               timeout=8, check=True)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
+                record = json.loads(completed.stdout.splitlines()[-1])
+                self.assertEqual(record["case"], case)
+                self.assertEqual(Handler.seen_url, "http://fake-hmi.invalid/live/")
+                self.assertEqual(Path(record["screenshot"]).read_bytes(), png)
+                self.assertEqual(len(record["observation"]["nodes"]),
+                                 3 if case == "merge_hold" else 1)
 
 
 class FakePLC:
@@ -248,7 +311,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertLess(calls.index("evidence"), calls.index("release"))
             self.assertLess(calls.index("worker_collect"), calls.index("postflight"))
 
-    def dispatch_case(self, case, failure=None, output_case=None):
+    def dispatch_case(self, case, failure=None, output_case=None, browser_boundary=False):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(root))
         prep = self.preparation(root, case)
@@ -307,11 +370,44 @@ class LifecycleTests(unittest.TestCase):
             calls.append("browser:" + selected)
             screenshot = path / (selected + ".png")
             screenshot.write_bytes(b"fake")
-            return {"screenshot": str(screenshot)}
-        result = attempt.run_attempt(prep, "receipt_12345678" if case == "merge_hold" else None,
-            scenario=Scenario(), monitor=Monitor(), proxy_start=lambda _p: Process(),
-            driver_start=lambda _p: Process(), browser_run=browser)
+            return {"case": selected, "screenshot": str(screenshot)}
+        kwargs = dict(scenario=Scenario(), monitor=Monitor(),
+                      proxy_start=lambda _p: Process(), driver_start=lambda _p: Process())
+        receipt = "receipt_12345678" if case in ("lane_hold", "merge_hold") else None
+        if browser_boundary:
+            def fake_subprocess(argv, **options):
+                calls.append(("browser_argv", list(argv), options))
+                screenshot = Path(argv[-1]) / (argv[2] + ".png")
+                screenshot.write_bytes(b"fake rendered screenshot")
+                return SimpleNamespace(stdout=json.dumps({"case": argv[2],
+                                                          "screenshot": str(screenshot)}) + "\n")
+            with patch.object(attempt.subprocess, "run", side_effect=fake_subprocess):
+                result = attempt.run_attempt(prep, receipt, **kwargs)
+        else:
+            result = attempt.run_attempt(prep, receipt, browser_run=browser, **kwargs)
         return result, calls, prep
+
+    def test_real_subprocess_boundary_uses_exact_browser_case_argv(self):
+        for case in ("lane_hold", "merge_hold", "drive_stop"):
+            with self.subTest(case=case):
+                result, calls, prep = self.dispatch_case(case, browser_boundary=True)
+                self.assertEqual(result["status"], "PASS")
+                boundary = next(row for row in calls if isinstance(row, tuple) and
+                                row[0] == "browser_argv")
+                self.assertEqual(boundary[1], [sys.executable, str(attempt.BROWSER), case,
+                                               "--output-dir", str(prep.parent)])
+                self.assertEqual(boundary[2]["timeout"], 35)
+                self.assertTrue(boundary[2]["check"])
+
+    def test_unsupported_browser_case_rejected_before_any_launch(self):
+        for case in ("normal", "stale", "unknown"):
+            with self.assertRaisesRegex(ValueError, "unsupported live browser"):
+                attempt.browser_argv(case, Path("/tmp/no-action"))
+
+        with tempfile.TemporaryDirectory() as name:
+            prep = self.preparation(Path(name), "stale")
+            with self.assertRaisesRegex(ValueError, "unsupported canonical"):
+                attempt.run_attempt(prep, scenario=object(), monitor=object())
 
     def test_merge_dispatch_uses_fixture_browser_and_reset(self):
         result, calls, prep = self.dispatch_case("merge_hold")
@@ -469,6 +565,11 @@ class DelayedReservationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "approval"):
             attempt.run_attempt(prep, "wrong_receipt_123")
 
+    def test_unsupported_reservation_rejected_before_plc_read(self):
+        with patch.object(self.sc, "state", side_effect=AssertionError("PLC was read")):
+            with self.assertRaisesRegex(ValueError, "unsupported single-command"):
+                self.sc.reserve(self.root / "invalid", "stale")
+
     def test_late_human_then_fresh_baseline_runs_no_package_lifecycle(self):
         reservation = self.reserve_aged()
         outcome = attempt.run_reserved(
@@ -625,7 +726,7 @@ class DelayedReservationTests(unittest.TestCase):
                 calls.append("browser")
                 screenshot = path / "lane_hold.png"
                 screenshot.write_bytes(b"fake test screenshot")
-                return {"screenshot": str(screenshot)}
+                return {"case": "lane_hold", "screenshot": str(screenshot)}
 
             result = attempt.run_attempt(
                 prep, "fresh_receipt_123", scenario=Scenario(), monitor=Monitor(),
@@ -710,7 +811,7 @@ class DelayedReservationTests(unittest.TestCase):
             def browser(_case, path):
                 screenshot = path / "lane_hold.png"
                 screenshot.write_bytes(b"test")
-                return {"screenshot": str(screenshot)}
+                return {"case": "lane_hold", "screenshot": str(screenshot)}
             result = attempt.run_attempt(
                 prep, "receipt", scenario=Scenario(), monitor=Monitor(),
                 proxy_start=lambda _p: Process(), driver_start=lambda _p: Process(),

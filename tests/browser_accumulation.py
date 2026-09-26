@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 
 WD = "http://127.0.0.1:4445"
 HMI = "http://127.0.0.1:18000"
+LIVE_CASES = ("lane_hold", "merge_hold", "drive_stop")
 
 
 def request(url, method="GET", payload=None):
@@ -116,7 +117,12 @@ def run(case, output_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("case", choices=("lane_hold", "merge_hold", "drive_stop", "stale"))
+    parser.add_argument("case", choices=LIVE_CASES + ("stale",))
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--webdriver-url", default=WD,
+                        help="WebDriver endpoint (test server may use an ephemeral port)")
+    parser.add_argument("--hmi-url", default=HMI,
+                        help="HMI URL opened by the browser")
     args = parser.parse_args()
+    WD, HMI = args.webdriver_url, args.hmi_url
     run(args.case, args.output_dir)

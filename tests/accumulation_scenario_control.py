@@ -18,6 +18,7 @@ from accumulation_monitor_control import (Controller as MonitorController, Seria
                                           atomic_control, load_control)
 from accumulation_state_snapshot import capture as typed_capture, compare as typed_compare, save as typed_save
 from accumulation_state_snapshot import PLANT, TEMPORARY
+from browser_accumulation import LIVE_CASES
 from deployment_preflight import guest_read, MANIFEST
 
 GUEST = "/home/kevin/sorter-services/live_accumulation_detached.py"
@@ -246,7 +247,7 @@ class ScenarioController:
 
     def reserve(self, evidence_dir, case):
         """Name a run for human approval without starting any expiring timer."""
-        if case not in ("lane_hold", "merge_hold", "drive_stop", "smoke"):
+        if case not in ("smoke", *LIVE_CASES):
             raise ValueError("unsupported single-command reservation scenario")
         if RESTORATION_GATE.exists() and json.loads(RESTORATION_GATE.read_text()).get("status") != "PASS":
             raise ValueError("previous run has no passing restoration gate")
@@ -277,7 +278,7 @@ class ScenarioController:
         if (path.parent.name != "reservations" or path.name != f"{run_id}.json" or
             not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id) or
             record.get("version") != RESERVATION_SCHEMA or
-            record.get("scenario") not in ("lane_hold", "merge_hold", "drive_stop", "smoke") or
+            record.get("scenario") not in ("smoke", *LIVE_CASES) or
             record.get("unit") != FIXTURE_UNIT or record.get("stop_argv") != FIXTURE_STOP or
             record.get("start_argv") != FIXTURE_START or
             not isinstance(record.get("reserved_utc"), str) or
@@ -1140,7 +1141,7 @@ def main(argv=None):
     sub = cli.add_subparsers(dest="action", required=True)
     p = sub.add_parser("reserve")
     p.add_argument("--evidence-dir", required=True)
-    p.add_argument("--case", choices=("lane_hold", "merge_hold", "drive_stop", "smoke"), required=True)
+    p.add_argument("--case", choices=("smoke", *LIVE_CASES), required=True)
     p = sub.add_parser("prepare")
     p.add_argument("--evidence-dir", required=True)
     p.add_argument("--case", choices=CASES, required=True)

@@ -311,6 +311,12 @@ HMI API, starts the existing serial HMI proxy, captures a real rendered browser
 screenshot through a command-owned geckodriver, releases the worker, collects
 all processes, performs documented
 operator reset/plant/XLe recovery if required, and runs typed postflight.
+The browser subprocess receives the reserved case exactly: `lane_hold`,
+`merge_hold`, or `drive_stop`. The runner checks that the browser CLI supports
+that case before any monitor, service, or PLC action, then checks that the
+returned evidence names the same case. Its default WebDriver and HMI
+endpoints remain the genuine live proxy; optional endpoint arguments let
+bounded tests exercise the real CLI against a fake server.
 For any package attempt that reached `begin`, cleanup first collects the detached
 worker's terminal record and structured package/journal output to
 `outcome-before-reset.json` and `scenario-output-before-reset.json`. The
@@ -536,7 +542,7 @@ calls the canonical `check_accumulation_views.py --motion {2,3,4}` through a
 short SCADA serial attachment to compare OPC UA and HMI with PLC validated
 state. After it returns, run `python3 tests/serial_hmi_proxy.py` on the host in a separate
 terminal, collect `GET http://127.0.0.1:18000/api`, and run
-`python3 tests/browser_accumulation.py {lane_hold,merge_hold} --output-dir
+`python3 tests/browser_accumulation.py {lane_hold,merge_hold,drive_stop} --output-dir
 $EVIDENCE_DIR` for a genuine rendered screenshot. The `stale` browser case
 uses an injected fixture and must not be labeled live. Stop the proxy
 before using the SCADA serial console again. Save the screenshot and HMI
