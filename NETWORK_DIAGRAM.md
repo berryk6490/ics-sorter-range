@@ -9,37 +9,11 @@ deployed.
 
 ## VM and bridge topology
 
-```mermaid
-flowchart TB
-    subgraph L3["Level 3: analyst zone | ics-l3 | 10.10.3.0/24"]
-        analyst["analyst VM: 10.10.3.10"]
-    end
+![Visual topology of the three-zone sorter lab, firewall interfaces, and Case A policy](docs/sorter-network.svg)
 
-    subgraph FW["Firewall conduit: fw VM"]
-        f3["L3 interface: 10.10.3.1"]
-        rules["nftables: forward default drop"]
-        f2["L2 interface: 10.10.2.1"]
-        f1["L1 interface: 10.10.1.1"]
-        f3 --- rules
-        rules --- f2
-        rules --- f1
-    end
+[Open the scalable SVG](docs/sorter-network.svg). The diagram is based on the
+recorded Case A inventory; links show bridge attachment, not blanket access.
 
-    subgraph L2["Level 2: supervisory zone | ics-l2 | 10.10.2.0/24"]
-        scada["scada VM: 10.10.2.10"]
-    end
-
-    subgraph L1["Level 1: control and devices | ics-l1 | 10.10.1.0/24"]
-        plc["plc VM: 10.10.1.10"]
-        drives["drives VM: 10.10.1.21 to .29"]
-        plc <-->|"same bridge: Modbus TCP 502"| drives
-    end
-
-    analyst ---|"ics-l3"| f3
-    scada ---|"ics-l2"| f2
-    plc ---|"ics-l1"| f1
-    drives ---|"ics-l1"| f1
-```
 
 The libvirt host bridges are unaddressed. `fw` has an interface on each of
 the three bridges; other guests each attach only to their assigned bridge.
