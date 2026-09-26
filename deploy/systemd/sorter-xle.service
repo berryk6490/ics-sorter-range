@@ -1,0 +1,25 @@
+[Unit]
+Description=Sorter XLe route execution and durable outcome journal
+Wants=network-online.target
+Requires=sorter-asx.service
+After=network-online.target sorter-asx.service
+
+[Service]
+Type=simple
+User=sorter-xle
+Group=sorter-xle
+WorkingDirectory=/opt/sorter-xle
+ExecStart=/opt/sorter-xle/venv/bin/python /opt/sorter-xle/xle.py --plc 10.10.1.10 --asx http://127.0.0.1:8089/sort-plan --multi --packages 0 --journal /var/lib/sorter-xle/outcomes.sqlite3
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=15
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sorter-xle
+
+[Install]
+WantedBy=multi-user.target

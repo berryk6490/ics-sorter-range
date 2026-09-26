@@ -1,42 +1,397 @@
 {
-  "sources": {"plc": "10.10.1.10", "drives": "10.10.1.21", "scada": "10.10.2.10", "analyst": "10.10.3.10"},
+  "sources": {
+    "plc": "10.10.1.10",
+    "drives": "10.10.1.21",
+    "scada": "10.10.2.10",
+    "analyst": "10.10.3.10",
+    "xle": "10.10.2.20"
+  },
   "flows": [
-    {"id": "plc-induct1", "source": "plc", "destination": "10.10.1.21", "port": 502, "purpose": "induct 1 VFD feedback/control", "expected": "allow"},
-    {"id": "plc-induct2", "source": "plc", "destination": "10.10.1.22", "port": 502, "purpose": "induct 2 VFD feedback/control", "expected": "allow"},
-    {"id": "plc-induct3", "source": "plc", "destination": "10.10.1.23", "port": 502, "purpose": "induct 3 VFD feedback/control", "expected": "allow"},
-    {"id": "plc-outbound1", "source": "plc", "destination": "10.10.1.24", "port": 502, "purpose": "outbound 1 VFD feedback/control", "expected": "allow"},
-    {"id": "plc-outbound2", "source": "plc", "destination": "10.10.1.25", "port": 502, "purpose": "outbound 2 VFD feedback/control", "expected": "allow"},
-    {"id": "plc-outbound3", "source": "plc", "destination": "10.10.1.26", "port": 502, "purpose": "outbound 3 VFD feedback/control", "expected": "allow"},
-    {"id": "plc-tunnel1", "source": "plc", "destination": "10.10.1.27", "port": 502, "purpose": "tunnel 1 scan request/response", "expected": "allow"},
-    {"id": "plc-tunnel2", "source": "plc", "destination": "10.10.1.28", "port": 502, "purpose": "tunnel 2 scan request/response", "expected": "allow"},
-    {"id": "plc-tunnel3", "source": "plc", "destination": "10.10.1.29", "port": 502, "purpose": "tunnel 3 scan request/response", "expected": "allow"},
-    {"id": "plant-plc", "source": "drives", "destination": "10.10.1.10", "port": 502, "purpose": "plant sensor events and telemetry", "expected": "allow"},
-    {"id": "scada-plc", "source": "scada", "destination": "10.10.1.10", "port": 502, "purpose": "OPC poller and XLe PLC commands/outcomes", "expected": "allow"},
-    {"id": "scada-induct1", "source": "scada", "destination": "10.10.1.21", "port": 502, "purpose": "OPC VFD 1 polling", "expected": "allow"},
-    {"id": "scada-induct2", "source": "scada", "destination": "10.10.1.22", "port": 502, "purpose": "OPC VFD 2 polling", "expected": "allow"},
-    {"id": "scada-induct3", "source": "scada", "destination": "10.10.1.23", "port": 502, "purpose": "OPC VFD 3 polling", "expected": "allow"},
-    {"id": "scada-outbound1", "source": "scada", "destination": "10.10.1.24", "port": 502, "purpose": "OPC VFD 4 polling", "expected": "allow"},
-    {"id": "scada-outbound2", "source": "scada", "destination": "10.10.1.25", "port": 502, "purpose": "OPC VFD 5 polling", "expected": "allow"},
-    {"id": "scada-outbound3", "source": "scada", "destination": "10.10.1.26", "port": 502, "purpose": "OPC VFD 6 polling", "expected": "allow"},
-    {"id": "scada-opcua", "source": "scada", "destination": "10.10.2.10", "port": 4840, "purpose": "HMI subscribes to local OPC UA", "expected": "allow"},
-    {"id": "scada-hmi", "source": "scada", "destination": "10.10.2.10", "port": 8000, "purpose": "local HMI HTTP", "expected": "allow"},
-    {"id": "xle-asx", "source": "scada", "destination": "127.0.0.1", "port": 8089, "purpose": "temporary XLe sort-plan lookup during live run", "expected": "allow", "probe": false, "condition": "ASX started by live runner; checked there"},
-    {"id": "plc-opcua-block", "source": "plc", "destination": "10.10.2.10", "port": 4840, "purpose": "L1 must not initiate OPC UA", "expected": "deny"},
-    {"id": "plant-hmi-block", "source": "drives", "destination": "10.10.2.10", "port": 8000, "purpose": "L1 must not initiate HMI", "expected": "deny"},
-    {"id": "scada-scanner-block", "source": "scada", "destination": "10.10.1.27", "port": 502, "purpose": "L2 cannot command scanner directly", "expected": "deny"},
-    {"id": "scada-analyst-block", "source": "scada", "destination": "10.10.3.10", "port": 22, "purpose": "L2 cannot initiate L3 SSH", "expected": "deny"},
-    {"id": "scada-plc-admin-block", "source": "scada", "destination": "10.10.1.10", "port": 8443, "purpose": "L2 cannot reach PLC web administration", "expected": "deny"},
-    {"id": "plc-analyst-block", "source": "plc", "destination": "10.10.3.10", "port": 22, "purpose": "L1 cannot initiate L3 SSH", "expected": "deny"},
-    {"id": "plc-fw-ssh", "source": "plc", "destination": "10.10.1.1", "port": 22, "purpose": "firewall management listener (input rule)", "expected": "allow"},
-    {"id": "scada-fw-ssh", "source": "scada", "destination": "10.10.2.1", "port": 22, "purpose": "firewall management listener (input rule)", "expected": "allow"},
-    {"id": "analyst-fw-ssh", "source": "analyst", "destination": "10.10.3.1", "port": 22, "purpose": "firewall management listener (input rule)", "expected": "allow"},
-    {"id": "analyst-plc", "source": "analyst", "destination": "10.10.1.10", "port": 502, "purpose": "current broad L3 exception exposes PLC Modbus", "expected": "allow"},
-    {"id": "analyst-scanner", "source": "analyst", "destination": "10.10.1.27", "port": 502, "purpose": "current broad L3 exception exposes scanner Modbus", "expected": "allow"},
-    {"id": "analyst-plc-ssh", "source": "analyst", "destination": "10.10.1.10", "port": 22, "purpose": "current broad L3 exception exposes PLC SSH", "expected": "allow"},
-    {"id": "analyst-plc-admin", "source": "analyst", "destination": "10.10.1.10", "port": 8443, "purpose": "current broad L3 exception exposes PLC web administration", "expected": "allow"},
-    {"id": "analyst-drives-ssh", "source": "analyst", "destination": "10.10.1.21", "port": 22, "purpose": "current broad L3 exception exposes drives SSH", "expected": "allow"},
-    {"id": "analyst-scada-ssh", "source": "analyst", "destination": "10.10.2.10", "port": 22, "purpose": "current broad L3 exception exposes SCADA SSH", "expected": "allow"},
-    {"id": "analyst-opcua", "source": "analyst", "destination": "10.10.2.10", "port": 4840, "purpose": "analyst reads OPC UA", "expected": "allow"},
-    {"id": "analyst-hmi", "source": "analyst", "destination": "10.10.2.10", "port": 8000, "purpose": "analyst views HMI", "expected": "allow"}
+    {
+      "id": "plc-induct1",
+      "source": "plc",
+      "destination": "10.10.1.21",
+      "port": 502,
+      "purpose": "induct 1 VFD feedback/control",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-induct2",
+      "source": "plc",
+      "destination": "10.10.1.22",
+      "port": 502,
+      "purpose": "induct 2 VFD feedback/control",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-induct3",
+      "source": "plc",
+      "destination": "10.10.1.23",
+      "port": 502,
+      "purpose": "induct 3 VFD feedback/control",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-outbound1",
+      "source": "plc",
+      "destination": "10.10.1.24",
+      "port": 502,
+      "purpose": "outbound 1 VFD feedback/control",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-outbound2",
+      "source": "plc",
+      "destination": "10.10.1.25",
+      "port": 502,
+      "purpose": "outbound 2 VFD feedback/control",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-outbound3",
+      "source": "plc",
+      "destination": "10.10.1.26",
+      "port": 502,
+      "purpose": "outbound 3 VFD feedback/control",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-tunnel1",
+      "source": "plc",
+      "destination": "10.10.1.27",
+      "port": 502,
+      "purpose": "tunnel 1 scan request/response",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-tunnel2",
+      "source": "plc",
+      "destination": "10.10.1.28",
+      "port": 502,
+      "purpose": "tunnel 2 scan request/response",
+      "expected": "allow"
+    },
+    {
+      "id": "plc-tunnel3",
+      "source": "plc",
+      "destination": "10.10.1.29",
+      "port": 502,
+      "purpose": "tunnel 3 scan request/response",
+      "expected": "allow"
+    },
+    {
+      "id": "plant-plc",
+      "source": "drives",
+      "destination": "10.10.1.10",
+      "port": 502,
+      "purpose": "plant sensor events and telemetry",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-plc",
+      "source": "scada",
+      "destination": "10.10.1.10",
+      "port": 502,
+      "purpose": "OPC UA server polls PLC (route execution moved to xle)",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-induct1",
+      "source": "scada",
+      "destination": "10.10.1.21",
+      "port": 502,
+      "purpose": "OPC VFD 1 polling",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-induct2",
+      "source": "scada",
+      "destination": "10.10.1.22",
+      "port": 502,
+      "purpose": "OPC VFD 2 polling",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-induct3",
+      "source": "scada",
+      "destination": "10.10.1.23",
+      "port": 502,
+      "purpose": "OPC VFD 3 polling",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-outbound1",
+      "source": "scada",
+      "destination": "10.10.1.24",
+      "port": 502,
+      "purpose": "OPC VFD 4 polling",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-outbound2",
+      "source": "scada",
+      "destination": "10.10.1.25",
+      "port": 502,
+      "purpose": "OPC VFD 5 polling",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-outbound3",
+      "source": "scada",
+      "destination": "10.10.1.26",
+      "port": 502,
+      "purpose": "OPC VFD 6 polling",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-opcua",
+      "source": "scada",
+      "destination": "10.10.2.10",
+      "port": 4840,
+      "purpose": "HMI subscribes to local OPC UA",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-hmi",
+      "source": "scada",
+      "destination": "10.10.2.10",
+      "port": 8000,
+      "purpose": "local HMI HTTP",
+      "expected": "allow"
+    },
+    {
+      "id": "xle-asx",
+      "source": "xle",
+      "destination": "127.0.0.1",
+      "port": 8089,
+      "purpose": "persistent XLe lookup to ASX on same-guest loopback",
+      "expected": "allow",
+      "probe": true,
+      "source_address": "127.0.0.1"
+    },
+    {
+      "id": "plc-opcua-block",
+      "source": "plc",
+      "destination": "10.10.2.10",
+      "port": 4840,
+      "purpose": "L1 must not initiate OPC UA",
+      "expected": "deny"
+    },
+    {
+      "id": "plant-hmi-block",
+      "source": "drives",
+      "destination": "10.10.2.10",
+      "port": 8000,
+      "purpose": "L1 must not initiate HMI",
+      "expected": "deny"
+    },
+    {
+      "id": "scada-scanner-block",
+      "source": "scada",
+      "destination": "10.10.1.27",
+      "port": 502,
+      "purpose": "L2 cannot command scanner directly",
+      "expected": "deny"
+    },
+    {
+      "id": "scada-analyst-block",
+      "source": "scada",
+      "destination": "10.10.3.10",
+      "port": 22,
+      "purpose": "L2 cannot initiate L3 SSH",
+      "expected": "deny"
+    },
+    {
+      "id": "scada-plc-admin-block",
+      "source": "scada",
+      "destination": "10.10.1.10",
+      "port": 8443,
+      "purpose": "L2 cannot reach PLC web administration",
+      "expected": "deny"
+    },
+    {
+      "id": "plc-analyst-block",
+      "source": "plc",
+      "destination": "10.10.3.10",
+      "port": 22,
+      "purpose": "L1 cannot initiate L3 SSH",
+      "expected": "deny"
+    },
+    {
+      "id": "plc-fw-ssh",
+      "source": "plc",
+      "destination": "10.10.1.1",
+      "port": 22,
+      "purpose": "firewall management listener (input rule)",
+      "expected": "allow"
+    },
+    {
+      "id": "scada-fw-ssh",
+      "source": "scada",
+      "destination": "10.10.2.1",
+      "port": 22,
+      "purpose": "firewall management listener (input rule)",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-fw-ssh",
+      "source": "analyst",
+      "destination": "10.10.3.1",
+      "port": 22,
+      "purpose": "firewall management listener (input rule)",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-plc",
+      "source": "analyst",
+      "destination": "10.10.1.10",
+      "port": 502,
+      "purpose": "current broad L3 exception exposes PLC Modbus",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-scanner",
+      "source": "analyst",
+      "destination": "10.10.1.27",
+      "port": 502,
+      "purpose": "current broad L3 exception exposes scanner Modbus",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-plc-ssh",
+      "source": "analyst",
+      "destination": "10.10.1.10",
+      "port": 22,
+      "purpose": "current broad L3 exception exposes PLC SSH",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-plc-admin",
+      "source": "analyst",
+      "destination": "10.10.1.10",
+      "port": 8443,
+      "purpose": "current broad L3 exception exposes PLC web administration",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-drives-ssh",
+      "source": "analyst",
+      "destination": "10.10.1.21",
+      "port": 22,
+      "purpose": "current broad L3 exception exposes drives SSH",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-scada-ssh",
+      "source": "analyst",
+      "destination": "10.10.2.10",
+      "port": 22,
+      "purpose": "current broad L3 exception exposes SCADA SSH",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-opcua",
+      "source": "analyst",
+      "destination": "10.10.2.10",
+      "port": 4840,
+      "purpose": "analyst reads OPC UA",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-hmi",
+      "source": "analyst",
+      "destination": "10.10.2.10",
+      "port": 8000,
+      "purpose": "analyst views HMI",
+      "expected": "allow"
+    },
+    {
+      "id": "xle-plc",
+      "source": "xle",
+      "destination": "10.10.1.10",
+      "port": 502,
+      "purpose": "XLe route commands, heartbeat and outcome release across fw",
+      "expected": "allow"
+    },
+    {
+      "id": "xle-vfd-block",
+      "source": "xle",
+      "destination": "10.10.1.21",
+      "port": 502,
+      "purpose": "XLe has no direct drive connection",
+      "expected": "deny"
+    },
+    {
+      "id": "xle-scanner-block",
+      "source": "xle",
+      "destination": "10.10.1.27",
+      "port": 502,
+      "purpose": "XLe has no direct scanner connection",
+      "expected": "deny"
+    },
+    {
+      "id": "xle-plc-admin-block",
+      "source": "xle",
+      "destination": "10.10.1.10",
+      "port": 8443,
+      "purpose": "XLe cannot reach PLC web administration",
+      "expected": "deny"
+    },
+    {
+      "id": "xle-scada-opcua-block",
+      "source": "xle",
+      "destination": "10.10.2.10",
+      "port": 4840,
+      "purpose": "XLe guest policy blocks direct SCADA application access",
+      "expected": "deny"
+    },
+    {
+      "id": "xle-scada-hmi-block",
+      "source": "xle",
+      "destination": "10.10.2.10",
+      "port": 8000,
+      "purpose": "XLe guest policy blocks direct HMI access",
+      "expected": "deny"
+    },
+    {
+      "id": "xle-analyst-block",
+      "source": "xle",
+      "destination": "10.10.3.10",
+      "port": 22,
+      "purpose": "XLe cannot initiate analyst management",
+      "expected": "deny"
+    },
+    {
+      "id": "scada-xle-ssh-block",
+      "source": "scada",
+      "destination": "10.10.2.20",
+      "port": 22,
+      "purpose": "Same-bridge SCADA management denied by XLe guest filter",
+      "expected": "deny"
+    },
+    {
+      "id": "plc-xle-ssh-block",
+      "source": "plc",
+      "destination": "10.10.2.20",
+      "port": 22,
+      "purpose": "Level 1 cannot initiate XLe management",
+      "expected": "deny"
+    },
+    {
+      "id": "analyst-xle-ssh",
+      "source": "analyst",
+      "destination": "10.10.2.20",
+      "port": 22,
+      "purpose": "Case A Level 3 management exposure to XLe",
+      "expected": "allow"
+    },
+    {
+      "id": "analyst-xle-asx-block",
+      "source": "analyst",
+      "destination": "10.10.2.20",
+      "port": 8089,
+      "purpose": "ASX bound only to XLe loopback; guest input drops external access",
+      "expected": "deny"
+    }
   ]
 }

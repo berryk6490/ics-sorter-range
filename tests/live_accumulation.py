@@ -172,7 +172,7 @@ def run(case, hold_marker=None, evidence_hold=None, cleanup_report=None):
     journal = tempfile.TemporaryDirectory(prefix="sorter-accumulation-")
     failure = None
     try:
-        assert holding(plc, 249)[0] == 24113, "wrong PLC identity"
+        assert holding(plc, 249)[0] == 24114, "wrong PLC identity"
         assert not coils(plc, 880)[0], "sorter must be stopped"
         assert all(holding(plc, base + 4)[0] == 0 for base in (530, 542, 647))
         # A cold OpenPLC process initializes PlantFault=1 until a valid

@@ -32,7 +32,8 @@ class ReachabilityTest(unittest.TestCase):
             self.assertIn(row["expected"], ("allow", "deny"))
             self.assertTrue(row["purpose"])
             self.assertGreater(row["port"], 0)
-        self.assertEqual(sum(row.get("probe", True) for row in matrix["flows"]), 36)
+        self.assertEqual(sum(row.get("probe", True) for row in matrix["flows"]), 48)
+        self.assertEqual(matrix["sources"]["xle"], "10.10.2.20")
 
 
 if __name__ == "__main__":

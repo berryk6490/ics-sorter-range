@@ -1,5 +1,9 @@
 # XLe process restart recovery
 
+> The SCADA-local process and journal instructions below describe the
+> pre-migration design. The dedicated service and journal are now on `xle`;
+> follow [XLE_VM_MIGRATION.md](XLE_VM_MIGRATION.md) for current recovery.
+
 ## Contract and limits
 
 The PLC's two slot rows remain authoritative. At startup XLe reconstructs

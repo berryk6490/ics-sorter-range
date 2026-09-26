@@ -21,7 +21,7 @@ static void scan(void) {
 }
 static void setup(void) {
     SORTER_init__(&plc,0); scan();
-    assert(WORD(249)==24113);
+    assert(WORD(249)==24114);
     INPUT(158)=INPUT(169)=INPUT(180)=32766;
     INPUT(160)=INPUT(171)=INPUT(182)=7;
     INPUT(164)=INPUT(175)=INPUT(186)=1; scan();
@@ -130,6 +130,51 @@ int main(int argc,char **argv) {
         WORD(752)=WORD(753)=WORD(754)=0;
         WORD(609)=WORD(755)=7; WORD(785)=8; scan();
         assert(WORD(781)==2 && WORD(766)==6 && WORD(788)==0);
+    } else if(!strcmp(argv[1],"recirc_tail")) {
+        event(1,1,0);
+        row0(1,100,2,3);
+        event(2,2,0);
+        INPUT(158)=1; INPUT(159)=6001; INPUT(160)=0; scan();
+        assert(WORD(534)==2 && WORD(535)==0);
+        row0(1,139,3,4);
+        assert(WORD(781)==1 && WORD(788)==0);
+        row0(1,140,7,5);
+        assert(WORD(781)==1 && WORD(766)==7 && WORD(788)==0 && BIT(110,0));
+        event(3,3,0);
+        assert(WORD(534)==4 && WORD(535)==0);
+        row0(1,141,7,6);
+        row0(1,190,7,7);
+        assert(WORD(781)==1 && WORD(766)==7 && WORD(788)==0 && BIT(110,0));
+        event(4,5,0);
+        assert(WORD(534)==6 && WORD(218)==1 && WORD(222)==0);
+    } else if(!strcmp(argv[1],"recirc_old_zone")) {
+        event(1,1,0); row0(1,100,2,3); event(2,2,0);
+        row0(1,130,3,4); row0(1,140,3,5);
+        assert(WORD(781)==3 && WORD(788)==2 && !BIT(110,0));
+    } else if(!strcmp(argv[1],"recirc_wrong_route")) {
+        event(1,1,0); row0(1,100,2,3); event(2,2,0);
+        INPUT(158)=1; INPUT(159)=6001; INPUT(160)=0; scan();
+        assert(WORD(534)==2);
+        WORD(520)=1; WORD(521)=0; WORD(522)=WORD(530);
+        WORD(523)=WORD(531); WORD(524)=WORD(532); WORD(525)=WORD(533);
+        WORD(526)=2; WORD(527)=WORD(509); WORD(562)=WORD(558);
+        WORD(563)=WORD(559); WORD(528)=1; scan();
+        assert(WORD(534)==3 && WORD(535)==2);
+        row0(1,130,3,4); row0(1,140,7,5);
+        assert(WORD(781)==3 && WORD(788)==2 && !BIT(110,0));
+    } else if(!strcmp(argv[1],"recirc_wrong_identity")) {
+        event(1,1,0); row0(1,100,2,3); event(2,2,0);
+        row0(1,130,3,4);
+        WORD(600)=WORD(558)+1; WORD(606)=140;
+        WORD(751)=7; WORD(609)=WORD(755)=5; WORD(785)=6; scan();
+        assert(WORD(781)==3 && WORD(788)==1 && !BIT(110,0));
+    } else if(!strcmp(argv[1],"recirc_stale")) {
+        event(1,1,0); row0(1,100,2,3); event(2,2,0);
+        INPUT(158)=1; INPUT(159)=6001; INPUT(160)=0; scan();
+        row0(1,130,3,4); row0(1,140,7,5);
+        assert(WORD(788)==0);
+        WORD(785)=7; scan();
+        assert(WORD(781)==3 && WORD(788)==1 && !BIT(110,0));
     } else if(!strcmp(argv[1],"held_beam")) {
         BIT(114,7)=1; WORD(746)=6; WORD(747)=8;
         scan();

@@ -65,7 +65,7 @@ class RecoveryTests(unittest.TestCase):
             def connect(self): return True
             def close(self): pass
             def read_holding_registers(self, address, count, slave):
-                values = {249: 24113, 509: self.nonce, 786: self.ready,
+                values = {249: 24114, 509: self.nonce, 786: self.ready,
                           591: 0, 561: 0, 788: 0, 255: 0, 256: 0}
                 if address == 214:
                     return Reply([self.process[a] for a in range(address, address + count)])
@@ -550,7 +550,7 @@ class DelayedReservationTests(unittest.TestCase):
             "completed_utc": datetime.now(timezone.utc).isoformat(),
             "manifest_sha256": hashlib.sha256(scenario.MANIFEST.read_bytes()).hexdigest(),
             "source_and_guest_hashes": len(json.loads(scenario.MANIFEST.read_text())["components"]),
-            "program_identity": 24113}))
+            "program_identity": 24114}))
 
     def capture(self):
         self.calls.append("fresh_baseline")

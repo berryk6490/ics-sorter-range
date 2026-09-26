@@ -343,6 +343,17 @@ functionally complete. A smoke attempt performs no PLC recovery or write.
 The structured package output and terminal status remain in evidence across
 reset; cleanup never changes `functional_outcome` from FAIL to PASS.
 
+For the dedicated XLe VM, the cleanup invocation includes `--remote-xle`.
+It now requires a new QW587–589 plant identity equal to the PLC's active
+epoch and scanner nonce, a changed plant heartbeat with age at most 30 scans,
+zero plant fault, and journal-backed XLe heartbeat acknowledgement before
+teardown. It turns plant mode off **before** either external/XLe mode; the
+opposite order can create QW591=2 for one PLC scan and retain that value while
+plant mode is off. A timeout reports the expected and observed identity,
+heartbeat, fault, and event sequence/ACK. The comparator still requires
+plant fault zero. The preserved migration failure and host reproduction are
+documented in [XLE_VM_FAULT2_INVESTIGATION.md](XLE_VM_FAULT2_INVESTIGATION.md).
+
 The preserved 20260925T213332_fac009eab47348e4b39df76c8a67e23f run
 functionally completed three Lane 1 packages. Its first postflight was
 blocked at a SCADA `liveness_wrapper_error` after the read-only process-list

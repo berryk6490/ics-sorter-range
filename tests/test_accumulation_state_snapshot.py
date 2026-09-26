@@ -20,9 +20,9 @@ def sample():
                    "belt_load": 0, "status": 1, "frequency": 0,
                    "feedback_rpm": 0, "fault": 0, "current": 0, "thermal": 0}
             for name in snap.VFD_NAMES}
-    return {"schema_version": 1, "program_identity": 24113,
+    return {"schema_version": snap.SCHEMA, "program_identity": 24114,
             "captured_utc": "2026-09-24T00:00:00Z",
-            "plc": {"reader_schema": 2, "identity": 24113,
+            "plc": {"reader_schema": 2, "identity": 24114,
                     "coils_880_920": [False] * 41,
                     "setpoints_200_210": [200] * 11,
                     "photoeye_config_744_747": [2, 2, 120, 400],
@@ -45,7 +45,11 @@ def sample():
                             "vms": {name: "running" for name in snap.VM_NAMES},
                             "canonical_plant": [{"pid": 101,
                                 "args": "/home/kevin/venv/bin/python /home/kevin/plant.py"}],
-                            "temporary": {"drives": [], "scada": []},
+                            "canonical_xle": [{"pid": 102,
+                                "args": "/opt/sorter-xle/venv/bin/python /opt/sorter-xle/xle.py"}],
+                            "canonical_asx": [{"pid": 103,
+                                "args": "/opt/sorter-xle/venv/bin/python /opt/sorter-xle/asx.py"}],
+                            "temporary": {"drives": [], "scada": [], "xle": []},
                             "host_proxy": []}}
 
 
@@ -60,7 +64,7 @@ class Reply:
 
 class FakePLC:
     def read_holding_registers(self, start, count, slave):
-        return Reply([24113 if start == 249 else 0] * count)
+        return Reply([24114 if start == 249 else 0] * count)
 
     def read_coils(self, start, count, slave):
         return Reply([False] * count)
@@ -184,7 +188,7 @@ class SnapshotTests(unittest.TestCase):
                 "duration_seconds": 92,
                 "manifest_sha256": hashlib.sha256(snap.MANIFEST.read_bytes()).hexdigest(),
                 "source_and_guest_hashes": len(json.loads(snap.MANIFEST.read_text())["components"]),
-                "program_identity": 24113}))
+                "program_identity": 24114}))
             with patch.object(scenario, "RESTORATION_GATE", root / "global-gate.json"), \
                  patch.object(scenario, "load_control", return_value={
                     "launched_utc": (now - timedelta(seconds=10)).isoformat()}):
@@ -214,7 +218,7 @@ class SnapshotTests(unittest.TestCase):
                 "duration_seconds": 92.0,
                 "manifest_sha256": hashlib.sha256(snap.MANIFEST.read_bytes()).hexdigest(),
                 "source_and_guest_hashes": len(json.loads(snap.MANIFEST.read_text())["components"]),
-                "program_identity": 24113}))
+                "program_identity": 24114}))
             scada = Mock()
 
             def launch_worker(argv):
@@ -224,7 +228,7 @@ class SnapshotTests(unittest.TestCase):
 
             scada.run.side_effect = launch_worker
             manager = scenario.ScenarioController(scada=scada, drives=Mock(), monitor=Mock())
-            manager.state = Mock(return_value={"identity": 24113,
+            manager.state = Mock(return_value={"identity": 24114,
                          "coils_880_920": [False] * 41,
                          "slots": [[0] * 12 for _ in range(3)]})
             with patch.object(scenario, "RESTORATION_GATE", root / "gate.json"), \

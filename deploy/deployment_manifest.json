@@ -10,7 +10,7 @@
         "openplc.service"
       ],
       "hash_policy": "exact",
-      "sha256": "9ac0d152e78604c89c3f0a9afd9dbcd216e519d280b68c611a294cfdd2d532ab",
+      "sha256": "58ec28cce050b93479e6e49085dd2830c24a0fb8b0b0a468848b193ae8eb5c7a",
       "verification_command": "sha256sum /home/kevin/OpenPLC_v3/webserver/st_files/xle_sorter.st"
     },
     {
@@ -21,7 +21,7 @@
         "sorter-plant.service"
       ],
       "hash_policy": "exact",
-      "sha256": "1555cb7a9c5e1dd9ec582fcb37571bf7078127a7eb3401993deb82b2cadd5074",
+      "sha256": "6ffd96e4884e4b1ee75c409e67657d3464a7bc6b2a4de956a02ef023d71d1388",
       "verification_command": "sha256sum /home/kevin/plant.py"
     },
     {
@@ -81,33 +81,6 @@
       "verification_command": "sha256sum /etc/systemd/system/sorter-plant.service"
     },
     {
-      "repository_source": "services/xle.py",
-      "guest": "scada",
-      "canonical_destination": "/home/kevin/sorter-services/xle.py",
-      "associated_service": [],
-      "hash_policy": "exact",
-      "sha256": "e5d50f6b4b5e1844a17414a5e4793484b6c2a0e3da9d4dfcb010a6709fe9d13e",
-      "verification_command": "sha256sum /home/kevin/sorter-services/xle.py"
-    },
-    {
-      "repository_source": "services/asx.py",
-      "guest": "scada",
-      "canonical_destination": "/home/kevin/sorter-services/asx.py",
-      "associated_service": [],
-      "hash_policy": "exact",
-      "sha256": "54618623c5b111297f62df7f159db4f9b3c5004e63e736380f2f524a09a97950",
-      "verification_command": "sha256sum /home/kevin/sorter-services/asx.py"
-    },
-    {
-      "repository_source": "tests/lane3_plan.json",
-      "guest": "scada",
-      "canonical_destination": "/home/kevin/sorter-services/lane3_plan.json",
-      "associated_service": [],
-      "hash_policy": "exact",
-      "sha256": "b8ce42bb2a16a47d01f8efb50d981c82e897496477d657ea0aeedf680295bc2b",
-      "verification_command": "sha256sum /home/kevin/sorter-services/lane3_plan.json"
-    },
-    {
       "repository_source": "scada/opcua_server.py",
       "guest": "scada",
       "canonical_destination": "/home/kevin/opcua_server.py",
@@ -126,7 +99,7 @@
         "sorter-hmi.service"
       ],
       "hash_policy": "exact",
-      "sha256": "c795fb2bbeee19d17205ce0565522c0c44570f1fb98b1f3066cf95555190e2a7",
+      "sha256": "a76c5e5774305935738045a3ff0aa4644abe13e50cdffea33fa56a47969be13c",
       "verification_command": "sha256sum /home/kevin/hmi_ua.py"
     },
     {
@@ -198,7 +171,7 @@
       "canonical_destination": "/home/kevin/sorter-services/live_accumulation.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "878e3f18b3e646e7e44d3bf302d9938571676719eb32ea598e721fc61581ea6d",
+      "sha256": "1743bc7f9765d3cd582a3a68b253a67bb8bc0fe271b33852c790cc0d0066f209",
       "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation.py"
     },
     {
@@ -243,7 +216,7 @@
       "canonical_destination": "/home/kevin/live_accumulation_monitor.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "7c3da1a183a261e3a9a3d3cf23d646f0b839493b2432a0e55008594f7984b0db",
+      "sha256": "4adb7a6f6c30bde189a1c797d0b9391b8c4f9619706aaa3873ad4205b6c79f7f",
       "verification_command": "sha256sum /home/kevin/live_accumulation_monitor.py"
     },
     {
@@ -252,7 +225,7 @@
       "canonical_destination": "/home/kevin/sorter-services/live_accumulation_detached.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "891b171ba50a6289e7b2f633a39534eae6b627e11953d673639dd84c2c748529",
+      "sha256": "23f59594957caea14f8ba16c586b40b231a3cb55c3dbbbc1a2b07a5e42e2277f",
       "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation_detached.py"
     },
     {
@@ -261,7 +234,7 @@
       "canonical_destination": "/home/kevin/live_accumulation_detached.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "891b171ba50a6289e7b2f633a39534eae6b627e11953d673639dd84c2c748529",
+      "sha256": "23f59594957caea14f8ba16c586b40b231a3cb55c3dbbbc1a2b07a5e42e2277f",
       "verification_command": "sha256sum /home/kevin/live_accumulation_detached.py"
     },
     {
@@ -315,10 +288,106 @@
       "canonical_destination": "/home/kevin/sorter-services/recover_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "91bd08a3defbce44c60ce44c1499c41067f2b3779c42e531cad431c051eab614",
+      "sha256": "ec8952017b4faf1914340db8a08a98a0d462d22125d70a52f4abfee5d5dbd7a5",
       "verification_command": "sha256sum /home/kevin/sorter-services/recover_accumulation_state.py"
+    },
+    {
+      "repository_source": "services/xle.py",
+      "guest": "xle",
+      "canonical_destination": "/opt/sorter-xle/xle.py",
+      "associated_service": [
+        "sorter-xle.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "e5d50f6b4b5e1844a17414a5e4793484b6c2a0e3da9d4dfcb010a6709fe9d13e",
+      "verification_command": "sha256sum /opt/sorter-xle/xle.py"
+    },
+    {
+      "repository_source": "services/asx.py",
+      "guest": "xle",
+      "canonical_destination": "/opt/sorter-xle/asx.py",
+      "associated_service": [
+        "sorter-asx.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "54618623c5b111297f62df7f159db4f9b3c5004e63e736380f2f524a09a97950",
+      "verification_command": "sha256sum /opt/sorter-xle/asx.py"
+    },
+    {
+      "repository_source": "services/xle_vm_sort_plan.json",
+      "guest": "xle",
+      "canonical_destination": "/etc/sorter-xle/sort-plan.json",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "b8ce42bb2a16a47d01f8efb50d981c82e897496477d657ea0aeedf680295bc2b",
+      "verification_command": "sha256sum /etc/sorter-xle/sort-plan.json"
+    },
+    {
+      "repository_source": "deploy/systemd/sorter-xle.service",
+      "guest": "xle",
+      "canonical_destination": "/etc/systemd/system/sorter-xle.service",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "0a4257dd518b354c9588a03fec6dd1bfbf8d52307b220fdf421d957dc8883423",
+      "verification_command": "sha256sum /etc/systemd/system/sorter-xle.service"
+    },
+    {
+      "repository_source": "deploy/systemd/sorter-asx.service",
+      "guest": "xle",
+      "canonical_destination": "/etc/systemd/system/sorter-asx.service",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "cb0fd26db2dfef5c4bc301ccb564c2920fc2b55e7ff84b48ade9a30bbd84f3e7",
+      "verification_command": "sha256sum /etc/systemd/system/sorter-asx.service"
+    },
+    {
+      "repository_source": "deploy/firewall/nftables.conf",
+      "guest": "fw",
+      "canonical_destination": "/etc/nftables.conf",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "8445d8414510e3bc2e4d6f6ef50c52f3f462dfe7ca868f117741075034fd586f",
+      "verification_command": "sha256sum /etc/nftables.conf"
+    },
+    {
+      "repository_source": "deploy/firewall/xle-nftables.conf",
+      "guest": "xle",
+      "canonical_destination": "/etc/nftables.conf",
+      "associated_service": [
+        "nftables.service"
+      ],
+      "hash_policy": "exact",
+      "sha256": "c3bc81ad7bb69d25ac5eb2e3bf72a3eeff1df7f6a35894cb890a80e15558fae2",
+      "verification_command": "sha256sum /etc/nftables.conf"
+    },
+    {
+      "repository_source": "tests/live_xle_vm_three_lane.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/live_xle_vm_three_lane.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "d1d0aa10b27a444dbe6d05601029a96e96fb590526b9b5c7acc11c5a24a5b3d7",
+      "verification_command": "sha256sum /home/kevin/sorter-services/live_xle_vm_three_lane.py"
+    },
+    {
+      "repository_source": "tests/pcap_modbus_summary.py",
+      "guest": "fw",
+      "canonical_destination": "/home/kevin/pcap_modbus_summary.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "48a2aed3652026464a9233203ebb62b2b3bc5ce40daa788553efb71e903c4e81",
+      "verification_command": "sha256sum /home/kevin/pcap_modbus_summary.py"
+    },
+    {
+      "repository_source": "tests/live_xle_vm_liveness.py",
+      "guest": "xle",
+      "canonical_destination": "/opt/sorter-xle/live_xle_vm_liveness.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "6c34a2fd3cd3e95253f76cadafb3cd4bc19b41bb8e5d8aabcea49541d63b8aab",
+      "verification_command": "sha256sum /opt/sorter-xle/live_xle_vm_liveness.py"
     }
   ],
-  "milestone": "phase-2a-accumulation-backpressure",
-  "plc_program_identity": 24113
+  "milestone": "dedicated-xle-vm-migration",
+  "plc_program_identity": 24114
 }

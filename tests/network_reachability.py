@@ -16,7 +16,7 @@ def check(matrix, source, timeout=1.2):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         try:
-            sock.bind((origin, 0))
+            sock.bind((flow.get("source_address", origin), 0))
             sock.connect((flow["destination"], flow["port"]))
             observed = "allow"
             detail = "connected"
@@ -36,7 +36,7 @@ def check(matrix, source, timeout=1.2):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", choices=("plc", "drives", "scada", "analyst"))
+    parser.add_argument("source", choices=("plc", "drives", "scada", "xle", "analyst"))
     parser.add_argument("--matrix", type=Path, default=Path(__file__).with_name("network_flows.json"))
     parser.add_argument("--timeout", type=float, default=1.2)
     args = parser.parse_args()

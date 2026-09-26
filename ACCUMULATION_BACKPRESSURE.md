@@ -13,7 +13,7 @@ results below predate that gate.
 
 This milestone is opt-in independent plant mode: coils 918 (plant), 919
 (stateful photoeyes), and 920 (finite accumulation) must be on. The PLC
-identity is **24113**. With coil 920 off, the earlier plant kinematics and
+identity is **24114**. With coil 920 off, the earlier plant kinematics and
 three-slot behavior remain available; with coil 918 off, the PLC cell model
 remains the default. The serial plant event/ACK and raw photoeye rows are
 unchanged. `devices/plant.py` alone owns coordinates, spacing, occupancy, and
@@ -37,6 +37,7 @@ global slots; a fourth ready package waits for slot release.
 | Per-lane induction approach (1) | 0–9 | 3 | Lane induct VFD; admission requires a pitch clear |
 | Per-lane tunnel/decision (2) | 9–11.8 | 1 | Lane induct VFD; downstream hold at 11.6 |
 | Per-lane premerge (3) | 11.8–14 | 1 | Lane induct VFD; merge hold at 13.6 |
+| Per-lane recirculation tail (7) | 14–19 | 2 nominal, bounded by three PLC slots | Lane induct VFD; only for an irrevocable no-route fallback |
 | Shared merge admission (4) | One gate per lane into each outbound | One admission per safe gap | Entry coordinates 2, 5, 8; circular lane pointer |
 | Outbound/trailer approach (5) | 2–20 on each outbound | 6 nominal, bounded by three global slots | Corresponding outbound VFD and trailer position |
 
@@ -66,7 +67,12 @@ on the PLC's accepted trailer confirmation event.
 ## Package states and quality
 
 The per-slot zone is 1 approach, 2 decision, 3 premerge, 4 merge gate, 5
-outbound, or 6 terminal. Motion is 1 MOVING, 2 HELD_DOWNSTREAM, 3
+outbound, 6 terminal, or 7 recirculation tail. Zone 7 starts at front
+coordinate 14 only after the no-route DIVERT event fixes fallback; it ends
+at the RECIRC sensor at coordinate 19. The PLC accepts zone 3→7 only for
+the same undecided package identity and rejects a routed package there.
+See [the movement boundary contract](XLE_VM_MOVEMENT_BOUNDARY.md) for
+inclusivity and route-dependent transitions. Motion is 1 MOVING, 2 HELD_DOWNSTREAM, 3
 HELD_MERGE, 4 DRIVE_STOPPED, 5 AWAITING_ROUTE, 6 OUTBOUND, or 7 TERMINAL.
 Motion value **8 JAMMED is reserved for Phase 2B**, rejected by this PLC and
 never emitted by the normal plant. Hold reason is 0 none, 1 downstream zone

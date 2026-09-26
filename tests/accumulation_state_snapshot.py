@@ -13,12 +13,14 @@ from deployment_preflight import MANIFEST, guest_read, service_read_command
 from accumulation_register_contract import (RESET_ZERO_PROCESS_COUNTERS,
                                             SERIAL_NEXT_ADDRESS, PROCESS_FIRST_ADDRESS)
 
-SCHEMA = 1
+SCHEMA = 2
 PLANT = re.compile(r"^/home/kevin/venv/bin/python /home/kevin/plant\.py(?:\s|$)")
+XLE = re.compile(r"^/opt/sorter-xle/venv/bin/python /opt/sorter-xle/xle\.py(?:\s|$)")
+ASX = re.compile(r"^/opt/sorter-xle/venv/bin/python /opt/sorter-xle/asx\.py(?:\s|$)")
 TEMPORARY = re.compile(
     r"(?:live_accumulation_monitor\.py|live_accumulation_detached\.py|"
     r"live_accumulation_fixture\.py|/sorter-services/(?:xle|asx)\.py)")
-VM_NAMES = ("analyst", "drives", "fw", "plc", "scada")
+VM_NAMES = ("analyst", "drives", "fw", "plc", "scada", "xle")
 VFD_NAMES = ("induct1", "induct2", "induct3", "outbnd1", "outbnd2", "outbnd3")
 EXACT_COILS = (880, 881, 882, 883, 884, 885, 886, 887, 914, 915, 918, 919, 920)
 ZERO_COILS = (910, 912, 913, 916, 917)
@@ -62,8 +64,10 @@ def capture():
         result = subprocess.run(["virsh", "-c", "qemu:///system", "domstate", vm],
                                 capture_output=True, text=True, timeout=10, check=True)
         vms[vm] = result.stdout.strip()
-    guest_processes = {vm: _processes(vm) for vm in ("drives", "scada")}
+    guest_processes = {vm: _processes(vm) for vm in ("drives", "scada", "xle")}
     plant = [row for row in guest_processes["drives"] if PLANT.match(row["args"])]
+    xle = [row for row in guest_processes["xle"] if XLE.match(row["args"])]
+    asx = [row for row in guest_processes["xle"] if ASX.match(row["args"])]
     temporary = {vm: [row for row in rows if TEMPORARY.search(row["args"])]
                  for vm, rows in guest_processes.items()}
     host = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True,
@@ -73,7 +77,8 @@ def capture():
     return {"schema_version": SCHEMA, "captured_utc": datetime.now(timezone.utc).isoformat(),
             "program_identity": manifest["plc_program_identity"], "plc": plc,
             "environment": {"services": services, "vms": vms,
-                            "canonical_plant": plant, "temporary": temporary,
+                            "canonical_plant": plant, "canonical_xle": xle,
+                            "canonical_asx": asx, "temporary": temporary,
                             "host_proxy": proxy}}
 
 
@@ -131,7 +136,7 @@ def _structural(snapshot):
                       for entry in json.loads(MANIFEST.read_text())["components"]
                       for unit in entry["associated_service"]}
     if (set(e["vms"]) != set(VM_NAMES) or set(e["services"]) != required_units or
-        set(e["temporary"]) != {"drives", "scada"}):
+        set(e["temporary"]) != {"drives", "scada", "xle"}):
         raise ValueError("incomplete environment snapshot")
     for name in VFD_NAMES:
         for field in ("host", "command", "setpoint", "feedback_rpm", "status",
@@ -139,7 +144,8 @@ def _structural(snapshot):
             p["vfds"][name][field]
     for field in ("run_id", "epoch", "epoch_fault", "scanner_nonce", "plant_epoch_nonce"):
         p["run_identity"][field]
-    for field in ("canonical_plant", "temporary", "host_proxy"):
+    for field in ("canonical_plant", "canonical_xle", "canonical_asx",
+                  "temporary", "host_proxy"):
         e[field]
 
 
@@ -208,7 +214,11 @@ def compare(before, after):
     _record(rows, before, after, "environment.canonical_plant", "SAFE_INVARIANT",
             "exactly one unflagged canonical plant process",
             lambda v: len(v) == 1 and not "--block-" in v[0]["args"])
-    for vm in ("drives", "scada"):
+    for name, pattern in (("canonical_xle", XLE), ("canonical_asx", ASX)):
+        _record(rows, before, after, f"environment.{name}", "SAFE_INVARIANT",
+                "exactly one canonical service process",
+                lambda v, p=pattern: len(v) == 1 and bool(p.match(v[0]["args"])))
+    for vm in ("drives", "scada", "xle"):
         _record(rows, before, after, f"environment.temporary.{vm}", "SAFE_INVARIANT",
                 "no validation worker, monitor, fixture, XLe or ASX", lambda v: v == [])
     _record(rows, before, after, "environment.host_proxy", "SAFE_INVARIANT",

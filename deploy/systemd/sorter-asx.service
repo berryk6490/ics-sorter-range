@@ -1,0 +1,23 @@
+[Unit]
+Description=Sorter ASX sort-plan simulator (XLe VM loopback)
+After=network.target
+
+[Service]
+Type=simple
+User=sorter-xle
+Group=sorter-xle
+WorkingDirectory=/opt/sorter-xle
+ExecStart=/opt/sorter-xle/venv/bin/python /opt/sorter-xle/asx.py --plan /etc/sorter-xle/sort-plan.json --port 8089
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=15
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sorter-xle
+
+[Install]
+WantedBy=multi-user.target

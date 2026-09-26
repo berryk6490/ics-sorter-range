@@ -388,7 +388,7 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
                     result["plc_recovery"] = "ATTEMPTED"
                     try:
                         output = sc.scada.run(["/home/kevin/opcua/bin/python", RECOVERY,
-                                               "--reset-run"], timeout=55)
+                                               "--reset-run", "--remote-xle"], timeout=55)
                     except GuestCommandError as recovery_exc:
                         for line in reversed(recovery_exc.output.splitlines()):
                             try:

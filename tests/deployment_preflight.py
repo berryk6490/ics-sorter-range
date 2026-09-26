@@ -146,7 +146,7 @@ def save_report(path, report):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--guest", choices=("plc", "drives", "scada"))
+    parser.add_argument("--guest", choices=("plc", "drives", "scada", "xle", "fw"))
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--report", help="write a successful full-live preflight receipt")
     args = parser.parse_args()

@@ -1,5 +1,29 @@
 # Sorter network baseline — 2026-09-23
 
+> Historical Case A inventory. The dedicated XLe VM changes the live asset and
+> flow inventory. Use [XLE_VM_MIGRATION.md](XLE_VM_MIGRATION.md) and
+> [tests/network_flows.json](tests/network_flows.json) for the current 48-flow
+> contract; the 36-flow descriptions below record the pre-migration baseline.
+
+Current range path after migration:
+
+```mermaid
+flowchart LR
+  subgraph L1[Level 1]
+    D[drives: VFDs, scanners, plant] -->|Modbus| P[PLC]
+  end
+  subgraph L2[Level 2]
+    X[xle: XLe, ASX loopback, journal, sort plan] -->|Modbus TCP 502 through fw| P
+    S[SCADA: OPC UA and HMI] -->|PLC-validated Modbus reads| P
+  end
+  A[analyst, Level 3] -->|Case A exposure| X
+```
+
+The default-deny firewall allows only the source-bound XLe→PLC process path;
+XLe→scanner/VFD and SCADA↔XLe application paths remain denied. SCADA does
+not run XLe or ASX. The 48-flow current contract is in
+[tests/network_flows.json](tests/network_flows.json).
+
 This is the **observed Case A** conduit on the connected workstation. It is a
 baseline for later attack, hardening, and detection work. No bridge address,
 route, firewall rule, or service configuration was changed for this test.

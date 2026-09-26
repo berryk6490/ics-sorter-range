@@ -741,7 +741,7 @@ IF NOT init_done THEN
   rate_sp_1  := 14; rate_sp_2 := 14; rate_sp_3 := 14;
   noread_sp  := 30;
   serial_next := 1;
-  prog_hash := 24113;
+  prog_hash := 24114;
 
   (* master_seed is the root of the run. The controller no longer draws
      destinations or no-reads itself: both moved to the camera tunnels,
@@ -1365,7 +1365,7 @@ IF plant_mode AND accumulation_mode THEN
         z_quality[j] := 2;
       ELSE
         z_valid := z_raw_seq[j] <> 0 AND z_raw_seq[j] <> z_view_seq[j] AND
-          z_raw_zone[j] >= 1 AND z_raw_zone[j] <= 6 AND
+          z_raw_zone[j] >= 1 AND z_raw_zone[j] <= 7 AND
           z_raw_motion[j] >= 1 AND z_raw_motion[j] <= 7 AND
           z_raw_hold[j] >= 0 AND z_raw_hold[j] <= 4 AND
           z_raw_dwell[j] >= 0 AND z_raw_dwell[j] <= 32000 AND
@@ -1392,13 +1392,21 @@ IF plant_mode AND accumulation_mode THEN
           IF (z_view_zone[j] <> 0 AND
               (z_raw_zone[j] < z_view_zone[j] OR
                z_raw_zone[j] > z_view_zone[j] + 1 AND
-               NOT (z_view_zone[j] = 3 AND z_raw_zone[j] = 5))) OR
+               NOT (z_view_zone[j] = 3 AND z_raw_zone[j] = 5) AND
+               (* Zone 7 is the bounded lane recirculation tail. A route
+                  decision may never enter it; the plant fixes fallback at 14. *)
+               NOT (z_view_zone[j] = 3 AND z_raw_zone[j] = 7 AND
+                    st_dest[j] = 0 AND (st_state[j] = 2 OR st_state[j] = 4 OR
+                                       st_state[j] = 6)))) OR
              (z_raw_zone[j] = 1 AND z_pos[j] > 95) OR
              (z_raw_zone[j] = 2 AND (z_pos[j] < 85 OR z_pos[j] > 123)) OR
-             (z_raw_zone[j] = 3 AND (z_pos[j] < 113 OR z_pos[j] > 140)) OR
+             (z_raw_zone[j] = 3 AND (z_pos[j] < 113 OR z_pos[j] >= 140)) OR
              (z_raw_zone[j] = 4 AND (z_pos[j] < 130 OR z_pos[j] > 140)) OR
              (z_raw_zone[j] = 5 AND (z_belt[j] < 2 OR z_belt[j] > 4)) OR
-             (z_raw_zone[j] <= 4 AND
+             (z_raw_zone[j] = 7 AND
+              (z_pos[j] < 140 OR z_pos[j] > 190 OR st_dest[j] <> 0 OR
+               NOT (st_state[j] = 2 OR st_state[j] = 4 OR st_state[j] = 6))) OR
+             ((z_raw_zone[j] <= 4 OR z_raw_zone[j] = 7) AND
               NOT ((st_lane[j] = 1 AND z_belt[j] = 1) OR
                    (st_lane[j] = 2 AND z_belt[j] = 5) OR
                    (st_lane[j] = 3 AND z_belt[j] = 6))) THEN
@@ -1414,9 +1422,9 @@ IF plant_mode AND accumulation_mode THEN
       END_IF;
     END_FOR;
     FOR j := 0 TO 2 DO
-      IF z_quality[j] = 1 AND z_view_zone[j] < 6 THEN
+      IF z_quality[j] = 1 AND (z_view_zone[j] < 6 OR z_view_zone[j] = 7) THEN
         FOR i := j + 1 TO 2 DO
-          IF z_quality[i] = 1 AND z_view_zone[i] < 6 AND
+          IF z_quality[i] = 1 AND (z_view_zone[i] < 6 OR z_view_zone[i] = 7) AND
              z_belt[j] = z_belt[i] THEN
             z_difference := z_pos[j] - z_pos[i];
             IF z_difference < 0 THEN z_difference := -z_difference; END_IF;

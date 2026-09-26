@@ -435,7 +435,7 @@ class PreparedHandoffTest(unittest.TestCase):
         self.gate = self.root / "global-gate.json"
         self.manager = host.ScenarioController(scada=Mock(), drives=Mock(), monitor=Mock())
         self.manager.monitor.collect.return_value = {"cleanup_errors": [], "orphan": False}
-        self.manager.state = Mock(return_value={"identity": 24113,
+        self.manager.state = Mock(return_value={"identity": 24114,
             "coils_880_920": [False] * 41, "slots": [[0] * 12 for _ in range(3)]})
         now = datetime.now(timezone.utc)
         baseline = typed_sample()
@@ -447,7 +447,7 @@ class PreparedHandoffTest(unittest.TestCase):
             "completed_utc": (now - timedelta(seconds=120)).isoformat(),
             "duration_seconds": 92.0, "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
             "source_and_guest_hashes": len(json.loads(manifest.read_text())["components"]),
-            "program_identity": 24113}
+            "program_identity": 24114}
         self.preflight = self.evidence / "deployment-preflight.json"
         self.preflight.write_text(json.dumps(receipt))
         self.monitor_control = self.evidence / "monitor.json"

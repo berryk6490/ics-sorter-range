@@ -30,6 +30,7 @@ class Zone(IntEnum):
     MERGE = 4
     OUTBOUND = 5
     TERMINAL = 6
+    RECIRC_TAIL = 7
 
 
 class Motion(IntEnum):
@@ -51,12 +52,30 @@ class Hold(IntEnum):
     ROUTE_PENDING = 4
 
 
-ZONE_LIMITS = {Zone.APPROACH: (0.0, 9.0),
-               Zone.DECISION: (9.0, 11.8),
-               Zone.PREMERGE: (11.8, 14.0),
+TUNNEL_ZONE_START = 9.0
+PREMERGE_START = 11.8
+RECIRC_START = 14.0
+RECIRC_EXIT = 19.0
+ZONE_LIMITS = {Zone.APPROACH: (0.0, TUNNEL_ZONE_START),
+               Zone.DECISION: (TUNNEL_ZONE_START, PREMERGE_START),
+               Zone.PREMERGE: (PREMERGE_START, RECIRC_START),
+               Zone.RECIRC_TAIL: (RECIRC_START, RECIRC_EXIT),
                Zone.OUTBOUND: (2.0, 20.0)}
 PREMERGE_HOLD = 13.6
 DECISION_HOLD = 11.6
+
+
+def lane_zone(position, target, divert_sent):
+    """Classify a lane front; crossing 14 requires an irrevocable fallback."""
+    if position < TUNNEL_ZONE_START:
+        return Zone.APPROACH
+    if position < PREMERGE_START:
+        return Zone.DECISION
+    if position < RECIRC_START:
+        return Zone.PREMERGE
+    if target == -1 and divert_sent and position <= RECIRC_EXIT:
+        return Zone.RECIRC_TAIL
+    raise ValueError(f"lane position {position} crossed route boundary without fallback")
 
 
 @dataclass
@@ -279,6 +298,8 @@ class PlantModel:
             if p.token == token and p.serial == serial:
                 return [p.zone, p.motion, p.hold, p.dwell]
         if token in self.recent and self.recent[token][1] == serial:
+            if self.recent[token][4] == RECIRC:
+                return [Zone.RECIRC_TAIL, Motion.TERMINAL, Hold.NONE, 0]
             return [Zone.TERMINAL, Motion.TERMINAL, Hold.NONE, 0]
         return [0, 0, 0, 0]
 
@@ -382,14 +403,15 @@ class PlantModel:
                 if p.position >= 10 and not p.tunnel_sent:
                     p.tunnel_sent = True
                     self.pending.append((TUNNEL, p.token, p.serial, 0, int(p.position * 10)))
-                if p.position >= 14 and not p.divert_sent:
+                if p.position >= RECIRC_START and not p.divert_sent:
                     serial, state, dest = slots.get(p.token, (0, 0, 0))
                     if serial != p.serial or state != 3 or not 1 <= dest <= 9:
                         p.target = -1
                     if p.target == -1:
                         p.divert_sent = True
                         self.pending.append((DIVERT, p.token, p.serial, 0, int(p.position * 10)))
-                if p.divert_sent and p.position >= 19:
+                if p.divert_sent and p.position >= RECIRC_EXIT:
+                    p.position = RECIRC_EXIT
                     self.pending.append((RECIRC, p.token, p.serial, 0, int(p.position * 10)))
                     self.recent[p.token] = (self.clock + 2, p.serial,
                                             1 if lane == 1 else 5 if lane == 2 else 6,
@@ -397,8 +419,7 @@ class PlantModel:
                     self.packages.remove(p)
                 if p not in self.packages:
                     continue
-                zone = (Zone.APPROACH if p.position < 9 else
-                        Zone.DECISION if p.position < 11.8 else Zone.PREMERGE)
+                zone = lane_zone(p.position, p.target, p.divert_sent)
                 if rpm[lane - 1] <= 0:
                     motion, hold = Motion.DRIVE_STOPPED, Hold.DRIVE_OFF
                 elif p.position < candidate - 1e-6:

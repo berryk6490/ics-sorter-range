@@ -5,7 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "devices"))
 from plant import (PlantModel, ZoneBlock, Zone, Motion, Hold, INDUCT, TUNNEL,
-                   DIVERT, TRAILER)
+                   DIVERT, TRAILER, RECIRC, lane_zone, PREMERGE_HOLD,
+                   RECIRC_START, RECIRC_EXIT)
 
 
 FAST = [1750] * 6
@@ -103,6 +104,65 @@ class AccumulationTest(unittest.TestCase):
         self.assertTrue(any(mask & 2 for mask in masks))
         self.assertTrue(held)
         self.assertFalse(any(e[0] == TRAILER for e in m.pending))
+
+    def test_route_boundary_classification_and_fallback(self):
+        for target in (0, 2, -1):
+            for position in (RECIRC_START - .01,):
+                self.assertEqual(lane_zone(position, target, False), Zone.PREMERGE)
+        for position in (RECIRC_START, RECIRC_START + .01,
+                         RECIRC_EXIT):
+            self.assertEqual(lane_zone(position, -1, True), Zone.RECIRC_TAIL)
+            for target, sent in ((0, False), (2, False), (2, True), (-1, False)):
+                with self.assertRaisesRegex(ValueError, "without fallback"):
+                    lane_zone(position, target, sent)
+        self.assertEqual(PREMERGE_HOLD, 13.6)
+
+    def test_undecided_package_has_bounded_recirc_tail_zone(self):
+        # XLe loss, ASX timeout, and unknown barcode all present the same
+        # authoritative PLC row to the plant: no accepted destination.
+        for state in (2, 4):
+            m = self.model()
+            m.request(1, 11, lane=1)
+            slots = {1: (11, state, 0)}
+            visited = []
+            for _ in range(25):
+                m.step(.1, FAST, slots)
+                if m.packages:
+                    p = m.packages[0]
+                    if p.position >= RECIRC_START:
+                        visited.append((p.zone, p.position, p.target))
+            self.assertTrue(visited)
+            self.assertTrue(all(zone == Zone.RECIRC_TAIL and
+                                RECIRC_START <= pos <= RECIRC_EXIT and target == -1
+                                for zone, pos, target in visited), visited)
+            self.assertEqual([e[0] for e in m.pending],
+                             [INDUCT, TUNNEL, DIVERT, RECIRC])
+            self.assertEqual(m.zone_row(1, 11)[0], Zone.RECIRC_TAIL)
+
+    def test_accepted_route_never_enters_recirc_tail(self):
+        m = self.model()
+        m.request(1, 11, lane=1)
+        slots = {1: (11, 3, 2)}
+        zones = []
+        for _ in range(35):
+            m.step(.1, FAST, slots)
+            zones.extend(p.zone for p in m.packages)
+        self.assertNotIn(Zone.RECIRC_TAIL, zones)
+        self.assertIn(Zone.OUTBOUND, zones)
+        self.assertEqual([e[0] for e in m.pending],
+                         [INDUCT, TUNNEL, DIVERT, TRAILER])
+
+    def test_merge_and_lane_hold_preserve_boundary(self):
+        for block in (ZoneBlock("merge", 1, 6),
+                      ZoneBlock("lane", 1, 6, lane=1, zone="premerge")):
+            m = self.model(block)
+            m.request(1, 11, lane=1)
+            slots = {1: (11, 3, 2)}
+            self.step(m, 35, slots)
+            p = m.packages[0]
+            self.assertLessEqual(p.position, RECIRC_START)
+            self.assertNotEqual(p.zone, Zone.RECIRC_TAIL)
+            self.assertFalse(any(e[0] == RECIRC for e in m.pending))
 
     def test_fixture_bounds_and_run_scoped_cleanup(self):
         with self.assertRaisesRegex(ValueError, "3.2"):

@@ -88,7 +88,7 @@ def write_run_gate(local, run_id, scenario, status, **details):
 
 def validate_unchanged_plc(before, current):
     """Short pre-authorization subset of the typed baseline, with no VFD inventory."""
-    if current.get("identity") != before.get("identity") or current.get("identity") != 24113:
+    if current.get("identity") != before.get("identity") or current.get("identity") != 24114:
         raise ValueError("PLC program identity changed")
     for key in ("coils_880_920", "setpoints_200_210", "seed", "photoeye_config_744_747"):
         if current.get(key) != before.get(key):
@@ -484,7 +484,7 @@ class ScenarioController:
             typed_save(local / "typed-before.json", baseline)
             typed_save(local / "typed-baseline-check.json", baseline_report)
             initial = self.state()
-            if initial["identity"] != 24113 or initial["coils_880_920"][0] or any(
+            if initial["identity"] != 24114 or initial["coils_880_920"][0] or any(
                     row[4] for row in initial["slots"]):
                 raise ValueError("PLC is not at a stopped, empty baseline")
             atomic_control(local / "initial-state.json", initial)
@@ -960,7 +960,7 @@ class ScenarioController:
                 rows = [json.loads(line) for line in self.drives.read_file(monitor["paths"]["output"]).splitlines()]
                 recent = [r["sample"] for r in rows[-25:] if r.get("event") in ("sample", "change")]
                 if not recent or not any(r["commit_sequence"] >= sample["commit_sequence"] and
-                                         r["plc_identity"] == 24113 for r in recent):
+                                         r["plc_identity"] == 24114 for r in recent):
                     raise AssertionError("independent Modbus monitor did not observe checkpoint commit")
                 motion = {"lane_hold": 2, "merge_hold": 3, "drive_stop": 4}[control["scenario"]]
                 output = f"{control['guest_dir']}/opc-check.json"

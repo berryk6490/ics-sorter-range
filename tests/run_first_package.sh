@@ -55,6 +55,9 @@ for case_name in normal bounce event_gate stuck_clear stuck_blocked order mismat
 done
 cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
     "$build_dir/POUS.c" "$repo_dir/tests/accumulation_plc.c" -lm -o "$build_dir/accumulation_plc"
-for case_name in normal jump stale lane overlap clearance terminal_expiry held_beam; do
+for case_name in normal jump stale lane overlap clearance terminal_expiry recirc_tail recirc_old_zone recirc_wrong_route recirc_wrong_identity recirc_stale held_beam; do
     "$build_dir/accumulation_plc" "$case_name"
 done
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/plant_recovery_order.c" -lm -o "$build_dir/plant_recovery_order"
+"$build_dir/plant_recovery_order"
