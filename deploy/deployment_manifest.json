@@ -301,12 +301,21 @@
       "verification_command": "sha256sum /home/kevin/sorter-services/read_authorization_gate.py"
     },
     {
+      "repository_source": "tests/accumulation_register_contract.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/accumulation_register_contract.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "8082f3c7c5d33328927877f780b4d18729860f86c1a6a5db38cfc2043b5a4bc3",
+      "verification_command": "sha256sum /home/kevin/sorter-services/accumulation_register_contract.py"
+    },
+    {
       "repository_source": "tests/recover_accumulation_state.py",
       "guest": "scada",
       "canonical_destination": "/home/kevin/sorter-services/recover_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "e2ff1e60dd9d2701f5b6e05ebcbcad15cbc4577def904f2c686f66fbb894e279",
+      "sha256": "91bd08a3defbce44c60ce44c1499c41067f2b3779c42e531cad431c051eab614",
       "verification_command": "sha256sum /home/kevin/sorter-services/recover_accumulation_state.py"
     }
   ],

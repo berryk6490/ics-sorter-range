@@ -4,12 +4,22 @@ Run on SCADA only after the canonical plant service is restored. This writes
 documented operator coils, never internal slot, fault, or outcome registers.
 """
 import argparse
+from datetime import datetime, timezone
 import json
 import time
 from pathlib import Path
 
 from pymodbus.client import ModbusTcpClient
 from xle import OutcomeJournal, ensure_epoch
+from accumulation_register_contract import (RESET_ZERO_PROCESS_COUNTERS,
+                                            SERIAL_NEXT_ADDRESS, PROCESS_FIRST_ADDRESS,
+                                            PROCESS_WORD_COUNT)
+
+
+class RecoveryIncomplete(RuntimeError):
+    def __init__(self, result):
+        self.result = result
+        super().__init__(f"operator recovery incomplete: {json.dumps(result, sort_keys=True)}")
 
 
 def holding(client, address, count=1):
@@ -25,11 +35,27 @@ def coil(client, address, value):
         raise RuntimeError(f"PLC operator coil {address} write failed")
 
 
+def counter_sample(client):
+    words = holding(client, PROCESS_FIRST_ADDRESS, PROCESS_WORD_COUNT)
+    stamp = datetime.now(timezone.utc).isoformat()
+    failures = [{"address": address, "name": name,
+                 "observed": words[address - PROCESS_FIRST_ADDRESS],
+                 "expected": 0, "sample_time_utc": stamp}
+                for address, name in RESET_ZERO_PROCESS_COUNTERS.items()
+                if words[address - PROCESS_FIRST_ADDRESS] != 0]
+    return {"sample_time_utc": stamp, "sample_monotonic_ns": time.monotonic_ns(),
+            "required_counter_failures": failures,
+            "serial_next": {"address": SERIAL_NEXT_ADDRESS, "name": "serial_next",
+                            "observed": words[SERIAL_NEXT_ADDRESS - PROCESS_FIRST_ADDRESS],
+                            "restoration_class": "INFORMATIONAL"}}
+
+
 def recover(client, journal_path, *, timeout=30, reset_run=False):
     if not client.connect():
         raise ConnectionError("PLC Modbus unavailable for operator recovery")
     record = {"reset_requested": False, "epoch": None, "faults_before": None,
-              "faults_after": None, "master_off": False, "slots_empty": False}
+              "faults_after": None, "master_off": False, "slots_empty": False,
+              "counter_sample": None, "status": "PENDING"}
     try:
         if holding(client, 249)[0] != 24113:
             raise ValueError("PLC program identity changed")
@@ -42,7 +68,7 @@ def recover(client, journal_path, *, timeout=30, reset_run=False):
         # Completed runs retain counters and the published ready mask until
         # operator reset, despite having no occupied slots or active faults.
         if (reset_run or any(slots) or any(record["faults_before"].values()) or
-            any(holding(client, 214, 29)) or holding(client, 786)[0]):
+            counter_sample(client)["required_counter_failures"] or holding(client, 786)[0]):
             old_nonce = holding(client, 509)[0]
             coil(client, 910, True)
             record["reset_requested"] = True
@@ -78,12 +104,15 @@ def recover(client, journal_path, *, timeout=30, reset_run=False):
         record["master_off"] = not client.read_coils(880, 1, slave=1).bits[0]
         record["slots_empty"] = not any(holding(client, address + 4)[0]
                                         for address in (530, 542, 647))
-        record["counters_zero"] = not any(holding(client, 214, 29))
+        record["counter_sample"] = counter_sample(client)
+        record["counters_zero"] = not record["counter_sample"]["required_counter_failures"]
         record["zone_ready_zero"] = holding(client, 786)[0] == 0
         client.close()
     if (any(record["faults_after"].values()) or not record["slots_empty"] or
         not record["counters_zero"] or not record["zone_ready_zero"]):
-        raise RuntimeError(f"operator recovery incomplete: {record}")
+        record["status"] = "FAIL"
+        raise RecoveryIncomplete(record)
+    record["status"] = "PASS"
     return record
 
 
@@ -93,5 +122,10 @@ if __name__ == "__main__":
                         default=Path.home() / "sorter-services/xle-outcomes.sqlite3")
     parser.add_argument("--reset-run", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(recover(ModbusTcpClient("10.10.1.10", port=502, timeout=2),
-                             args.journal, reset_run=args.reset_run), sort_keys=True), flush=True)
+    try:
+        result = recover(ModbusTcpClient("10.10.1.10", port=502, timeout=2),
+                         args.journal, reset_run=args.reset_run)
+    except RecoveryIncomplete as exc:
+        print(json.dumps(exc.result, sort_keys=True), flush=True)
+        raise SystemExit(1) from exc
+    print(json.dumps(result, sort_keys=True), flush=True)

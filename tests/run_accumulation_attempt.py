@@ -10,7 +10,7 @@ import sys
 import time
 from urllib.request import urlopen
 
-from accumulation_monitor_control import Controller as MonitorController, atomic_control
+from accumulation_monitor_control import Controller as MonitorController, GuestCommandError, atomic_control
 from accumulation_scenario_control import ScenarioController, APPROVAL_LIFETIME
 from accumulation_state_snapshot import capture as typed_capture, save as typed_save
 from browser_accumulation import LIVE_CASES
@@ -386,9 +386,21 @@ def run_attempt(preparation, approval_id=None, *, scenario=None, monitor=None,
                     if not (local / "outcome-before-reset.json").exists():
                         raise RuntimeError("terminal outcome not preserved before operator reset")
                     result["plc_recovery"] = "ATTEMPTED"
-                    output = sc.scada.run(["/home/kevin/opcua/bin/python", RECOVERY,
-                                           "--reset-run"],
-                                          timeout=55)
+                    try:
+                        output = sc.scada.run(["/home/kevin/opcua/bin/python", RECOVERY,
+                                               "--reset-run"], timeout=55)
+                    except GuestCommandError as recovery_exc:
+                        for line in reversed(recovery_exc.output.splitlines()):
+                            try:
+                                payload = json.loads(line.strip())
+                            except json.JSONDecodeError:
+                                continue
+                            if (isinstance(payload, dict) and payload.get("status") == "FAIL" and
+                                "counter_sample" in payload):
+                                atomic_control(local / "plc-recovery-failure.json", payload)
+                                result["plc_recovery_result"] = payload
+                                break
+                        raise
                     result["plc_recovery"] = json.loads(output.splitlines()[-1])
                 result["postflight"] = verify_postflight(sc, control_path, local)
                 result["typed_postflight"] = "PASS"

@@ -10,6 +10,8 @@ import sys
 import uuid
 
 from deployment_preflight import MANIFEST, guest_read, service_read_command
+from accumulation_register_contract import (RESET_ZERO_PROCESS_COUNTERS,
+                                            SERIAL_NEXT_ADDRESS, PROCESS_FIRST_ADDRESS)
 
 SCHEMA = 1
 PLANT = re.compile(r"^/home/kevin/venv/bin/python /home/kevin/plant\.py(?:\s|$)")
@@ -20,7 +22,7 @@ VM_NAMES = ("analyst", "drives", "fw", "plc", "scada")
 VFD_NAMES = ("induct1", "induct2", "induct3", "outbnd1", "outbnd2", "outbnd3")
 EXACT_COILS = (880, 881, 882, 883, 884, 885, 886, 887, 914, 915, 918, 919, 920)
 ZERO_COILS = (910, 912, 913, 916, 917)
-PROCESS_COUNTERS = (*range(214, 221), *range(222, 243))
+PROCESS_COUNTERS = tuple(RESET_ZERO_PROCESS_COUNTERS)
 
 
 def _guest_json(vm, command, label):
@@ -165,7 +167,8 @@ def compare(before, after):
     for path in ("plc.seed", "plc.setpoints_200_210", "plc.photoeye_config_744_747"):
         _record(rows, before, after, path, "EXACT")
     for address in PROCESS_COUNTERS:
-        _record(rows, before, after, f"plc.process_214_242.{address - 214}", "RESET_ZERO", 0)
+        _record(rows, before, after,
+                f"plc.process_214_242.{address - PROCESS_FIRST_ADDRESS}", "RESET_ZERO", 0)
     for idx in range(9):
         _record(rows, before, after, f"plc.trailer_counters.{idx}", "RESET_ZERO", 0)
     for idx in range(5):
@@ -214,7 +217,8 @@ def compare(before, after):
                  "plc.run_identity.scanner_nonce", "plc.run_identity.plant_epoch_nonce",
                  "plc.zone_view.4", "plc.zone_view.9", "plc.zone_view.14",
                  "plc.zone_view.19", "plc.zone_view.21", "plc.xle_health.0",
-                 "plc.plant_faults.2", "plc.process_214_242.7",
+                 "plc.plant_faults.2",
+                 f"plc.process_214_242.{SERIAL_NEXT_ADDRESS - PROCESS_FIRST_ADDRESS}",
                  "plc.zone_raw", "plc.plant_raw"):
         _record(rows, before, after, path, "INFORMATIONAL")
     for slot in range(3):

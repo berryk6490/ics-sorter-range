@@ -23,6 +23,7 @@ import check_accumulation_views as views
 import run_accumulation_attempt as attempt
 import accumulation_scenario_control as scenario
 import browser_accumulation as browser
+from accumulation_monitor_control import GuestCommandError
 from deployment_preflight import PreflightFailure
 from test_accumulation_state_snapshot import sample
 
@@ -52,36 +53,76 @@ class RecoveryTests(unittest.TestCase):
             spec.loader.exec_module(module)
         return module
 
-    def test_completed_run_reset_clears_counters_ready_and_temporary_modes(self):
+    def plc(self, initial=None, stuck=()):
         class PLC:
-            nonce = 18
-            counters = 3
-            ready = 7
-            writes = []
+            def __init__(self):
+                self.nonce = 18
+                self.ready = 7
+                self.writes = []
+                self.process = {address: 0 for address in range(214, 243)}
+                self.process[221] = 1
+                self.process.update(initial or {})
             def connect(self): return True
             def close(self): pass
             def read_holding_registers(self, address, count, slave):
                 values = {249: 24113, 509: self.nonce, 786: self.ready,
                           591: 0, 561: 0, 788: 0, 255: 0, 256: 0}
                 if address == 214:
-                    return Reply([self.counters] * count)
-                return Reply([values.get(address, 0)] * count)
+                    return Reply([self.process[a] for a in range(address, address + count)])
+                return Reply([values.get(address, self.process.get(address, 0))] * count)
             def read_coils(self, address, count, slave): return Reply([False] * count)
             def write_coil(self, address, value, slave):
                 self.writes.append((address, value))
                 if address == 910 and value:
                     self.nonce += 1
-                    self.counters = 0
+                    for counter in self.process:
+                        if counter != 221 and counter not in stuck:
+                            self.process[counter] = 0
                     self.ready = 0
                 return Reply([])
-        plc = PLC()
+        return PLC()
+
+    def test_serial_next_one_is_informational_after_required_counters_reset(self):
+        plc = self.plc({220: 3, 222: 1})
         result = self.helper().recover(plc, "journal", reset_run=True)
         self.assertTrue(result["reset_requested"])
         self.assertTrue(result["counters_zero"])
         self.assertTrue(result["zone_ready_zero"])
+        self.assertEqual(result["counter_sample"]["serial_next"],
+                         {"address": 221, "name": "serial_next", "observed": 1,
+                          "restoration_class": "INFORMATIONAL"})
+        self.assertEqual(result["counter_sample"]["required_counter_failures"], [])
         self.assertIn((910, True), plc.writes)
         for address in (914, 915, 916, 917, 918, 919, 920):
             self.assertIn((address, False), plc.writes)
+
+    def test_serial_next_one_alone_does_not_request_reset(self):
+        plc = self.plc()
+        plc.ready = 0
+        result = self.helper().recover(plc, "journal")
+        self.assertEqual(result["status"], "PASS")
+        self.assertTrue(result["counters_zero"])
+        self.assertFalse(result["reset_requested"])
+        self.assertNotIn((910, True), plc.writes)
+
+    def test_each_representative_required_counter_fails_with_address_and_time(self):
+        helper = self.helper()
+        for address, name in ((214, "noread_ct"), (220, "inducted_ct"),
+                              (222, "tr11_ct"), (231, "tr11_bad"),
+                              (240, "div_act_1"), (242, "div_act_3")):
+            with self.subTest(address=address):
+                plc = self.plc({address: 2}, stuck=(address,))
+                with self.assertRaises(helper.RecoveryIncomplete) as raised:
+                    helper.recover(plc, "journal", reset_run=True)
+                result = raised.exception.result
+                self.assertEqual(result["status"], "FAIL")
+                self.assertFalse(result["counters_zero"])
+                self.assertEqual(len(result["counter_sample"]["required_counter_failures"]), 1)
+                diagnostic = result["counter_sample"]["required_counter_failures"][0]
+                self.assertEqual((diagnostic["address"], diagnostic["name"],
+                                  diagnostic["observed"], diagnostic["expected"]),
+                                 (address, name, 2, 0))
+                self.assertIn("T", diagnostic["sample_time_utc"])
 
 
 class BrowserDispatchTests(unittest.TestCase):
@@ -785,8 +826,12 @@ class DelayedReservationTests(unittest.TestCase):
                 def poll(self): return 0
                 def wait(self, **_k): return 0
             class Scenario:
+                diagnostic = {"status": "FAIL", "counter_sample": {
+                    "required_counter_failures": [{"address": 220, "name": "inducted_ct",
+                                                   "observed": 2, "expected": 0,
+                                                   "sample_time_utc": "2026-09-26T01:25:09+00:00"}]}}
                 scada = SimpleNamespace(run=lambda *_a, **_k: (_ for _ in ()).throw(
-                    TimeoutError("scanner reset ACK timeout")))
+                    GuestCommandError(1, json.dumps(Scenario.diagnostic))))
                 def record_approval(self, *_a): return {"run_id": prep.parent.name}
                 def launch(self, *_a, **_k): return root / "control.json"
                 def probe_ready(self, *_a, **_k): pass
@@ -819,7 +864,10 @@ class DelayedReservationTests(unittest.TestCase):
             self.assertEqual(result["functional_outcome"], "PASS")
             self.assertEqual(result["plc_recovery"], "FAIL")
             self.assertEqual(result["typed_postflight"], "FAIL")
-            self.assertIn("scanner reset ACK timeout", result["errors"]["plc_recovery"])
+            self.assertIn("guest command exited 1", result["errors"]["plc_recovery"])
+            self.assertEqual(result["plc_recovery_result"], Scenario.diagnostic)
+            self.assertEqual(json.loads((prep.parent / "plc-recovery-failure.json").read_text()),
+                             Scenario.diagnostic)
             self.assertTrue((prep.parent / "outcome-before-reset.json").exists())
 
     def test_interrupted_evidence_aborts_and_never_passes(self):

@@ -326,6 +326,17 @@ the runner invokes the canonical SCADA `recover_accumulation_state.py
 scanner ACKs, performs the journal-backed epoch/plant handshake, turns off
 temporary plant/photoeye/block/accumulation controls, and checks counters and
 the zone-ready mask are zero. Only then is `typed-after.json` captured.
+The required zero counters are the named QW214–220 and QW222–242 entries in
+`tests/accumulation_register_contract.py`, shared with the typed comparator.
+QW221 (`serial_next`) is INFORMATIONAL: reset initializes it to 1, so its
+value is recorded but is never required to be zero or equal to baseline.
+If a required counter remains nonzero, the helper emits a failing JSON result
+with its address, name, observed and expected values, and UTC sample time.
+The single-command runner preserves that result in `plc-recovery-failure.json`
+beside the terminal package evidence while retaining `plc_recovery=FAIL`.
+The successful 20260926T012509_b50238ca4f9b4dfaa78411864eda76bb merge
+run exposed the former broad-range check: QW221 was 1 both before and after
+reset, while the later same-run typed comparison passed all 215 fields.
 Recovery failure is recorded as `plc_recovery=FAIL` with its own error;
 typed postflight and overall status remain FAIL even if package sorting was
 functionally complete. A smoke attempt performs no PLC recovery or write.
