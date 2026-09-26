@@ -100,7 +100,12 @@ function drawPackages(rows, fresh) {
   }
   // Do not discard the last known positions on a failed or stale poll.
   if(!fresh)return;
-  for(const [id,entry] of packages){if(!rows.has(id)){entry.group.remove();packages.delete(id);}}
+  for(const [id,entry] of packages){
+    if(rows.has(id))continue;
+    // An occupied slot with an unavailable identity keeps its last location.
+    if(entry.last && lastData?.plant_status?.[entry.last.slot-1]!==0){entry.group.classList.add('stale');continue;}
+    entry.group.remove();packages.delete(id);
+  }
   if(selectedId&&!packages.has(selectedId))selectedId='';
 }
 
