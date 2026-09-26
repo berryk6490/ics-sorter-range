@@ -87,12 +87,14 @@ function decodeRows(d) {
 
 function drawPackages(rows, fresh) {
   for(const [id,row] of rows){
-    const entry=packages.get(id)||addPackage(id,row.lane);
-    entry.last=row;
+    const existing=packages.get(id);
+    if(!fresh&&!existing)continue;
+    const entry=existing||addPackage(id,row.lane);
     // An invalid/unknown belt cannot be converted into a plausible coordinate.
-    if(beltY[row.belt]!==undefined && Number.isFinite(row.pos)){
+    if((!existing || (fresh&&!row.stale)) && beltY[row.belt]!==undefined && Number.isFinite(row.pos)){
       const x=172+Math.max(0,Math.min(19,row.pos))*39;
       entry.group.setAttribute('transform',`translate(${x} ${beltY[row.belt]})`);
+      entry.last=row;
     }
     entry.group.classList.toggle('held',row.hold&&!row.stale&&fresh);
     entry.group.classList.toggle('stale',row.stale||!fresh);
