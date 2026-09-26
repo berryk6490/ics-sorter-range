@@ -44,3 +44,15 @@ test('an occupied slot with missing identity keeps its last displayed position',
   assert.equal(packages.size,0);
   assert.equal(removed.length,1);
 });
+
+test('a stale row never moves a previously displayed parcel',()=>{
+  const moved=[];
+  const id='l1-36-3-4-4';
+  packages.set(id,{last:{slot:1,pos:13.6},group:{setAttribute:(...args)=>moved.push(args),classList:{toggle:()=>{}},remove:()=>{}}});
+  const d=sample(3);
+  d.plant_rows[0][6]=182; // raw position changed after loss of freshness
+  setData(d);drawPackages(decodeRows(d),true);
+  assert.equal(moved.length,0);
+  assert.equal(packages.get(id).last.pos,13.6);
+  packages.clear();
+});
