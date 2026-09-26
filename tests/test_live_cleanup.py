@@ -31,7 +31,7 @@ class Client:
 class Plc(Client):
     def __init__(self, original_lanes, fail_at=None, initial_seed=137):
         super().__init__()
-        self.state = {880: False, 247: initial_seed, 249: 24114,
+        self.state = {880: False, 247: initial_seed, 249: 24115,
                       **{address: True for address in range(881, 888)},
                       **{address: 100 + address for address in range(200, 211)}}
         self.state[883], self.state[884] = original_lanes

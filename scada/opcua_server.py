@@ -21,6 +21,7 @@ Runs on scada (10.10.2.10). Needs its own venv, separate from ~/hmi:
 import asyncio
 import logging
 import sys
+import time
 
 from asyncua import Server, ua
 from pymodbus.client import ModbusTcpClient
@@ -61,7 +62,7 @@ TRUSTLIST = "certs/trusted"
 # zero everywhere and looks like a dead process.
 
 SP_BASE, IB_BASE, OB_BASE, COIL_BASE = 200, 260, 380, 880
-SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 41
+SP_COUNT, CELL_COUNT, COIL_COUNT = 59, 60, 42
 
 # Offsets into the SP block (absolute address = SP_BASE + offset).
 SP = {
@@ -112,7 +113,7 @@ COIL = {"run": 0, "auto": 1, "lane_run": 2, "ob_run": 5,
         "reset_cmd": 30, "fault_reset": 31,
         "scanner_fault_ack": 32, "scanner_retry": 33,
         "xle_fault_ack": 36, "xle_retry": 37, "plant_mode": 38,
-        "photoeye_mode": 39, "accumulation_mode": 40}
+        "photoeye_mode": 39, "accumulation_mode": 40, "chute_mode": 41}
 COIL_ABS = {k: COIL_BASE + v for k, v in COIL.items()}
 
 log = logging.getLogger("opcua_server")
@@ -156,10 +157,14 @@ class ModbusLink:
         photoeye_view = self.plc.read_holding_registers(720, 24, slave=1)
         photoeye_fault = self.plc.read_holding_registers(748, 3, slave=1)
         zone_view = self.plc.read_holding_registers(766, 23, slave=1)
+        chute_view = self.plc.read_holding_registers(803, 27, slave=1)
+        run_epoch = self.plc.read_holding_registers(558, 2, slave=1)
+        scanner_nonce = self.plc.read_holding_registers(509, 1, slave=1)
         if any(r.isError() for r in (sp, ib, ob, co, live, plant, plant_age,
                                      plant_view, plant_view2, plant_lane2,
                                      plant_failed_lane, photoeye_view,
-                                     photoeye_fault, zone_view)):
+                                     photoeye_fault, zone_view, chute_view,
+                                     run_epoch, scanner_nonce)):
             raise IOError("plc read")
 
         drives = []
@@ -189,6 +194,9 @@ class ModbusLink:
             "photoeye_view": [s16(v) for v in photoeye_view.registers],
             "photoeye_fault": [s16(v) for v in photoeye_fault.registers],
             "zone_view": [s16(v) for v in zone_view.registers],
+            "chute_view": [s16(v) for v in chute_view.registers],
+            "run_epoch": list(run_epoch.registers),
+            "scanner_nonce": scanner_nonce.registers[0],
             "drives": drives,
         }
 
@@ -204,6 +212,12 @@ class ModbusLink:
         r = self.plc.write_coil(addr, bool(value), slave=1)
         return not r.isError()
 
+    def _write_words(self, addr, values):
+        if not self.plc.connected:
+            self.plc.connect()
+        r = self.plc.write_registers(addr, [u16(int(v)) for v in values], slave=1)
+        return not r.isError()
+
     async def read_all(self):
         async with self.lock:
             return await asyncio.to_thread(self._read_all)
@@ -215,6 +229,10 @@ class ModbusLink:
     async def write_coil(self, addr, value):
         async with self.lock:
             return await asyncio.to_thread(self._write_coil, addr, value)
+
+    async def write_words(self, addr, values):
+        async with self.lock:
+            return await asyncio.to_thread(self._write_words, addr, values)
 
 
 # --------------------------------------------------------------- namespace
@@ -229,6 +247,7 @@ class Namespace:
         self.rw = {}        # key -> node
         self.rw_addr = {}   # node.nodeid -> absolute PLC holding register
         self.rw_coil = {}   # node.nodeid -> absolute PLC coil
+        self.rw_words = {}  # node.nodeid -> atomic PLC holding-register block
         self.rw_key = {}    # node.nodeid -> key, for logging
 
     async def _var(self, parent, name, vtype=ua.VariantType.Int16, init=0):
@@ -253,6 +272,15 @@ class Namespace:
         await n.set_writable()
         self.rw[key] = n
         self.rw_coil[n.nodeid] = coil
+        self.rw_key[n.nodeid] = key
+        return n
+
+    async def _add_rw_words(self, parent, key, name, addr, count):
+        n = await parent.add_variable(self.idx, name,
+                                      ua.Variant([0] * count, ua.VariantType.Int16))
+        await n.set_writable()
+        self.rw[key] = n
+        self.rw_words[n.nodeid] = (addr, count)
         self.rw_key[n.nodeid] = key
         return n
 
@@ -327,6 +355,22 @@ class Namespace:
         await self._add_ro(status, "zone_fault", "ZoneFault")
         await self._add_ro(status, "zone_ready_mask", "ZoneInductReadyMask")
         await self._add_ro(status, "zone_age", "ZoneAgeScans")
+        await self._add_ro(status, "plc_poll_ms", "PlcPollMonotonicMs", ua.VariantType.Int64)
+        for key, name in (("chute_trailer", "MeasuredChuteTrailer"),
+                          ("chute_capacity", "MeasuredChuteCapacity"),
+                          ("chute_state", "ChuteState"),
+                          ("chute_quality", "ChuteQuality"),
+                          ("chute_age", "ChuteAgeScans"),
+                          ("chute_occupied", "ChuteOccupied"),
+                          ("chute_permit", "ChutePermissive"),
+                          ("chute_action_ack", "ChuteActionAck"),
+                          ("chute_action_result", "ChuteActionResult"),
+                          ("chute_epoch_lo", "ChuteEpochLow"),
+                          ("chute_epoch_hi", "ChuteEpochHigh"),
+                          ("chute_nonce", "ChuteScannerNonce")):
+            await self._add_ro(status, key, name)
+        await self._add_ro(status, "chute_mode", "ChuteMode", ua.VariantType.Boolean)
+        await self._add_rw_words(status, "chute_action", "ChuteAction", 817, 6)
         for key, name in (("photoeye_fault_mask", "PhotoeyeFaultMask"),
                           ("photoeye_fault_sensor", "PhotoeyeFaultSensor"),
                           ("photoeye_fault_lane", "PhotoeyeFaultLane")):
@@ -477,6 +521,21 @@ class WriteHandler:
         if coil is not None:
             log.warning("UA write %s = %s -> PLC coil %d", key, val, coil)
             asyncio.create_task(self._relay(coil, val, key, True))
+            return
+        block = self.ns.rw_words.get(node.nodeid)
+        if block is not None:
+            addr, count = block
+            if not isinstance(val, (tuple, list)) or len(val) != count:
+                log.error("invalid UA action %s: %s", key, val)
+                return
+            asyncio.create_task(self._relay_words(addr, val, key))
+
+    async def _relay_words(self, addr, val, key):
+        try:
+            if not await self.link.write_words(addr, val):
+                log.error("relay rejected: %s -> %d", key, addr)
+        except Exception as e:
+            log.error("relay failed: %s -> %d (%s)", key, addr, e)
 
     async def _relay(self, addr, val, key, is_coil):
         try:
@@ -499,11 +558,12 @@ async def push(ns, handler, snap):
         node = ns.ro.get(key) or ns.rw.get(key)
         if node is None:
             return
-        if node.nodeid in ns.rw_addr or node.nodeid in ns.rw_coil:
+        if node.nodeid in ns.rw_addr or node.nodeid in ns.rw_coil or node.nodeid in ns.rw_words:
             handler.expected[node.nodeid] = value
         await node.write_value(
             ua.Variant(value,
                        ua.VariantType.Boolean if isinstance(value, bool)
+                       else ua.VariantType.Int64 if key == "plc_poll_ms"
                        else ua.VariantType.Int16))
 
     for i in range(3):
@@ -532,6 +592,20 @@ async def push(ns, handler, snap):
     await w("zone_ready_mask", snap["zone_view"][20])
     await w("zone_age", snap["zone_view"][21])
     await w("zone_fault", snap["zone_view"][22])
+    cv = snap["chute_view"]
+    await w("chute_mode", bool(co[COIL["chute_mode"]]))
+    for key, value in (("chute_trailer", cv[1]), ("chute_occupied", cv[2]),
+                       ("chute_state", cv[3]), ("chute_quality", cv[4]),
+                       ("chute_age", cv[5]), ("chute_permit", cv[6]),
+                       ("chute_action_ack", cv[20]),
+                       ("chute_action_result", cv[21]),
+                       ("chute_capacity", cv[23]),
+                       ("chute_epoch_lo", snap["run_epoch"][0]),
+                       ("chute_epoch_hi", snap["run_epoch"][1]),
+                       ("chute_nonce", snap["scanner_nonce"])):
+        await w(key, value)
+    await w("chute_action", cv[14:20])
+    await w("plc_poll_ms", time.monotonic_ns() // 1_000_000)
     for i, key in enumerate(("photoeye_fault_mask", "photoeye_fault_sensor",
                              "photoeye_fault_lane")):
         await w(key, snap["photoeye_fault"][i])

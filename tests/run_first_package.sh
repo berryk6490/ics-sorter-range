@@ -61,3 +61,8 @@ done
 cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
     "$build_dir/POUS.c" "$repo_dir/tests/plant_recovery_order.c" -lm -o "$build_dir/plant_recovery_order"
 "$build_dir/plant_recovery_order"
+cc -std=c11 -include time.h -include POUS.h -I "$build_dir" -I "$matiec_dir/lib/C" \
+    "$build_dir/POUS.c" "$repo_dir/tests/chute_plc.c" -lm -o "$build_dir/chute_plc"
+for case_name in clear full mismatch stale restart replay duplicate_acceptance operator resume_handoff resume_expiry resume_wrong_identity resume_wrong_zone; do
+    "$build_dir/chute_plc" "$case_name"
+done

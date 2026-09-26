@@ -43,7 +43,7 @@ class FakeClient:
     def read_holding_registers(self, address, count, slave):
         values = [0] * count
         if address == 249:
-            values[0] = 24114
+            values[0] = 24115
         if address == 784:
             values[1] = 4  # commit may advance while mode is off
         return Reply(values)
@@ -139,7 +139,7 @@ class FakePLCHandler(socketserver.BaseRequestHandler):
                 pdu = self.exact(length - 1)
                 function, address, count = struct.unpack(">BHH", pdu[:5])
                 if function == 3:
-                    values = [24114 if address + index == 249 else
+                    values = [24115 if address + index == 249 else
                               4 if address + index == 785 else 0
                               for index in range(count)]
                     reply = bytes([3, count * 2]) + struct.pack(">" + "H" * count, *values)

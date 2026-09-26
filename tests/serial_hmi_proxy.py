@@ -4,6 +4,7 @@ Run on the hypervisor for browser checks. The bridge adds no host address or
 route to the isolated networks and forwards only GET /, GET /api, and the
     scanner/XLe fault button POSTs to the guest's own localhost HMI. The
     browser test start marker is written through the same serial console.
+    GET /ua invokes the canonical direct OPC UA reader on SCADA.
 """
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,14 @@ api_cache = (0.0, None)
 
 
 def guest_request(path, post=False):
+    if path == "/ua" and not post:
+        with lock:
+            console.sendline("/home/kevin/opcua/bin/python "
+                             "/home/kevin/sorter-services/read_chute_ua.py")
+            console.expect(r"__UA__([A-Za-z0-9+/=]+)__END__", timeout=20)
+            body = base64.b64decode(console.match.group(1))
+            console.expect(r"kevin@scada:.*\$ ", timeout=15)
+        return 200, body
     url = "http://127.0.0.1:8000" + path
     data = "data=bytes()" if post else "data=None"
     command = (
@@ -45,10 +54,12 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def respond(self, path, post=False):
-        allowed = {"/", "/api", "/cmd/scanner_fault_ack/1",
+        allowed = {"/", "/api", "/ua", "/chute/action/acknowledge",
+                   "/chute/action/empty", "/chute/action/resume",
+                   "/cmd/scanner_fault_ack/1",
                    "/cmd/scanner_retry/1", "/cmd/xle_fault_ack/1",
                    "/cmd/xle_retry/1"}
-        if path not in allowed or (post != path.startswith("/cmd/")):
+        if path not in allowed or (post != path.startswith(("/cmd/", "/chute/action/"))):
             self.send_error(404)
             return
         try:

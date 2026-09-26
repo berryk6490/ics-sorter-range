@@ -76,7 +76,7 @@ class Client:
         self.sock.sendall(b'ping'); return self.sock.recv(2)==b'ok'
     def close(self): self.sock.close()
     def read_holding_registers(self,address,count=1,slave=1):
-        return Reply([24114 if address==249 else 0]*count)
+        return Reply([24115 if address==249 else 0]*count)
     def read_coils(self,address,count=1,slave=1): return Reply([False]*count)
 client_module.ModbusTcpClient=Client
 ''')
@@ -234,7 +234,7 @@ class DetachedGuards(unittest.TestCase):
                                                  original_failure="RuntimeError('scenario failed')")
                 raise RuntimeError("scenario failed")
             fake.run = fail_run
-            with patch.object(guest, "preflight", return_value={"plc_identity": 24114}), \
+            with patch.object(guest, "preflight", return_value={"plc_identity": 24115}), \
                  patch.dict(sys.modules, {"live_accumulation": fake}), \
                  patch.object(guest.signal, "signal"):
                 code = guest.worker(args)

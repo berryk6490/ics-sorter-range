@@ -34,7 +34,7 @@ def main():
                 "setpoints": holding(plc, 200, 11), "seed": holding(plc, 247)[0]}
     failure = None
     try:
-        assert holding(plc, 249)[0] == 24114
+        assert holding(plc, 249)[0] == 24115
         assert not coils(plc, 880)[0]
         assert not any(original["modes"].values()), "test requires modes off"
         assert all(holding(plc, a + 4)[0] == 0 for a in (530, 542, 647))

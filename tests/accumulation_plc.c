@@ -21,7 +21,7 @@ static void scan(void) {
 }
 static void setup(void) {
     SORTER_init__(&plc,0); scan();
-    assert(WORD(249)==24114);
+    assert(WORD(249)==24115);
     INPUT(158)=INPUT(169)=INPUT(180)=32766;
     INPUT(160)=INPUT(171)=INPUT(182)=7;
     INPUT(164)=INPUT(175)=INPUT(186)=1; scan();

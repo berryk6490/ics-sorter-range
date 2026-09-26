@@ -96,7 +96,7 @@ def read_sample(client, run_id):
         return [bool(value) for value in reply.bits[:count]]
 
     identity = registers(249)[0]
-    if identity != 24114:
+    if identity != 24115:
         raise ValueError(f"unexpected PLC identity {identity}")
     zone = registers(751, 38)
     slots = [registers(base, 12) for base in (530, 542, 647)]

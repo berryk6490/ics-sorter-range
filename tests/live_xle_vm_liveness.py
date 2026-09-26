@@ -87,7 +87,7 @@ def run(case, hold_seconds=8):
     stopped_service = False
     failure = None
     try:
-        if reg(client, 249)[0] != 24114 or coil(client, 880)[0]:
+        if reg(client, 249)[0] != 24115 or coil(client, 880)[0]:
             raise RuntimeError("PLC identity or stopped preflight failed")
         if any(original["modes"].values()):
             raise RuntimeError("test requires all external and plant modes initially off")

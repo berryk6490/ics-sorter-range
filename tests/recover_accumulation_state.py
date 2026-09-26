@@ -63,7 +63,7 @@ def recover(client, journal_path, *, timeout=30, reset_run=False, remote_xle=Fal
               "counter_sample": None, "plant_handshake": None,
               "status": "PENDING"}
     try:
-        if holding(client, 249)[0] != 24114:
+        if holding(client, 249)[0] != 24115:
             raise ValueError("PLC program identity changed")
         if client.read_coils(880, 1, slave=1).bits[0]:
             raise RuntimeError("master must already be stopped")
@@ -88,6 +88,9 @@ def recover(client, journal_path, *, timeout=30, reset_run=False, remote_xle=Fal
                 time.sleep(.1)
             else:
                 raise TimeoutError("scanner reset ACK timeout")
+        # Recovery is a stopped-run identity handshake. Accumulation and
+        # chute modes stay off after reset; re-enabling accumulation would
+        # republish a nonzero ready mask that remains latched when modes drop.
         for address in (914, 915, 918, 919):
             coil(client, address, True)
         if remote_xle:
@@ -147,7 +150,7 @@ def recover(client, journal_path, *, timeout=30, reset_run=False, remote_xle=Fal
         # The PLC evaluates plant identity while plant mode is on. Drop that
         # mode before external/XLe modes, or one scan creates fault 2 and the
         # idle PLC retains it after plant mode turns off.
-        for address in (918, 919, 920, 914, 915, 916, 917):
+        for address in (921, 918, 919, 920, 914, 915, 916, 917):
             coil(client, address, False)
         coil(client, 880, False)
         record["faults_after"] = {"plant": holding(client, 591)[0],

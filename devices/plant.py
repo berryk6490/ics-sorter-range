@@ -50,6 +50,49 @@ class Hold(IntEnum):
     MERGE_CAPACITY = 2
     DRIVE_OFF = 3
     ROUTE_PENDING = 4
+    CHUTE_FULL = 5
+
+
+CHUTE_TRAILER = 2
+CHUTE_CAPACITY = 3
+CHUTE_CLEARANCE_CELLS = 0.4
+
+
+def trailer_door_front(trailer):
+    if not 1 <= trailer <= 9:
+        raise ValueError("trailer out of range")
+    return 12.0 + 3.0 * ((trailer - 1) % 3)
+
+
+def chute_hold_front(trailer, length_cells, max_step_cells):
+    """A simulated front clamp, evaluated before beam/event crossings.
+
+    Instantaneous position clamping makes the bound independent of a large
+    feedback step. This is not a physical stopping-distance claim.
+    """
+    if (not math.isfinite(length_cells) or length_cells <= 0 or
+        not math.isfinite(max_step_cells) or max_step_cells < 0):
+        raise ValueError("invalid package or feedback step")
+    door = trailer_door_front(trailer)
+    front = door - CHUTE_CLEARANCE_CELLS
+    if front <= max(ENTRY.values()):
+        raise ValueError("no pre-door hold space after merge entry")
+    return front
+
+
+def sensor_sample_bound(old_front, proposed_front, beam_fronts, length_cells):
+    """Keep each beam leading/trailing boundary visible for one plant sample.
+
+    A long integration step may cross an entire beam. Clamp at the first
+    boundary it would pass, leaving the next poll to see the raw Boolean.
+    This is the existing discrete mechanical-gate abstraction, not a new
+    drive or an estimate of braking distance.
+    """
+    for edge in sorted({front for beam in beam_fronts
+                        for front in (beam, beam + length_cells)}):
+        if old_front + 1e-9 < edge < proposed_front - 1e-9:
+            return edge
+    return proposed_front
 
 
 TUNNEL_ZONE_START = 9.0
@@ -147,7 +190,7 @@ class PlantModel:
     def __init__(self, length_cm=60, spacing_cm=100, cell_cm=50,
                  miss_divert_token=0, fail_confirm_token=0,
                  stateful=False, photoeye_fixture=None, accumulation=False,
-                 zone_block=None):
+                 zone_block=None, chute_trailer=0, chute_capacity=CHUTE_CAPACITY):
         self.length = length_cm / cell_cm
         self.spacing = spacing_cm / cell_cm
         if accumulation and (self.length <= 0 or self.spacing < 0 or
@@ -170,6 +213,87 @@ class PlantModel:
         self.merge_next_lane = 1
         self.beam_first_high = {}
         self.beam_latched = set()
+        if chute_trailer not in (0, CHUTE_TRAILER) or chute_capacity != CHUTE_CAPACITY:
+            raise ValueError("version 1 models only trailer 2 with capacity 3")
+        self.chute_trailer = chute_trailer
+        self.chute_capacity = chute_capacity
+        self.chute_occupancy = 0
+        self.chute_reservations = {}
+        self.chute_accepted = set()
+        self.chute_last_crossing = (0, 0, 0)
+        self.chute_last_accepted = (0, 0, 0)
+        self.chute_unknown = False
+        self.chute_permissive = not bool(chute_trailer)
+        self.chute_empty_seen = 0
+
+    @property
+    def chute_full(self):
+        return bool(self.chute_trailer and
+                    self.chute_occupancy + len(self.chute_reservations) >=
+                    self.chute_capacity)
+
+    def set_chute_permissive(self, allowed):
+        self.chute_permissive = bool(allowed and not self.chute_full and
+                                     not self.chute_unknown)
+
+    def mark_chute_unknown(self):
+        self.chute_unknown = True
+        self.chute_permissive = False
+
+    def reserve_chute(self, token, serial, sequence=0, actual=CHUTE_TRAILER):
+        if actual != self.chute_trailer or not self.chute_trailer:
+            return False
+        key = (token, serial)
+        if key in self.chute_accepted or key in self.chute_reservations or sequence < 0:
+            return False
+        if self.chute_full:
+            self.mark_chute_unknown()
+            return False
+        self.chute_reservations[key] = (sequence, self.clock)
+        self.chute_last_crossing = (token, serial, sequence)
+        if self.chute_full:
+            self.chute_permissive = False
+        return True
+
+    def bind_chute_sequence(self, token, serial, sequence):
+        key = (token, serial)
+        if key not in self.chute_reservations or not 1 <= sequence <= 30000:
+            return False
+        old, started = self.chute_reservations[key]
+        if old not in (0, sequence):
+            return False
+        self.chute_reservations[key] = (sequence, started)
+        self.chute_last_crossing = (token, serial, sequence)
+        return True
+
+    def accept_chute(self, token, serial, sequence):
+        key = (token, serial)
+        if key not in self.chute_reservations or sequence == 0:
+            return False
+        pending, _ = self.chute_reservations[key]
+        if pending != sequence or key in self.chute_accepted:
+            return False
+        del self.chute_reservations[key]
+        self.chute_accepted.add(key)
+        self.chute_occupancy += 1
+        self.chute_last_accepted = (token, serial, sequence)
+        if self.chute_full:
+            self.chute_permissive = False
+        return True
+
+    def empty_chute(self, sequence, trailer, run_key):
+        if (not self.chute_trailer or trailer != self.chute_trailer or
+            not 1 <= sequence <= 30000 or sequence == self.chute_empty_seen or
+            not run_key or self.chute_reservations or self.chute_unknown or
+            any(p.target == trailer and p.outbound and not p.terminal_sent and
+                p.outbound_position >= trailer_door_front(trailer)
+                for p in self.packages)):
+            return False
+        self.chute_empty_seen = sequence
+        self.chute_occupancy = 0
+        self.chute_accepted.clear()
+        self.chute_permissive = False
+        return True
 
     def request(self, token, serial, lane=1):
         if lane not in ENTRY:
@@ -329,6 +453,10 @@ class PlantModel:
     def step_zones(self, seconds, rpm, slots):
         """Finite lane zones, FIFO motion and round-robin outbound admission."""
         self.clock += seconds
+        if self.chute_trailer:
+            for _, started in self.chute_reservations.values():
+                if self.clock - started > 5.0:
+                    self.mark_chute_unknown()
         self.recent = {k: v for k, v in self.recent.items() if v[0] > self.clock}
         active_tokens = {p.token for p in self.packages} | set(self.recent)
         self.last_event = {k: v for k, v in self.last_event.items() if k in active_tokens}
@@ -353,23 +481,45 @@ class PlantModel:
             for p in members:
                 speed = seconds * 10 * max(0, rpm[belt + 2]) / 1750
                 candidate = p.outbound_position + speed
+                candidate = sensor_sample_bound(
+                    p.outbound_position, candidate,
+                    (ENTRY[p.lane], trailer_door_front(p.target)), p.length)
                 bound = (leader.outbound_position - max(p.length, leader.length) - self.spacing
                          if leader else 100.0)
+                chute_hold = False
+                if p.target == self.chute_trailer and not p.terminal_sent and (self.chute_full or
+                                                        not self.chute_permissive or
+                                                        self.chute_unknown):
+                    front = chute_hold_front(p.target, p.length, speed)
+                    if p.outbound_position >= trailer_door_front(p.target) and not p.terminal_sent:
+                        self.mark_chute_unknown()
+                        bound = min(bound, p.outbound_position)
+                    else:
+                        bound = min(bound, max(p.outbound_position, front))
+                    chute_hold = True
                 p.outbound_position = min(candidate, bound)
                 motion = (Motion.DRIVE_STOPPED if rpm[belt + 2] <= 0 else
                           Motion.HELD_DOWNSTREAM if p.outbound_position < candidate - 1e-6 else
                           Motion.OUTBOUND)
                 hold = (Hold.DRIVE_OFF if motion == Motion.DRIVE_STOPPED else
-                        Hold.ZONE_FULL if motion == Motion.HELD_DOWNSTREAM else Hold.NONE)
+                        (Hold.CHUTE_FULL if chute_hold else Hold.ZONE_FULL)
+                        if motion == Motion.HELD_DOWNSTREAM else Hold.NONE)
                 self._state(p, Zone.OUTBOUND, motion, hold, seconds)
                 leader = p
-                if not p.terminal_sent and p.outbound_position >= 12 + 3 * ((p.target - 1) % 3):
+                if (not p.terminal_sent and
+                    not (p.target == self.chute_trailer and self.chute_unknown) and
+                    p.outbound_position >= trailer_door_front(p.target)):
                     p.terminal_sent = True
-                    p.trailer_position = 12 + 3 * ((p.target - 1) % 3)
+                    p.trailer_position = trailer_door_front(p.target)
                     kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
-                    self.pending.append((kind, p.token, p.serial,
-                                         0 if kind == FAILED_CONFIRM else p.target,
-                                         int(p.outbound_position * 10)))
+                    if kind == TRAILER and p.target == self.chute_trailer:
+                        if not self.reserve_chute(p.token, p.serial):
+                            self.mark_chute_unknown()
+                            p.terminal_sent = False
+                    if p.terminal_sent:
+                        self.pending.append((kind, p.token, p.serial,
+                                             0 if kind == FAILED_CONFIRM else p.target,
+                                             int(p.outbound_position * 10)))
                 if p.terminal_sent and p.outbound_position > p.trailer_position + p.length:
                     kind = FAILED_CONFIRM if p.token == self.fail_confirm_token else TRAILER
                     self.recent[p.token] = (self.clock + 2, p.serial, belt + 1,
@@ -383,6 +533,8 @@ class PlantModel:
             for p in members:
                 speed = seconds * 10 * max(0, rpm[lane - 1]) / 1750
                 candidate = p.position + speed
+                candidate = sensor_sample_bound(p.position, candidate,
+                                                (0.0, 10.0, 12.0), p.length)
                 bound = 100.0
                 cause = Hold.NONE
                 if leader:
@@ -435,6 +587,11 @@ class PlantModel:
                  p.position >= PREMERGE_HOLD and not p.divert_sent]
         ready.sort(key=lambda p: (p.lane - self.merge_next_lane) % 3)
         for p in ready:
+            if p.target == self.chute_trailer and (self.chute_full or
+                                                    not self.chute_permissive or
+                                                    self.chute_unknown):
+                self._state(p, Zone.MERGE, Motion.HELD_MERGE, Hold.CHUTE_FULL, seconds)
+                continue
             if self._merge_blocked(p):
                 self._state(p, Zone.MERGE, Motion.HELD_MERGE, Hold.MERGE_CAPACITY, seconds)
                 continue
@@ -571,6 +728,14 @@ def run(args):
             if accumulation_result.isError():
                 raise IOError("accumulation mode coil")
             accumulation = bool(accumulation_result.bits[0])
+            chute_result = plc.read_coils(921, 1, slave=1)
+            if chute_result.isError():
+                raise IOError("chute mode coil")
+            chute_mode = bool(chute_result.bits[0])
+            chute_config = read(plc, 825, 2) if chute_mode else [0, CHUTE_CAPACITY]
+            if chute_mode and (not accumulation or not stateful or
+                               chute_config != [CHUTE_TRAILER, CHUTE_CAPACITY]):
+                raise ValueError("invalid chute mode or selected trailer configuration")
             if not mode:
                 armed = True
             if mode and not armed:
@@ -592,13 +757,15 @@ def run(args):
                                    miss_divert_token=args.miss_divert_token,
                                    fail_confirm_token=args.fail_confirm_token,
                                    stateful=stateful, photoeye_fixture=fixture,
-                                   accumulation=accumulation, zone_block=block)
+                                   accumulation=accumulation, zone_block=block,
+                                   chute_trailer=CHUTE_TRAILER if chute_mode else 0)
                 outstanding = None
                 # Reset may have accepted a separately injected event. Continue
                 # after the PLC's committed sequence so its seen-sequence
                 # guard cannot discard this run's first INDUCT photoeye.
                 sequence = read(plc, 585)[0]
                 telemetry_sequence = [0, 0, 0]
+                chute_sample_sequence = 0
                 last_request = read(plc, 574)[0]
                 if active:
                     write(plc, 587, [*epoch, nonce])
@@ -621,6 +788,20 @@ def run(args):
                     read(plc, 647, 12)]
             slots = {row[0]: (row[1], row[4], row[5])
                      for row in rows if row[0]}
+            if chute_mode:
+                chute_status = read(plc, 803, 7)
+                model.set_chute_permissive(chute_status[4] == 1 and
+                                          chute_status[6] == 1)
+                accepted = read(plc, 827, 3)
+                if accepted[2]:
+                    model.accept_chute(*accepted)
+                empty_request = read(plc, 810, 5)
+                if empty_request[4] and empty_request[4] != model.chute_empty_seen:
+                    matching = (empty_request[:4] ==
+                                [CHUTE_TRAILER, *epoch, nonce])
+                    ok = matching and model.empty_chute(empty_request[4],
+                                                        empty_request[0], active)
+                    write(plc, 815, [1 if ok else 2, empty_request[4]])
             model.step(elapsed, rpm, slots)
             if mode:
                 if accumulation:
@@ -646,12 +827,25 @@ def run(args):
                         write(plc, raw_base + 7, [raw_sequence])
                 if accumulation:
                     write(plc, 784, [model.induct_ready_mask(), heartbeat])
+                if chute_mode:
+                    chute_sample_sequence = chute_sample_sequence % 30000 + 1
+                    token, serial, event_sequence = model.chute_last_crossing
+                    write(plc, 802, [0])
+                    write(plc, 790, [1, CHUTE_TRAILER, model.chute_occupancy,
+                                     len(model.chute_reservations),
+                                     int(model.chute_full or model.chute_unknown),
+                                     *epoch, nonce, chute_sample_sequence,
+                                     token, serial, event_sequence])
+                    write(plc, 830, list(model.chute_last_accepted))
+                    write(plc, 802, [chute_sample_sequence])
             if outstanding is not None:
                 if read(plc, 586)[0] == outstanding:
                     outstanding = None
             if outstanding is None and model.pending:
                 event = model.pending.popleft()
                 sequence = sequence % 30000 + 1
+                if chute_mode and event[0] == TRAILER and event[3] == CHUTE_TRAILER:
+                    model.bind_chute_sequence(event[1], event[2], sequence)
                 event_lane = model.lane_by_token[event[1]]
                 write(plc, 578, [event_lane])
                 write(plc, 580, list(event))

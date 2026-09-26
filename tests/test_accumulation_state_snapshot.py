@@ -20,9 +20,9 @@ def sample():
                    "belt_load": 0, "status": 1, "frequency": 0,
                    "feedback_rpm": 0, "fault": 0, "current": 0, "thermal": 0}
             for name in snap.VFD_NAMES}
-    return {"schema_version": snap.SCHEMA, "program_identity": 24114,
+    return {"schema_version": snap.SCHEMA, "program_identity": 24115,
             "captured_utc": "2026-09-24T00:00:00Z",
-            "plc": {"reader_schema": 2, "identity": 24114,
+            "plc": {"reader_schema": 3, "identity": 24115,
                     "coils_880_920": [False] * 41,
                     "setpoints_200_210": [200] * 11,
                     "photoeye_config_744_747": [2, 2, 120, 400],
@@ -36,6 +36,10 @@ def sample():
                     "scanner_state": 0, "scanner_fault_mask": 0,
                     "xle_health": [0, 0], "zone_view": [0] * 23,
                     "zone_raw": [0] * 17,
+                    "chute": {"mode": False, "configuration": [2, 3],
+                              "validated": [0] * 6 + [1] + [0] * 15,
+                              "accepted_terminal": [0] * 3,
+                              "raw": [0] * 16},
                     "plant_raw": [[0] * 10 for _ in range(3)],
                     "trailer_counters": [0] * 9, "vfds": vfds},
             "environment": {"services": {
@@ -64,7 +68,7 @@ class Reply:
 
 class FakePLC:
     def read_holding_registers(self, start, count, slave):
-        return Reply([24114 if start == 249 else 0] * count)
+        return Reply([24115 if start == 249 else 0] * count)
 
     def read_coils(self, start, count, slave):
         return Reply([False] * count)
@@ -95,7 +99,8 @@ class SnapshotTests(unittest.TestCase):
 
     def test_complete_reader_schema(self):
         result = reader.read_state(FakePLC(), FakeVFD, include_vfds=True)
-        self.assertEqual(result["reader_schema"], 2)
+        self.assertEqual(result["reader_schema"], 3)
+        self.assertEqual(len(result["chute"]["validated"]), 22)
         self.assertEqual(set(result["vfds"]), set(snap.VFD_NAMES))
         self.assertEqual(len(result["process_214_242"]), 29)
         self.assertEqual(len(result["photoeye_config_744_747"]), 4)
@@ -188,7 +193,7 @@ class SnapshotTests(unittest.TestCase):
                 "duration_seconds": 92,
                 "manifest_sha256": hashlib.sha256(snap.MANIFEST.read_bytes()).hexdigest(),
                 "source_and_guest_hashes": len(json.loads(snap.MANIFEST.read_text())["components"]),
-                "program_identity": 24114}))
+                "program_identity": 24115}))
             with patch.object(scenario, "RESTORATION_GATE", root / "global-gate.json"), \
                  patch.object(scenario, "load_control", return_value={
                     "launched_utc": (now - timedelta(seconds=10)).isoformat()}):
@@ -218,7 +223,7 @@ class SnapshotTests(unittest.TestCase):
                 "duration_seconds": 92.0,
                 "manifest_sha256": hashlib.sha256(snap.MANIFEST.read_bytes()).hexdigest(),
                 "source_and_guest_hashes": len(json.loads(snap.MANIFEST.read_text())["components"]),
-                "program_identity": 24114}))
+                "program_identity": 24115}))
             scada = Mock()
 
             def launch_worker(argv):
@@ -228,7 +233,7 @@ class SnapshotTests(unittest.TestCase):
 
             scada.run.side_effect = launch_worker
             manager = scenario.ScenarioController(scada=scada, drives=Mock(), monitor=Mock())
-            manager.state = Mock(return_value={"identity": 24114,
+            manager.state = Mock(return_value={"identity": 24115,
                          "coils_880_920": [False] * 41,
                          "slots": [[0] * 12 for _ in range(3)]})
             with patch.object(scenario, "RESTORATION_GATE", root / "gate.json"), \

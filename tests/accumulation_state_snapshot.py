@@ -13,13 +13,14 @@ from deployment_preflight import MANIFEST, guest_read, service_read_command
 from accumulation_register_contract import (RESET_ZERO_PROCESS_COUNTERS,
                                             SERIAL_NEXT_ADDRESS, PROCESS_FIRST_ADDRESS)
 
-SCHEMA = 2
+SCHEMA = 3
 PLANT = re.compile(r"^/home/kevin/venv/bin/python /home/kevin/plant\.py(?:\s|$)")
 XLE = re.compile(r"^/opt/sorter-xle/venv/bin/python /opt/sorter-xle/xle\.py(?:\s|$)")
 ASX = re.compile(r"^/opt/sorter-xle/venv/bin/python /opt/sorter-xle/asx\.py(?:\s|$)")
 TEMPORARY = re.compile(
     r"(?:live_accumulation_monitor\.py|live_accumulation_detached\.py|"
-    r"live_accumulation_fixture\.py|/sorter-services/(?:xle|asx)\.py)")
+    r"live_accumulation_fixture\.py|live_chute_minimum\.py|"
+    r"/sorter-services/(?:xle|asx)\.py)")
 VM_NAMES = ("analyst", "drives", "fw", "plc", "scada", "xle")
 VFD_NAMES = ("induct1", "induct2", "induct3", "outbnd1", "outbnd2", "outbnd3")
 EXACT_COILS = (880, 881, 882, 883, 884, 885, 886, 887, 914, 915, 918, 919, 920)
@@ -113,7 +114,7 @@ def _record(rows, before, after, path, kind, expected=None, predicate=None):
 def _structural(snapshot):
     p = snapshot["plc"]
     e = snapshot["environment"]
-    if snapshot["schema_version"] != SCHEMA or p["reader_schema"] != 2:
+    if snapshot["schema_version"] != SCHEMA or p["reader_schema"] != 3:
         raise ValueError("snapshot schema mismatch")
     if snapshot["program_identity"] != p["identity"]:
         raise ValueError("manifest/PLC identity mismatch")
@@ -130,6 +131,12 @@ def _structural(snapshot):
         raise ValueError("incomplete slot row")
     if any(len(row) != 10 for row in p["plant_raw"]):
         raise ValueError("incomplete plant row")
+    if (not isinstance(p["chute"]["mode"], bool) or
+        len(p["chute"]["configuration"]) != 2 or
+        len(p["chute"]["validated"]) != 22 or
+        len(p["chute"]["accepted_terminal"]) != 3 or
+        len(p["chute"]["raw"]) != 16):
+        raise ValueError("incomplete chute row")
     if set(p["vfds"]) != set(VFD_NAMES):
         raise ValueError("incomplete six-VFD snapshot")
     required_units = {f"{entry['guest']}:{unit}"
@@ -172,6 +179,17 @@ def compare(before, after):
         _record(rows, before, after, f"plc.coils_880_920.{address - 880}", "RESET_ZERO", False)
     for path in ("plc.seed", "plc.setpoints_200_210", "plc.photoeye_config_744_747"):
         _record(rows, before, after, path, "EXACT")
+    for path in ("plc.chute.mode", "plc.chute.configuration"):
+        _record(rows, before, after, path, "EXACT")
+    _record(rows, before, after, "plc.chute.validated.2", "RESET_ZERO", 0)
+    _record(rows, before, after, "plc.chute.validated.3", "SAFE_INVARIANT",
+            "disabled or clear, with no active full condition", lambda v: v == 0)
+    _record(rows, before, after, "plc.chute.validated.6", "SAFE_INVARIANT",
+            "clear state permits movement in either mode", lambda v: v == 1)
+    for idx in (0, 1, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21):
+        _record(rows, before, after, f"plc.chute.validated.{idx}", "INFORMATIONAL")
+    for path in ("plc.chute.accepted_terminal", "plc.chute.raw"):
+        _record(rows, before, after, path, "INFORMATIONAL")
     for address in PROCESS_COUNTERS:
         _record(rows, before, after,
                 f"plc.process_214_242.{address - PROCESS_FIRST_ADDRESS}", "RESET_ZERO", 0)

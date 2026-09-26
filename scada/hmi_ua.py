@@ -80,6 +80,22 @@ def _tagmap():
                       ("zone_ready_mask", "ZoneInductReadyMask"),
                       ("zone_age", "ZoneAgeScans")):
         t[key] = ["Process", "Status", name]
+    for key, name in (("chute_mode", "ChuteMode"),
+                      ("chute_trailer", "MeasuredChuteTrailer"),
+                      ("chute_capacity", "MeasuredChuteCapacity"),
+                      ("chute_state", "ChuteState"),
+                      ("chute_quality", "ChuteQuality"),
+                      ("chute_age", "ChuteAgeScans"),
+                      ("chute_occupied", "ChuteOccupied"),
+                      ("chute_permit", "ChutePermissive"),
+                      ("chute_action_ack", "ChuteActionAck"),
+                      ("chute_action_result", "ChuteActionResult"),
+                      ("chute_epoch_lo", "ChuteEpochLow"),
+                      ("chute_epoch_hi", "ChuteEpochHigh"),
+                      ("chute_nonce", "ChuteScannerNonce"),
+                      ("plc_poll_ms", "PlcPollMonotonicMs"),
+                      ("chute_action", "ChuteAction")):
+        t[key] = ["Process", "Status", name]
     for key, name in (("photoeye_fault_mask", "PhotoeyeFaultMask"),
                       ("photoeye_fault_sensor", "PhotoeyeFaultSensor"),
                       ("photoeye_fault_lane", "PhotoeyeFaultLane")):
@@ -117,7 +133,8 @@ TAGS = _tagmap()
 state = {k: ([0] * 20 if k.startswith(("ib", "ob")) and len(k) == 3
              else [0] * 10 if k.startswith("plant") and len(k) == 6
              else [0] * 8 if k.startswith("photoeyes")
-             else [0] * 6 if k.startswith("zone") and len(k) == 5 else 0)
+             else [0] * 6 if k.startswith("zone") and len(k) == 5
+             else [0] * 6 if k == "chute_action" else 0)
          for k in TAGS}
 state["connected"] = False
 hist = collections.deque(maxlen=int(RATE_WINDOW / RATE_SAMPLE))
@@ -162,6 +179,7 @@ async def sample_rates():
 CONTROL = {"run", "auto", "lane_run0", "lane_run1", "lane_run2",
            "ob_run0", "ob_run1", "ob_run2", "scanner_fault_ack", "scanner_retry",
            "xle_fault_ack", "xle_retry"}
+SESSION_WRITES = CONTROL | {"chute_action"}
 ua_ctx = {"loop": None, "nodes": {}}     # set once a session is established
 
 
@@ -183,7 +201,7 @@ async def session():
 
         ua_ctx["loop"] = asyncio.get_running_loop()
         ua_ctx["nodes"] = {k: n for k, n in zip(TAGS.keys(), nodes)
-                           if k in CONTROL}
+                           if k in SESSION_WRITES}
         with lock:
             state["connected"] = True
             hist.clear()
@@ -238,6 +256,8 @@ def api():
     with lock:
         s = dict(state)
     ind_rate, load_rate = rates()
+    chute_fresh = (bool(s["connected"]) and bool(s["plc_poll_ms"]) and
+                   0 <= time.monotonic_ns() // 1_000_000 - s["plc_poll_ms"] <= 1500)
     return jsonify({
         "connected": s["connected"],
         "speed_sp":  [s[f"speed_sp{i}"] for i in range(3)],
@@ -267,6 +287,15 @@ def api():
         "zone_ready_mask": s["zone_ready_mask"],
         "zone_age": s["zone_age"],
         "zone_rows": [s[f"zone{i}"] for i in range(3)],
+        "chute": {"measured_trailer": 2 if s["chute_mode"] else None,
+                  "capacity": s["chute_capacity"],
+                  "occupied": s["chute_occupied"],
+                  "state": s["chute_state"], "quality": s["chute_quality"],
+                  "age_scans": s["chute_age"], "permissive": s["chute_permit"],
+                  "action_ack": s["chute_action_ack"],
+                  "action_result": s["chute_action_result"],
+                  "poll_fresh": chute_fresh,
+                  "unmeasured_trailers": [1, 3, 4, 5, 6, 7, 8, 9]},
         "photoeye_fault_mask": s["photoeye_fault_mask"],
         "photoeye_fault_sensor": s["photoeye_fault_sensor"],
         "photoeye_fault_lane": s["photoeye_fault_lane"],
@@ -314,6 +343,42 @@ def cmd(key, val):
             node.write_value(ua.Variant(bool(val), ua.VariantType.Boolean)), loop)
         fut.result(timeout=3)
         return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "err": str(e)}), 500
+
+
+@app.route("/chute/action/<action>", methods=["POST"])
+def chute_action(action):
+    """One identity-bound operator action via the PLC-backed UA array node."""
+    opcode = {"acknowledge": 1, "empty": 2, "resume": 3}.get(action)
+    if opcode is None:
+        return jsonify({"ok": False, "err": "unknown action"}), 400
+    with lock:
+        s = dict(state)
+    fresh = (s["connected"] and s["chute_mode"] and s["chute_quality"] == 1
+             and s["chute_trailer"] == 2 and s["plc_poll_ms"]
+             and 0 <= time.monotonic_ns() // 1_000_000 - s["plc_poll_ms"] <= 1500)
+    if not fresh:
+        return jsonify({"ok": False, "err": "PLC chute sample unavailable"}), 503
+    loop, node = ua_ctx["loop"], ua_ctx["nodes"].get("chute_action")
+    if loop is None or node is None:
+        return jsonify({"ok": False, "err": "no UA session"}), 503
+    seq = s["chute_action_ack"] % 30000 + 1
+    packet = [2, s["chute_epoch_lo"], s["chute_epoch_hi"],
+              s["chute_nonce"], opcode, seq]
+    try:
+        fut = asyncio.run_coroutine_threadsafe(
+            node.write_value(ua.Variant(packet, ua.VariantType.Int16)), loop)
+        fut.result(timeout=3)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            with lock:
+                ack, result = state["chute_action_ack"], state["chute_action_result"]
+            if ack == seq:
+                return jsonify({"ok": result == 1, "sequence": seq,
+                                "result": result}), 200 if result == 1 else 409
+            time.sleep(0.05)
+        return jsonify({"ok": False, "err": "action ACK timeout", "sequence": seq}), 504
     except Exception as e:
         return jsonify({"ok": False, "err": str(e)}), 500
 
@@ -583,7 +648,7 @@ const SENSOR_NAME=['WAIT','INDUCT','TUNNEL','DIVERT','TRAILER','RECIRC','FAILED 
 const ZONE_NAME=['NONE','APPROACH','DECISION','PREMERGE','MERGE','OUTBOUND','TERMINAL','RECIRC TAIL'];
 const MOTION_NAME=['NONE','MOVING','HELD_DOWNSTREAM','HELD_MERGE','DRIVE_STOPPED',
   'AWAITING_ROUTE','OUTBOUND','TERMINAL','JAMMED'];
-const HOLD_NAME=['NONE','ZONE_FULL','MERGE_CAPACITY','DRIVE_OFF','ROUTE_PENDING'];
+const HOLD_NAME=['NONE','ZONE_FULL','MERGE_CAPACITY','DRIVE_OFF','ROUTE_PENDING','CHUTE_FULL'];
 function clearLegacy(belt){
   const live=seen[belt]||{};
   for(const key in live) live[key].el.remove();
@@ -745,6 +810,21 @@ async function tick(){
   if(d.alarms.nohome) p+=stat('NO-HOME',0,1);
   if(d.plant_mode && d.plant_fault) p+=stat('PLANT FAULT '+d.plant_fault,0,1);
   if(d.accumulation_mode && d.zone_fault) p+=stat('ZONE VALIDATION FAULT '+d.zone_fault,0,1);
+  if(d.chute.measured_trailer===2){
+    const c=d.chute;
+    if(!c.poll_fresh || c.quality!==1 || c.state===4){
+      p+=stat('TRAILER 2 CHUTE SENSOR UNAVAILABLE — HOLD',0,1);
+    } else if(c.state===1){
+      p+=stat('TRAILER 2 CHUTE FULL '+c.occupied+'/'+c.capacity,0,1);
+      p+='<button class="btn" data-chute="acknowledge">ACKNOWLEDGE CHUTE</button>';
+    } else if(c.state===2){
+      p+=stat('TRAILER 2 CHUTE FULL — ACKNOWLEDGED',0,1);
+      p+='<button class="btn" data-chute="empty">EMPTY CHUTE</button>';
+    } else if(c.state===3){
+      p+=stat('TRAILER 2 CHUTE EMPTY — WAITING FOR RESUME',1,0);
+      p+='<button class="btn" data-chute="resume">RESUME CHUTE</button>';
+    }
+  }
   if(d.photoeye_mode && d.photoeye_fault_mask)
     p+=stat('PHOTOEYE LANE '+d.photoeye_fault_lane+' SENSOR '+d.photoeye_fault_sensor+
       ' FAULT (SLOTS '+d.photoeye_fault_mask+')',0,1);
@@ -764,6 +844,12 @@ async function tick(){
   const bar=document.getElementById('bar');
   if(p!==lastBarMarkup){ bar.innerHTML=p; lastBarMarkup=p; }
   bar.onclick=async e=>{
+    const chute=e.target.dataset.chute;
+    if(chute){
+      e.target.disabled=true;
+      try { await fetch('/chute/action/'+chute,{method:'POST'}); } catch(err){}
+      return;
+    }
     const key=e.target.dataset.scanner;
     if(!key) return;
     e.target.disabled=true;
@@ -804,9 +890,14 @@ async function tick(){
   let t='';
   for(let i=0;i<9;i++){
     const b=Math.floor(i/3)+1, dr=(i%3)+1;
+    const measured=(i===1 && d.chute.measured_trailer===2);
+    const chuteLabel=measured ? '<div class="dbad">CHUTE SENSOR: '+
+      (d.chute.poll_fresh && d.chute.quality===1 ?
+       d.chute.occupied+'/'+d.chute.capacity+' OCCUPIED' : 'UNAVAILABLE')+
+      '</div>' : '';
     t+='<div class="door'+(d.bad[i]?' err':'')+'"><div class="dn">TRAILER '+b+'-'+dr+'</div>'
       +'<div class="dv">'+d.trailer[i]+'</div>'
-      +'<div class="dbad'+(d.bad[i]?' on':'')+'">'+d.bad[i]+' wrong</div></div>';
+      +'<div class="dbad'+(d.bad[i]?' on':'')+'">'+d.bad[i]+' wrong</div>'+chuteLabel+'</div>';
   }
   document.getElementById('doors').innerHTML=t;
 

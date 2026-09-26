@@ -10,7 +10,7 @@
         "openplc.service"
       ],
       "hash_policy": "exact",
-      "sha256": "58ec28cce050b93479e6e49085dd2830c24a0fb8b0b0a468848b193ae8eb5c7a",
+      "sha256": "952ff58580a2d1a0444b6b0e91f745ff74a923484607645173909c5ab4be3dc6",
       "verification_command": "sha256sum /home/kevin/OpenPLC_v3/webserver/st_files/xle_sorter.st"
     },
     {
@@ -21,7 +21,7 @@
         "sorter-plant.service"
       ],
       "hash_policy": "exact",
-      "sha256": "6ffd96e4884e4b1ee75c409e67657d3464a7bc6b2a4de956a02ef023d71d1388",
+      "sha256": "e2331171c82af5d304b0b23b5108c30249f738ce14804baf9dc6cd226dae46f3",
       "verification_command": "sha256sum /home/kevin/plant.py"
     },
     {
@@ -88,7 +88,7 @@
         "opcua-server.service"
       ],
       "hash_policy": "exact",
-      "sha256": "bf9718c8e6f0eb5fb71798da1755e559466ae905b41def7135b4c5142c1675ce",
+      "sha256": "2113361697ee9171b21313e96f4a484ad49f29f94a983e2da7075f28917c19c8",
       "verification_command": "sha256sum /home/kevin/opcua_server.py"
     },
     {
@@ -99,7 +99,7 @@
         "sorter-hmi.service"
       ],
       "hash_policy": "exact",
-      "sha256": "a76c5e5774305935738045a3ff0aa4644abe13e50cdffea33fa56a47969be13c",
+      "sha256": "b7f9d266c3126e541e5abe35c86f66978fb4c4f84834de0acead7a8bc603f2bb",
       "verification_command": "sha256sum /home/kevin/hmi_ua.py"
     },
     {
@@ -171,7 +171,7 @@
       "canonical_destination": "/home/kevin/sorter-services/live_accumulation.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "1743bc7f9765d3cd582a3a68b253a67bb8bc0fe271b33852c790cc0d0066f209",
+      "sha256": "6eda8bfbd65ed4afe0bb1b21fe973ef58f417ada335f3441ea7904b5705cc0ce",
       "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation.py"
     },
     {
@@ -198,7 +198,7 @@
       "canonical_destination": "/home/kevin/sorter-services/read_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "7a7114b04362f7c183c6fb6332f129e9245bdbd48f788c859d7c5a113a7adb72",
+      "sha256": "7adcabb70b0ff648dec21c23bacd16df6b21466caac9ac2eb3a7f8d967362aa8",
       "verification_command": "sha256sum /home/kevin/sorter-services/read_accumulation_state.py"
     },
     {
@@ -207,7 +207,7 @@
       "canonical_destination": "/home/kevin/read_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "7a7114b04362f7c183c6fb6332f129e9245bdbd48f788c859d7c5a113a7adb72",
+      "sha256": "7adcabb70b0ff648dec21c23bacd16df6b21466caac9ac2eb3a7f8d967362aa8",
       "verification_command": "sha256sum /home/kevin/read_accumulation_state.py"
     },
     {
@@ -216,7 +216,7 @@
       "canonical_destination": "/home/kevin/live_accumulation_monitor.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "4adb7a6f6c30bde189a1c797d0b9391b8c4f9619706aaa3873ad4205b6c79f7f",
+      "sha256": "6b03ccb2678d76555c54c4e3273ca3528f314a95980209e31dfc2ddbc55df491",
       "verification_command": "sha256sum /home/kevin/live_accumulation_monitor.py"
     },
     {
@@ -225,7 +225,7 @@
       "canonical_destination": "/home/kevin/sorter-services/live_accumulation_detached.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "23f59594957caea14f8ba16c586b40b231a3cb55c3dbbbc1a2b07a5e42e2277f",
+      "sha256": "5c0bfd8b4b526555ad5738b6f59d1e8a3fe1cf23c3786abe6145c867b2cce826",
       "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation_detached.py"
     },
     {
@@ -234,7 +234,7 @@
       "canonical_destination": "/home/kevin/live_accumulation_detached.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "23f59594957caea14f8ba16c586b40b231a3cb55c3dbbbc1a2b07a5e42e2277f",
+      "sha256": "5c0bfd8b4b526555ad5738b6f59d1e8a3fe1cf23c3786abe6145c867b2cce826",
       "verification_command": "sha256sum /home/kevin/live_accumulation_detached.py"
     },
     {
@@ -288,7 +288,7 @@
       "canonical_destination": "/home/kevin/sorter-services/recover_accumulation_state.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "ec8952017b4faf1914340db8a08a98a0d462d22125d70a52f4abfee5d5dbd7a5",
+      "sha256": "b3e47d9df197fe8932753886771c6206b082900ad80d5bfeba50fbfefaebefa5",
       "verification_command": "sha256sum /home/kevin/sorter-services/recover_accumulation_state.py"
     },
     {
@@ -366,7 +366,7 @@
       "canonical_destination": "/home/kevin/sorter-services/live_xle_vm_three_lane.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "d1d0aa10b27a444dbe6d05601029a96e96fb590526b9b5c7acc11c5a24a5b3d7",
+      "sha256": "abf52fdd404244eb666cbc1af90779d33a6ed802c6a396092e0d8ca727ee26d6",
       "verification_command": "sha256sum /home/kevin/sorter-services/live_xle_vm_three_lane.py"
     },
     {
@@ -384,10 +384,38 @@
       "canonical_destination": "/opt/sorter-xle/live_xle_vm_liveness.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "6c34a2fd3cd3e95253f76cadafb3cd4bc19b41bb8e5d8aabcea49541d63b8aab",
+      "sha256": "d4d711d50b2cab335f231ad7eb1336ee1082cd69c3647bc74c589f5ac9a30ac5",
       "verification_command": "sha256sum /opt/sorter-xle/live_xle_vm_liveness.py"
+    },
+    {
+      "repository_source": "tests/live_chute_minimum.py",
+      "guest": "drives",
+      "canonical_destination": "/home/kevin/live_chute_minimum.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "a9f6fca2bad57b4e22e1c01aa71c96d995ef7a7ab6380b3c556fc52860eb741a",
+      "verification_command": "sha256sum /home/kevin/live_chute_minimum.py"
+    },
+    {
+      "repository_source": "tests/read_chute_ua.py",
+      "guest": "scada",
+      "canonical_destination": "/home/kevin/sorter-services/read_chute_ua.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "c1fc1bd8fe727f8518977ae6a015a305233e61e95c57ede4edc24516e264d630",
+      "verification_command": "sha256sum /home/kevin/sorter-services/read_chute_ua.py"
+    },
+    {
+      "repository_source": "tests/read_chute_journal.py",
+      "guest": "xle",
+      "canonical_destination": "/opt/sorter-xle/read_chute_journal.py",
+      "associated_service": [],
+      "hash_policy": "exact",
+      "sha256": "e22c30b99696e4df32ceb73f78f8443231ced9a6b73205aa3a70ec88cacbc8c2",
+      "verification_command": "sha256sum /opt/sorter-xle/read_chute_journal.py"
     }
   ],
   "milestone": "dedicated-xle-vm-migration",
-  "plc_program_identity": 24114
+  "plc_program_identity": 24115,
+  "host_stage_notice": "Chute-full minimum slice deployed and verified at PLC identity 24115; all 43 canonical source and guest hashes passed live preflight on 2026-09-26."
 }

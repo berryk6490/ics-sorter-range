@@ -116,11 +116,11 @@ def preflight(case, runner_hash):
     if not plc.connect():
         raise ConnectionError("PLC unavailable")
     try:
-        if live.holding(plc, 249)[0] != 24114 or live.coils(plc, 880)[0]:
+        if live.holding(plc, 249)[0] != 24115 or live.coils(plc, 880)[0]:
             raise ValueError("PLC identity or stopped-state precondition failed")
         if any(live.holding(plc, base + 4)[0] for base in (530, 542, 647)):
             raise ValueError("occupied PLC slot at startup")
-        return {"plc_identity": 24114, "master": False, "slots_empty": True,
+        return {"plc_identity": 24115, "master": False, "slots_empty": True,
                 "runner_sha256": actual}
     finally:
         plc.close()

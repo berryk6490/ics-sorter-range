@@ -37,6 +37,10 @@ class PlantRecoveryPLC:
         self.ready = 1
 
     def scan(self):
+        if self.coils[918] and self.coils[920]:
+            # PLC publishes capacity while accumulation is enabled and keeps
+            # its last mask after the temporary modes are dropped.
+            self.ready = 7
         if self.coils[918]:
             if self.coils[914] and self.coils[915] and self.epoch:
                 if self.recommit:
@@ -52,9 +56,9 @@ class PlantRecoveryPLC:
 
     def read_holding_registers(self, address, count, slave):
         self.scan()
-        values = {249: 24114, 509: self.nonce, 558: self.epoch, 559: 0,
+        values = {249: 24115, 509: self.nonce, 558: self.epoch, 559: 0,
                   561: 0, 567: 1, 573: 1, 591: self.fault,
-                  590: self.heartbeat, 593: 0, 786: 0, 788: 0,
+                  590: self.heartbeat, 593: 0, 786: self.ready, 788: 0,
                   255: 0, 256: 0, 585: 183, 586: self.acked_event,
                   587: self.plant_epoch[0], 588: self.plant_epoch[1],
                   589: self.plant_epoch[2], 534: self.slot_states[0],
@@ -78,6 +82,7 @@ class PlantRecoveryPLC:
             self.events.clear()
             self.acked_event = 183
             self.fault = 1
+            self.ready = 0
         else:
             self.coils[address] = bool(value)
         self.scan()
@@ -113,6 +118,9 @@ class RecoveryOrderTests(unittest.TestCase):
         self.assertEqual(plc.process[222], 0)
         self.assertEqual(plc.acked_event, 183)
         self.assertEqual(plc.events, [])
+        self.assertEqual(plc.ready, 0)
+        self.assertNotIn((920, True), plc.writes)
+        self.assertNotIn((921, True), plc.writes)
         teardown = plc.writes[-8:]
         self.assertEqual(teardown, [(918, False), (919, False),
                          (920, False), (914, False), (915, False),

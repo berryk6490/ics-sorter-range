@@ -108,7 +108,7 @@ def preflight():
     machine = state()
     assert all(machine["vms"][vm] == "running" for vm in REQUIRED)
     plc = plc_state()
-    assert plc["identity"] == 24114, plc
+    assert plc["identity"] == 24115, plc
     assert not plc["run"] and [plc["slots"][i] for i in (0, 12, 24)] == [0, 0, 0], plc
     assert plc["plant_fault"] == 0 and plc["photoeye_fault"] == [0, 0, 0], plc
     assert plc["scanner_state"][0:2] == [0, 0], plc

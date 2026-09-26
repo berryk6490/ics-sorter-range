@@ -1,5 +1,11 @@
 # Phase 2A: finite accumulation and downstream backpressure
 
+The host-only selected trailer-2 chute-full extension is specified in
+`CHUTE_FULL_CONTRACT.md`. It adds a distinct physical chute hold reason and
+source identity 24115. The live values and identity 24114 below describe the
+previously deployed Phase 2A baseline; they are not evidence that the
+chute-full source has been deployed.
+
 The canonical typed baseline, postflight comparison, and next-scenario gate
 are specified in `PHASE2A_RESTORATION.md`. That contract supersedes older
 informal cleanup field lists below; the movement and register model here is

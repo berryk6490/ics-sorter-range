@@ -367,6 +367,50 @@ VAR
   z_view_ready AT %QW786 : INT;        (* PLC-accepted capacity mask *)
   z_view_age AT %QW787 : INT;
   z_fault AT %QW788 : INT;             (* 0 ready, 1 identity/sequence, 2 bounds/order, 3 overlap *)
+  chute_mode AT %QX115.1 : BOOL;        (* coil 921, selected chute opt-in *)
+  chute_raw_version AT %QW790 : INT;
+  chute_raw_trailer AT %QW791 : INT;
+  chute_raw_occupied AT %QW792 : INT;
+  chute_raw_reserved AT %QW793 : INT;
+  chute_raw_full AT %QW794 : INT;
+  chute_raw_epoch_lo AT %QW795 : INT;
+  chute_raw_epoch_hi AT %QW796 : INT;
+  chute_raw_nonce AT %QW797 : INT;
+  chute_raw_seq AT %QW798 : INT;
+  chute_raw_token AT %QW799 : INT;
+  chute_raw_serial AT %QW800 : INT;
+  chute_raw_event_seq AT %QW801 : INT;
+  chute_raw_commit AT %QW802 : INT;
+  chute_raw_ack AT %QW803 : INT;
+  chute_view_trailer AT %QW804 : INT;
+  chute_view_occupied AT %QW805 : INT;
+  chute_state AT %QW806 : INT;
+  chute_quality AT %QW807 : INT;
+  chute_age AT %QW808 : INT;
+  chute_permissive AT %QW809 : INT;
+  chute_empty_trailer AT %QW810 : INT;
+  chute_empty_epoch_lo AT %QW811 : INT;
+  chute_empty_epoch_hi AT %QW812 : INT;
+  chute_empty_nonce AT %QW813 : INT;
+  chute_empty_seq AT %QW814 : INT;
+  chute_empty_result AT %QW815 : INT;
+  chute_empty_ack AT %QW816 : INT;
+  chute_action_trailer AT %QW817 : INT;
+  chute_action_epoch_lo AT %QW818 : INT;
+  chute_action_epoch_hi AT %QW819 : INT;
+  chute_action_nonce AT %QW820 : INT;
+  chute_action_op AT %QW821 : INT;
+  chute_action_seq AT %QW822 : INT;
+  chute_action_ack AT %QW823 : INT;
+  chute_action_result AT %QW824 : INT;
+  chute_config_trailer AT %QW825 : INT;
+  chute_config_capacity AT %QW826 : INT;
+  chute_accepted_token AT %QW827 : INT;
+  chute_accepted_serial AT %QW828 : INT;
+  chute_accepted_event_seq AT %QW829 : INT;
+  chute_raw_accepted_token AT %QW830 : INT;
+  chute_raw_accepted_serial AT %QW831 : INT;
+  chute_raw_accepted_seq AT %QW832 : INT;
   xle_fault_ack AT %QX114.4 : BOOL;    (* coil 916, operator action *)
   xle_retry AT %QX114.5 : BOOL;        (* coil 917, operator action *)
 
@@ -726,6 +770,11 @@ VAR
   z_belt, z_pos : ARRAY[0..2] OF INT;
   z_seen_commit, z_lane, z_difference : INT := 0;
   z_valid : BOOL := FALSE;
+  chute_seen, chute_expect, chute_action_seen, chute_action_expect : INT := 0;
+  chute_empty_next : INT := 0;
+  chute_resume_grace : INT := 0; (* bounded committed hold sample at Resume *)
+  chute_identity_ok, chute_valid : BOOL := FALSE;
+  chute_accounted_token, chute_accounted_serial, chute_accounted_seq : INT := 0;
 END_VAR
 
 (* reset: clears init_done so the block below re-runs this scan *)
@@ -741,7 +790,7 @@ IF NOT init_done THEN
   rate_sp_1  := 14; rate_sp_2 := 14; rate_sp_3 := 14;
   noread_sp  := 30;
   serial_next := 1;
-  prog_hash := 24114;
+  prog_hash := 24115;
 
   (* master_seed is the root of the run. The controller no longer draws
      destinations or no-reads itself: both moved to the camera tunnels,
@@ -770,6 +819,18 @@ IF NOT init_done THEN
   accumulation_mode := FALSE;
   z_raw_ready := 0; z_view_ready := 0; z_view_age := 0;
   z_seen_commit := z_raw_commit; z_fault := 0;
+  chute_mode := FALSE; chute_config_trailer := 2; chute_config_capacity := 3;
+  chute_seen := 0; chute_raw_ack := 0; chute_view_trailer := 0;
+  chute_view_occupied := 0; chute_state := 0; chute_quality := 0;
+  chute_age := 0; chute_permissive := 1;
+  chute_action_seen := chute_action_seq; chute_action_ack := 0;
+  chute_action_result := 0; chute_empty_next := 0;
+  chute_resume_grace := 0;
+  chute_empty_seq := 0; chute_empty_result := 0; chute_empty_ack := 0;
+  chute_accepted_token := 0; chute_accepted_serial := 0;
+  chute_accepted_event_seq := 0;
+  chute_accounted_token := 0; chute_accounted_serial := 0;
+  chute_accounted_seq := 0;
   pe_debounce_sp := 2; pe_min_block_sp := 2;
   pe_max_block_sp := 120; pe_travel_sp := 400;
   pe_fault_mask := 0; pe_fault_sensor := 0; pe_fault_lane := 0;
@@ -1322,6 +1383,137 @@ ELSE
   END_IF;
 END_IF;
 
+(* Selected chute switch is independent of cumulative trailer counters. The
+   plant commits a versioned raw sample; only this validator publishes state. *)
+IF chute_mode THEN
+  chute_permissive := 0;
+  IF chute_resume_grace > 0 THEN
+    chute_resume_grace := chute_resume_grace - 1;
+  END_IF;
+  IF NOT plant_mode OR NOT photoeye_mode OR NOT accumulation_mode OR
+     chute_config_trailer <> 2 OR chute_config_capacity <> 3 THEN
+    chute_quality := 3; chute_state := 4; sorter_run := FALSE;
+  ELSE
+    IF chute_raw_commit <> 0 AND chute_raw_commit = chute_raw_seq AND
+       chute_raw_commit <> chute_seen THEN
+      chute_expect := chute_seen + 1;
+      IF chute_expect > 30000 THEN chute_expect := 1; END_IF;
+      chute_identity_ok := chute_raw_token = 0 AND chute_raw_serial = 0 AND
+                           chute_raw_reserved = 0;
+      IF chute_raw_token <> 0 AND chute_raw_serial <> 0 THEN
+        FOR j := 0 TO 2 DO
+          IF st_token[j] = chute_raw_token AND st_serial[j] = chute_raw_serial AND
+             st_lane[j] >= 1 AND st_lane[j] <= 3 THEN
+            chute_identity_ok := TRUE;
+          END_IF;
+        END_FOR;
+        IF chute_raw_token = chute_accepted_token AND
+           chute_raw_serial = chute_accepted_serial THEN
+          chute_identity_ok := TRUE;
+        END_IF;
+      END_IF;
+      chute_valid := chute_raw_version = 1 AND chute_raw_trailer = 2 AND
+        chute_raw_epoch_lo = epoch_active_lo AND
+        chute_raw_epoch_hi = epoch_active_hi AND
+        chute_raw_nonce = reset_nonce AND chute_raw_seq = chute_expect AND
+        chute_raw_occupied >= 0 AND chute_raw_occupied <= 3 AND
+        chute_raw_reserved >= 0 AND chute_raw_reserved <= 3 AND
+        chute_raw_occupied + chute_raw_reserved <= 3 AND
+        chute_raw_full >= 0 AND chute_raw_full <= 1 AND
+        ((chute_raw_occupied + chute_raw_reserved >= 3 AND
+          chute_raw_full = 1) OR
+         (chute_raw_occupied + chute_raw_reserved < 3 AND
+          chute_raw_full = 0)) AND chute_identity_ok;
+      IF chute_raw_occupied > chute_view_occupied THEN
+        chute_valid := chute_valid AND
+          chute_raw_occupied = chute_view_occupied + 1 AND
+          chute_raw_accepted_token = chute_accepted_token AND
+          chute_raw_accepted_serial = chute_accepted_serial AND
+          chute_raw_accepted_seq = chute_accepted_event_seq AND
+          chute_raw_accepted_seq <> 0 AND
+          (chute_raw_accepted_token <> chute_accounted_token OR
+           chute_raw_accepted_serial <> chute_accounted_serial OR
+           chute_raw_accepted_seq <> chute_accounted_seq);
+      END_IF;
+      IF chute_raw_occupied < chute_view_occupied THEN
+        chute_valid := chute_valid AND chute_empty_ack = chute_empty_seq AND
+          chute_empty_result = 1 AND chute_empty_seq <> 0 AND
+          chute_raw_occupied = 0 AND chute_raw_reserved = 0;
+      END_IF;
+      chute_seen := chute_raw_seq;
+      IF chute_valid THEN
+        chute_raw_ack := chute_seen; chute_quality := 1; chute_age := 0;
+        IF chute_raw_occupied > chute_view_occupied THEN
+          chute_accounted_token := chute_raw_accepted_token;
+          chute_accounted_serial := chute_raw_accepted_serial;
+          chute_accounted_seq := chute_raw_accepted_seq;
+        END_IF;
+        chute_view_trailer := 2; chute_view_occupied := chute_raw_occupied;
+        IF chute_raw_full = 1 THEN
+          IF chute_state <> 2 THEN chute_state := 1; END_IF;
+        ELSIF chute_state = 1 OR chute_state = 2 THEN
+          IF chute_empty_ack = chute_empty_seq AND chute_empty_result = 1 AND
+             chute_empty_seq <> 0 THEN
+            chute_state := 3;
+          ELSE
+            chute_quality := 3; chute_state := 4; sorter_run := FALSE;
+          END_IF;
+        END_IF;
+      ELSE
+        chute_quality := 3; chute_state := 4; sorter_run := FALSE;
+      END_IF;
+    ELSIF chute_age < 32000 THEN
+      chute_age := chute_age + 1;
+    END_IF;
+    IF chute_age > 15 THEN
+      chute_quality := 2; chute_state := 4; sorter_run := FALSE;
+    END_IF;
+    IF chute_action_seq <> 0 AND chute_action_seq <> chute_action_seen THEN
+      chute_action_expect := chute_action_seen + 1;
+      IF chute_action_expect > 30000 THEN chute_action_expect := 1; END_IF;
+      chute_action_seen := chute_action_seq;
+      chute_action_ack := chute_action_seq;
+      chute_action_result := 3;
+      IF chute_action_seq = chute_action_expect AND
+         chute_action_trailer = 2 AND
+         chute_action_epoch_lo = epoch_active_lo AND
+         chute_action_epoch_hi = epoch_active_hi AND
+         chute_action_nonce = reset_nonce AND chute_quality = 1 THEN
+        chute_action_result := 2;
+        IF chute_action_op = 1 AND chute_state = 1 THEN
+          chute_state := 2; chute_action_result := 1;
+        ELSIF chute_action_op = 2 AND chute_state = 2 AND
+              chute_raw_reserved = 0 AND chute_view_occupied = 3 THEN
+          chute_empty_next := chute_empty_next + 1;
+          IF chute_empty_next > 30000 THEN chute_empty_next := 1; END_IF;
+          chute_empty_trailer := 2;
+          chute_empty_epoch_lo := epoch_active_lo;
+          chute_empty_epoch_hi := epoch_active_hi;
+          chute_empty_nonce := reset_nonce;
+          chute_empty_result := 0;
+          chute_empty_seq := chute_empty_next;
+          chute_action_result := 1;
+        ELSIF chute_action_op = 3 AND chute_state = 3 AND
+              chute_raw_occupied = 0 AND chute_raw_reserved = 0 AND
+              chute_raw_full = 0 AND chute_empty_ack = chute_empty_seq AND
+              chute_empty_result = 1 AND plant_fault = 0 AND z_fault = 0 AND
+              pe_fault_mask = 0 AND epoch_fault = 0 AND xle_liveness = 0 THEN
+          chute_state := 0; chute_action_result := 1;
+          chute_resume_grace := 15;
+        END_IF;
+      END_IF;
+    END_IF;
+    IF chute_quality = 1 AND chute_state = 0 THEN
+      chute_permissive := 1;
+    END_IF;
+  END_IF;
+ELSE
+  chute_state := 0; chute_quality := 0; chute_age := 0;
+  chute_view_trailer := 0; chute_view_occupied := 0;
+  chute_permissive := 1;
+  chute_resume_grace := 0;
+END_IF;
+
 (* A plant commit is a seqlock over all three zone rows. Only the PLC may
    publish these bounded states. The rows cannot create route or outcome. *)
 IF plant_mode AND accumulation_mode THEN
@@ -1367,7 +1559,16 @@ IF plant_mode AND accumulation_mode THEN
         z_valid := z_raw_seq[j] <> 0 AND z_raw_seq[j] <> z_view_seq[j] AND
           z_raw_zone[j] >= 1 AND z_raw_zone[j] <= 7 AND
           z_raw_motion[j] >= 1 AND z_raw_motion[j] <= 7 AND
-          z_raw_hold[j] >= 0 AND z_raw_hold[j] <= 4 AND
+          z_raw_hold[j] >= 0 AND z_raw_hold[j] <= 5 AND
+          (z_raw_hold[j] <> 5 OR
+          (chute_mode AND chute_permissive = 0 AND
+            st_dest[j] = 2 AND
+            (z_raw_motion[j] = 2 OR z_raw_motion[j] = 3)) OR
+           (chute_mode AND chute_resume_grace > 0 AND
+            st_dest[j] = 2 AND z_view_hold[j] = 5 AND
+            z_view_zone[j] = z_raw_zone[j] AND
+            z_view_motion[j] = z_raw_motion[j] AND
+            (z_raw_motion[j] = 2 OR z_raw_motion[j] = 3))) AND
           z_raw_dwell[j] >= 0 AND z_raw_dwell[j] <= 32000 AND
           z_pos[j] >= 0 AND z_pos[j] <= 300;
         IF j = 0 THEN
@@ -1826,7 +2027,14 @@ IF plant_mode THEN
           plant_fault := 3; sorter_run := FALSE;
         END_IF;
       ELSIF plant_event_type = 4 AND st_state[j] = 4 AND
-            plant_event_actual >= 1 AND plant_event_actual <= 9 THEN
+            plant_event_actual >= 1 AND plant_event_actual <= 9 AND
+            (NOT chute_mode OR plant_event_actual <> 2 OR
+             chute_view_occupied < 3) THEN
+        IF plant_mode AND plant_event_actual = 2 THEN
+          chute_accepted_token := plant_event_token;
+          chute_accepted_serial := plant_event_serial;
+          chute_accepted_event_seq := plant_event_seq;
+        END_IF;
         st_actual[j] := plant_event_actual;
         IF st_dest[j] = plant_event_actual THEN
           st_state[j] := 5; st_reason[j] := 0;
@@ -1949,6 +2157,7 @@ IF plant_mode THEN
   IF tmr2 < rate_sp_2 THEN tmr2 := tmr2 + 1; END_IF;
   IF tmr3 < rate_sp_3 THEN tmr3 := tmr3 + 1; END_IF;
   IF NOT plant_request_pending AND sorter_run AND plant_fault = 0 AND
+     (NOT chute_mode OR chute_quality = 1) AND
      epoch_fault = 0 AND xle_liveness = 0 AND hb_ready AND hb_age <= 50 AND
      (NOT accumulation_mode OR (z_fault = 0 AND z_view_age <= 15)) THEN
     slot_index := -1;

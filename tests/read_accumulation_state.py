@@ -41,7 +41,7 @@ def read_state(client, drive_factory=ModbusTcpClient, include_vfds=False):
         finally:
             drive.close()
 
-    return {"reader_schema": 2, "identity": regs(249, 1)[0],
+    return {"reader_schema": 3, "identity": regs(249, 1)[0],
             "coils_880_920": coils(880, 41),
             "setpoints_200_210": regs(200, 11),
             "photoeye_config_744_747": regs(744, 4),
@@ -61,6 +61,11 @@ def read_state(client, drive_factory=ModbusTcpClient, include_vfds=False):
             "xle_health": regs(568, 2),
             "zone_view": regs(766, 23),
             "zone_raw": regs(751, 15) + regs(784, 2),
+            "chute": {"mode": coils(921, 1)[0],
+                      "configuration": regs(825, 2),
+                      "validated": regs(803, 22),
+                      "accepted_terminal": regs(827, 3),
+                      "raw": regs(790, 13) + regs(830, 3)},
             "plant_raw": [regs(600, 10), regs(610, 10), regs(660, 10)],
             "trailer_counters": regs(222, 9), "vfds": drives}
 
