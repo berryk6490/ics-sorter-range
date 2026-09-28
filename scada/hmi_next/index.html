@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sorter · Control Room</title>
+  <link rel="stylesheet" href="/hmi-next/style.css">
+  <script type="module" src="/hmi-next/app.js"></script>
+</head>
+<body>
+  <header class="mast">
+    <div class="brand"><span class="brand-mark">S<span>·</span>R</span><div><strong>PRIMARY SORTER</strong><small>CONTROL ROOM · THREE LANE RANGE</small></div></div>
+    <div class="mast-right"><span id="clock" class="clock"></span><span id="connection" class="connection offline">AWAITING TELEMETRY</span><a href="/" class="old-page">CLASSIC HMI ↗</a></div>
+  </header>
+
+  <main>
+    <section class="headline">
+      <div><p class="eyebrow">PROCESS OVERVIEW <span class="sep">/</span> LIVE PLANT</p><h1>Sortation floor</h1><p class="intro" id="status-line">Waiting for PLC-backed OPC UA data…</p></div>
+      <div class="headline-controls"><span class="readout" id="mode-pill">MODE UNKNOWN</span><button class="operator-button" id="operator-toggle" disabled>START SORTER</button></div>
+    </section>
+
+    <div id="alarm-strip" class="alarm-strip" role="status" aria-live="polite"><span class="quiet-dot"></span> No active process alarms</div>
+
+    <section class="stats" aria-label="Process counts">
+      <article class="stat"><span>INDUCTED</span><strong id="stat-inducted">—</strong><small>packages this run</small></article>
+      <article class="stat"><span>CONFIRMED LOADS</span><strong id="stat-loaded">—</strong><small>nine trailer counters</small></article>
+      <article class="stat"><span>IN FLIGHT</span><strong id="stat-flight">—</strong><small>of three global slots</small></article>
+      <article class="stat"><span>LOAD RATE</span><strong id="stat-rate">—</strong><small>packages / minute</small></article>
+      <article class="stat"><span>RECIRCULATED</span><strong id="stat-recirc">—</strong><small>terminal outcomes</small></article>
+    </section>
+
+    <div class="layout">
+      <section class="panel map-panel" aria-labelledby="map-title">
+        <div class="panel-head"><div><p class="eyebrow">LIVE SCHEMATIC</p><h2 id="map-title">Conveyor and merge</h2></div><span class="subtle">Position from PLC validated plant rows · 20 cells / belt</span></div>
+        <div class="schematic-scroll">
+          <svg id="sorter-map" viewBox="0 0 1070 484" role="img" aria-label="Three induction lanes and three outbound belts">
+            <defs><pattern id="grid" width="39" height="39" patternUnits="userSpaceOnUse"><path d="M 39 0 L 0 0 0 39" fill="none" stroke="#283442" stroke-width="1"/></pattern><linearGradient id="belt" x1="0" x2="1"><stop stop-color="#21323e"/><stop offset="1" stop-color="#17252f"/></linearGradient></defs>
+            <rect width="1070" height="484" fill="#111b24"/><rect x="145" y="35" width="795" height="420" fill="url(#grid)" opacity=".6"/>
+            <g id="tracks"></g><g id="packages"></g>
+          </svg>
+        </div>
+        <div class="map-key"><span><i class="key-package"></i>Package, by induction lane</span><span><i class="key-hold"></i>Physical hold</span><span><i class="key-stale"></i>Stale / unavailable position</span><span class="map-note">Select a package for sensor and route details</span></div>
+        <div class="trailer-grid" id="trailer-grid"></div>
+      </section>
+
+      <aside class="side">
+        <section class="panel selection"><div class="panel-head"><div><p class="eyebrow">PACKAGE INSPECTOR</p><h2>Selected parcel</h2></div></div><div id="package-detail" class="empty-detail">Select a package on the sorter map.</div></section>
+        <section class="panel chute"><div class="panel-head"><div><p class="eyebrow">MEASURED SENSOR</p><h2>Trailer 2 chute</h2></div><span class="tiny" id="chute-quality">UNAVAILABLE</span></div><div class="chute-meter"><div class="chute-fill" id="chute-fill"></div></div><div class="chute-count" id="chute-count">— / — <span>occupied</span></div><p class="chute-state" id="chute-state">Waiting for a fresh PLC sample.</p><div class="actions" id="chute-actions"></div><p class="fine-print">Only trailer 2 has a measured full/empty sensor. Other trailer tiles show confirmed load counts.</p></section>
+        <section class="panel activity"><div class="panel-head"><div><p class="eyebrow">HMI OBSERVATIONS</p><h2>Recent changes</h2></div><span class="tiny">CURRENT SESSION</span></div><ol id="activity-list"><li>Waiting for live telemetry.</li></ol><p class="fine-print">Changes observed by this browser; authoritative outcomes remain in PLC and XLe journal.</p></section>
+      </aside>
+    </div>
+
+    <section class="panel drive-panel"><div class="panel-head"><div><p class="eyebrow">MOTION HEALTH</p><h2>Drive feedback</h2></div><span class="subtle">Feedback RPM is measured by each simulated VFD</span></div><div class="drive-grid" id="drive-grid"></div></section>
+    <footer>SCADA OPC UA → HMI API → BROWSER <span>•</span> Positions freeze when telemetry is stale. Operator commands use the existing HMI control path.</footer>
+  </main>
+</body>
+</html>
