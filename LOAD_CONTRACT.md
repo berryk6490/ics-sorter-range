@@ -1,8 +1,9 @@
 # Plant-owned drag load, version 2 (proposal, not implemented)
 
 This contract moves the mechanical load a drive carries from the PLC to the
-drives plant while plant mode (coil 918) is on. Load is physical truth: the
-package is on the belt whether or not the controller believes it is. Nothing
+drives plant while plant mode (coil 918) is on. Load follows plant-model
+membership rather than controller belief; non-stateful door removal can still
+undercount physical footprint overlap, as described below. Nothing
 here is implemented. No PLC, drive, plant, SCADA or manifest file has changed
 for it, and every statement about current behavior below cites the source it
 was read from at commit b39d7e6.
@@ -14,11 +15,14 @@ drag in plant mode. A moving package contributes 0.9 A of torque current; a
 package held against a *running* belt by ZONE_FULL, MERGE_CAPACITY, or
 CHUTE_FULL contributes 3.6 A. No changes in this document are deployed.
 
-**Read this first.** The three global PLC slots cap a belt at three packages.
-Three moving packages cannot overload a drive, but three held packages at
-rated speed can trip its existing thermal model in about 60 seconds. This is
-a proposed hold-abuse path, not a claim that a particular run has achieved
-three simultaneous holds on one running belt.
+**Read this first.** At most three packages own PLC slots at once, *plus*
+terminal packages still clearing a door in the plant model: XLe can release a
+terminal row before the package's rear clears the door (`services/xle.py:459-487`,
+`devices/plant.py:523-528`). Three moving packages cannot overload a drive,
+but three held packages at rated speed can trip its existing thermal model in
+about 60 seconds. Extra clearing packages only make a trip easier, not harder;
+neither the slot count nor this arithmetic demonstrates three simultaneous
+holds on one running belt. Count actual per-belt model membership, not slots.
 
 ## Current behavior
 
@@ -34,7 +38,7 @@ load 0 for the whole plant-mode run. No guard was found for enabling plant
 mode without a reset; in that case each array freezes at its last legacy
 contents and the drives see that frozen count instead of zero.
 
-The drive reads registers 0..8 once per 100 ms tick (`devices/vfd.py:63`,
+The drive reads registers 0..8 on a nominal 100 ms tick (`devices/vfd.py:63`,
 `70-71`) and computes current as magnetising plus windage scaled by speed
 plus 0.9 A per unit of `belt_load` (`devices/vfd.py:49-51`, `94-97`). The
 inverse-time accumulator gains `(I/rated)^2 - 1` per second above 12.0 A and
@@ -53,7 +57,7 @@ status or fault word, only speed feedback, so a thermal trip reaches the PLC
 as zero feedback (`Sorter.st:664-684`).
 
 The plant is already a Modbus master to all six drives on the `drives` VM. It
-reads register 5 from each every loop (`devices/plant.py:19-20`, `786`) and
+reads register 5 from each every loop (`devices/plant.py:19-20`, `693-697`, `786`) and
 writes nothing to them. The drive addresses `.21`..`.26` sit on the same NIC
 as the plant (`NETWORK_BASELINE.md:49`), so a plant write to a drive is host
 local and adds no network flow.
@@ -62,7 +66,7 @@ SCADA polls drive registers 0..8 (`scada/opcua_server.py:100-105`, `175`) and
 publishes register 2 as `BeltLoad` beside `ThermalLoad`
 (`scada/opcua_server.py:465-472`, `664-672`). The HMI renders both
 (`scada/hmi_ua.py:123-126`, `317-318`, `916-917`). The typed accumulation
-snapshot reads 0..8 (`tests/read_accumulation_state.py:34-40`) and records
+snapshot reads 0..8 (`tests/read_accumulation_state.py:26-40`) and records
 `belt_load` and `thermal` as informational
 (`tests/accumulation_state_snapshot.py:224-225`).
 
@@ -87,12 +91,12 @@ which speed it assumes.
 In plant mode the PLC allocates a package only into one of three global slots
 (`Sorter.st:2163-2168`, `THREE_SLOT_PLANT.md:42`), and the plant further holds
 each induction until the previous package on that lane has cleared one pitch
-(`devices/plant.py:319-323`, `466-471`). A host saturation run of
-`PlantModel` with default 60 cm packages and 100 cm spacing, all three lanes
-requesting continuously, outbounds running and stopped, free and accumulation
-modes, never placed more than three packages on any belt. Three packages give
-4.8 + 3(0.9) = 7.5 A at rated speed *if moving*. For three held on a running
-belt, the steady rated-speed current is 1.8 A magnetising + 3.0 A windage +
+(`devices/plant.py:319-323`, `466-471`). This is not a physical three-package
+per-belt maximum after terminal release; a retained terminal package may share
+a belt with a newly inducted package. No reproducible saturation result proves
+otherwise. Three packages give 4.8 + 3(0.9) = 7.5 A at rated speed *if
+moving*. For three held on a running belt, the steady rated-speed current is
+1.8 A magnetising + 3.0 A windage +
 3(3.6 A) drag = **15.6 A**. With 12.0 A rated and a trip accumulator of 40,
 the heating rate is (15.6 / 12)^2 - 1 = 0.69 per second, giving
 40 / 0.69 = **58.0 s** from a cold accumulator already at rated speed.
@@ -121,17 +125,23 @@ Direct writes to public register 2 cannot alter plant-mode current or heat.
 
 Each drive also listens on a distinct **127.0.0.1-only** port on the drives VM
 (proposed 15021..15026, mapped to induct 1..3 and outbound 1..3). The plant
-is the sole authorized writer of a private, atomic sample:
-`plant_mode_active`, `plant_drag_x10`, and a monotonically wrapping sequence
-number. `plant_drag_x10` is torque-current contribution in tenths of an
-ampere, not a package count; 9 means one riding package and 36 one held
-package. With the current three-slot limit it is 0..108 (allow up to 720 for
-20 packages only if the model is later expanded). The private mode indicator
+is the intended sole writer of a private, atomic sample:
+`plant_mode_active`, `plant_drag_x10`, and a monotonically wrapping
+`plant_load_seq`. `plant_drag_x10` is torque-current contribution in tenths
+of an ampere, not a package count; 9 means one riding package and 36 one held
+package. Do not cap it at 108 from the three PLC slots: count all members on
+each belt, including terminal packages still clearing the door. Define and
+test the representable maximum and fail closed on overflow, never truncate or
+clamp physical drag to a slot-derived maximum. The private mode indicator
 must persist independently of sample freshness so a timeout cannot switch
-the drive to legacy load. The listener is not reachable from any other guest;
-loopback binding alone does not authenticate local writers, so an OS-enforced
-plant-service-only connection policy is required. A compromised drives host
-or plant account is explicitly outside this attack model.
+the drive to legacy load. The trust boundary is the drives guest OS: physics
+channel samples are trusted only insofar as that guest and its plant process
+are trusted. Code execution on the drives guest, including another local
+writer or compromise of the plant account, is out of scope for physics-channel
+attacks. A loopback bind limits ordinary inter-guest reachability but does not
+authenticate local writers. Deployment preflight must read back all six
+listeners as bound *only* to 127.0.0.1 (ports 15021..15026), reject wildcard
+or ICS-NIC binds, and check host routing/proxy policy before claiming isolation.
 
 Expose drive-generated diagnostics to SCADA on public port 502 as read-only
 registers 9 (`load_source`: 0 legacy, 1 plant fresh, 2 plant stale, 3 invalid
@@ -139,9 +149,9 @@ or no initial sample) and 10 (`load_used_x10`: actual torque contribution).
 The public server must reject FC06/FC16 writes to these diagnostic registers;
 they must never feed the drive's physics, even if another client writes port
 502. The PLC's existing 0..8 mapping is unchanged; SCADA reads 0..10 instead
-of 0..8. The private sample is not exported on the public endpoint. Exact
-local writer isolation and public write rejection need host tests before any
-implementation or deployment.
+of 0..8. The private sample is not exported on the public endpoint. Host tests
+must cover public write rejection and local fail-closed behavior; deployment
+preflight must check actual loopback binding before any live validation.
 
 ## Load definition
 
@@ -154,14 +164,15 @@ outbound belt `p.outbound` after that (`devices/plant.py:397-398`,
 yet inducted do not count (`devices/plant.py:319-326`, `466-474`), and neither
 do terminal records in `model.recent`.
 
-The model removes a package when its footprint leaves the belt: at the lane
-recirculation exit, cell 19 (`devices/plant.py:101`, `375-381`, `565-571`),
-or once its rear has passed the trailer door on an outbound
-(`devices/plant.py:345-351`, `523-528`). Membership in `model.packages` on a
-belt is therefore the same as footprint overlap with that belt, using package
-front `p.position` or `p.outbound_position` and length `p.length`
-(`devices/plant.py:185-195`). The model does not represent a package
-straddling a divert; at the divert step it moves wholly from lane to outbound,
+**Load is membership in `model.packages` on that belt**, not a general
+footprint-overlap assertion. Lane recirculation removes a package at cell 19
+(`devices/plant.py:101`, `375-381`, `565-571`). Stateful outbound mode retains
+it until the rear passes the trailer door (`devices/plant.py:523-528`); the
+other stateful path also tests rear clearance (`devices/plant.py:345-351`).
+Non-stateful outbound mode removes it as soon as its *front* crosses the door
+(`devices/plant.py:329-344`) and thus undercounts while its rear still overlaps
+the belt. The model does not represent a package straddling a divert; at the
+divert step it moves wholly from lane to outbound,
 so it is never counted on two belts. A moving/riding package contributes
 9 tenths of an ampere, matching
 the current legacy coefficient (`devices/vfd.py:51`). A stationary package
@@ -187,37 +198,48 @@ its Modbus time (`devices/plant.py:859`) and 500 ms after an error
 (`devices/plant.py:860-862`).
 The drive samples every 100 ms.
 
-The drive treats an authenticated plant sample as fresh while its sequence
-has changed within the last 30 drive ticks (nominally 3.0 s). That matches
-the PLC's plant heartbeat bound of 30 scans at a 100 ms task (`Sorter.st:1826`,
-`3399`); actual wall-clock timing still depends on scan cadence. A stale
-sample keeps the **last valid drag**, sets `load_source = 2`, and cannot
-select public register 2 while plant mode remains active. An out-of-range or
+**Drive-local fail-closed rule:** measure elapsed time monotonically since the
+last *applied new* `plant_load_seq` on each VFD, not since TCP acceptance or a
+repeated value. If no new sequence arrives within 500 ms in plant mode, set
+latched `fault_code = 3` (simulation integrity lost), stop the VFD locally,
+and freeze thermal integration. The watchdog must remain effective even when
+the Modbus listener accepts traffic that the simulation tick does not apply;
+host tests must simulate accepted-but-unapplied, repeated, and partial updates.
+Hold the **last valid drag** only inside that 500 ms window; report
+`load_source = 2` on missed expected updates during the window, not as a
+license to run indefinitely. At timeout retain the last drag for diagnosis,
+but no current/heat integration continues under fault 3. An out-of-range or
 malformed private sample does not replace the last valid value and sets
-`load_source = 3`; without *any* valid initial sample the drive must inhibit
-run in plant mode, not borrow legacy load. Mode entry requires a valid active
-sample before energizing; its trusted active marker remains latched on
-timeout. A mode-off transition is accepted only through the trusted local
-plant/control handshake with drives stopped, not through sequence expiry.
+`load_source = 3`; it cannot reset the freshness clock. Without a valid fresh
+active sample, entry into plant mode or attempted run must produce fault 3 and
+must never borrow public register 2. The trusted plant-mode indicator cannot
+expire into legacy selection. A mode-off transition is accepted only in a
+stopped, trusted local plant/control handshake; fault 3 must not be cleared by
+a PLC run command or fault-reset bit without fresh valid identity and an
+explicit stopped restoration. A run with fault 3 is **invalid evidence**, not
+an overload/attack outcome; preserve the fault and reject functional claims.
 
-When the plant is absent or stalls, the PLC raises plant fault 1 after 30
-scans and clears `sorter_run` (`Sorter.st:1826`, `1831`). Once `sorter_run` is
-off, the PLC commands every drive stopped (`Sorter.st:1052-1092`), and a
-stopped drive cools whatever its load (`devices/vfd.py:101-111`). The drive
-holds the last valid plant drag during the heartbeat-to-stop window; it does
-not hide a stalled plant by silently switching to the PLC's zero legacy load.
-**The plant must withhold its PLC heartbeat if any private drive update fails.**
-Today it publishes heartbeat before `model.step` and before any proposed
-private drive write (`devices/plant.py:773-774`, `805`); that order must change
-in implementation. Otherwise the plant could keep the PLC heartbeat fresh
-while a drive's physics sample goes stale, and the assumed 3.0 s stop would
-never occur. Host tests must cover that failure path and the stopped-drive
-restoration separately.
+The PLC independently raises plant fault 1 when heartbeat age is **greater
+than** 30 scans and clears `sorter_run` (`Sorter.st:1819-1831`; nominal 100 ms
+task at `Sorter.st:3399`). It then commands drives off
+(`Sorter.st:1052-1092`); the existing VFD can still draw current while
+decelerating (`devices/vfd.py:83-111`). Neither that scan count nor PLC command
+delivery bounds physical stale-drag exposure at 3.0 s. The **drive-local
+500 ms fault** above is the primary integrity stop, independent of PLC
+heartbeat; no hard wall-clock stop can be inferred from PLC scans alone.
+**The plant must also withhold its PLC heartbeat if any private drive update
+fails**, as defense in depth. Today it publishes heartbeat before `model.step`
+and before any proposed private drive write (`devices/plant.py:773-774`,
+`805`); move that write after all six private updates, with failed/partial
+updates withholding the heartbeat. A successful transport write alone is not
+proof of applied freshness; host tests must cover the local watchdog, this
+heartbeat failure path, and stopped-drive restoration separately.
 
 On a cold plant start during an active run the plant refuses to act and
 withholds its heartbeat (`devices/plant.py:741-748`); it sends no new private
-sample, so the drive retains the last valid drag (or inhibits run if it has
-none). On a new run identity the plant builds an empty model
+sample, so the drive may hold last drag only until the local 500 ms fault (or
+fault immediately on attempted mode entry without a valid sample). On a new
+run identity the plant builds an empty model
 (`devices/plant.py:752-761`) and must establish an authenticated active zero
 sample before the drives may run. These are implementation requirements, not
 behaviors of the currently deployed drive.
@@ -228,12 +250,14 @@ With plant mode off the plant has no active run and skips all publication
 (`devices/plant.py:751`, `778-780`), so the drives use register 2 unchanged
 after a trusted mode-off handshake. The legacy arrays, their load publication
 and the legacy gap-collapse behavior are untouched. No sequence-zero release
-or timeout fallback is used: the last valid drag stays selected throughout
-plant mode, including plant failure, until a safe mode transition completes.
+or timeout fallback is used: last valid drag is selected only inside the
+500 ms grace window in plant mode; timeout latches fault 3 and stops, not
+legacy selection. A safe stopped transition is required before legacy use.
 
 The PLC program, `mbconfig.cfg`, the located variables and `%QW102`..`%QW117`
-keep their current meaning. In plant mode those load words still carry the
-frozen legacy count but are ignored by the drive even when the plant is stale.
+keep their current meaning. In plant mode those load words carry zero after
+reset or a frozen prior count after an unguarded mode change; the drive ignores
+them during the fresh/grace period and after fault 3.
 Consequently neither an explicit release-to-register-2 mechanism nor a guard
 against frozen legacy counts is part of this load contract (former decisions
 5 and 6). The separate mode-entry handshake must still be tested fail-closed.
@@ -256,8 +280,9 @@ the separate private channel. The comment at
     starting cold from rest with the existing ramp. Three moving packages
     draw only 7.5 A and cannot trip the thermal model.
 
-The paragraph at `devices/vfd.py:29-35` identifies gap-collapse overload as
-legacy-mode only and hold abuse as the plant-mode overload path.
+The paragraph at `devices/vfd.py:29-35` must be corrected to identify
+gap-collapse overload as legacy-mode only and hold abuse as the proposed
+plant-mode overload path; the current text does not make that distinction.
 
 ## Attacks
 
@@ -279,7 +304,7 @@ one belt at rated speed contributes 3(3.6) = 10.8 A drag, for 15.6 A total;
 from a cold accumulator that trips in 40 / ((15.6/12)^2 - 1) = 58.0 s at
 speed (about 60 s including the ramp). This requires three *simultaneous*
 held packages on the *same running belt* and is not demonstrated by the
-three-slot upper bound alone. The trip reaches the PLC as zero speed feedback,
+three-slot allocation alone. The trip reaches the PLC as zero speed feedback,
 and the plant reports
 drive-stopped motion (`devices/plant.py:501`, `575-576`). At the default low
 200/233 rpm references three held packages give about 12.9 A total and a
@@ -296,13 +321,16 @@ references, not rated speed, and are not a plant-mode three-slot scenario.
 
 The private loopback plant-to-drive physics channel is **excluded from the
 attack model**. No direct `plant_drag` or sequence spoofing, suppression or
-second writer is an attack path in this contract. Other guests cannot reach
-the listener; local compromise of the drives VM or plant service is out of
-scope. Do not count public-port register writes as equivalent to changing
-physical drag. Process-side manipulation that genuinely creates holds remains
-in scope. A plant failure is a reliability case: `load_source = 2` marks
-stale data, holds last drag, and the PLC heartbeat stops the sorter after its
-nominal 3.0 s bound; it never selects register 2 in plant mode.
+second writer is an in-scope attack path: this assumes the drives guest OS and
+plant process are trusted; code execution on that guest is out of scope.
+Loopback-only reachability must be checked at deployment, not inferred from
+the proposed bind. Do not count public-port register writes as equivalent to
+changing physical drag. Process-side manipulation that genuinely creates
+holds remains in scope. A failed physics update is a reliability/integrity
+failure: hold last drag only inside the 500 ms grace window, then fault 3,
+stop locally, freeze thermal and invalidate the run as attack evidence.
+The PLC heartbeat is additional fault signaling, not the stale-drag timer;
+register 2 is never selected in plant mode.
 
 Detection can compare drive `load_used_x10` and `load_source` with the
 plant/PLC hold and motion telemetry. SCADA's `BeltLoad` reads controller-owned
@@ -314,55 +342,73 @@ from the legacy `BeltLoad`; the physical load is not a writable PLC parameter.
 
 | File | Current SHA-256 | Change |
 | --- | --- | --- |
-| `devices/vfd.py` | `c81fed84ba284eb78cb760331bbf63b79ff1b309fd43945b6f68db9d94d3c62d` | separate loopback physics listener and state, plant-mode drag selection with hold-last on stale, read-only public diagnostics 9..10, docstring; a pure tick function for host tests |
+| `devices/vfd.py` | `c81fed84ba284eb78cb760331bbf63b79ff1b309fd43945b6f68db9d94d3c62d` | separate loopback physics listener and state, 500 ms local integrity watchdog/fault 3 with thermal freeze, hold-last only in grace window, read-only public diagnostics 9..10, docstring; a pure tick function for host tests |
 | `devices/plant.py` | `e2331171c82af5d304b0b23b5108c30249f738ce14804baf9dc6cd226dae46f3` | per-belt riding/held drag after each step, private samples and safe mode handshake; withhold PLC heartbeat on any private write failure; no physics writes to port 502 |
 | `scada/opcua_server.py` | `2113361697ee9171b21313e96f4a484ad49f29f94a983e2da7075f28917c19c8` | read 11 public drive registers, publish actual drag and source as read-only diagnostic nodes |
 | `scada/hmi_ua.py` | `b7f9d266c3126e541e5abe35c86f66978fb4c4f84834de0acead7a8bc603f2bb` | show the load actually used and its source |
 | `tests/read_accumulation_state.py` | `7adcabb70b0ff648dec21c23bacd16df6b21466caac9ac2eb3a7f8d967362aa8` | read 11 public drive registers; new reader schema |
 | `tests/accumulation_state_snapshot.py` | `1781df6863475ef471c41a9121459066eec09ab466e6afe125a5417f5cdca0d4` | new drive fields, informational |
-| `deploy/README.md` | not in manifest | public diagnostics, private listener ports, service-account isolation and mode handshake |
-| drive service/network policy | not in manifest | bind private listener only to 127.0.0.1; enforce plant-account-only local writes; deny public writes to diagnostics |
+| `deploy/README.md` | not in manifest | public diagnostics, private listener ports, trusted-host attack boundary, loopback preflight and stopped mode handshake |
+| drive service/network policy | not in manifest | bind private listener only to 127.0.0.1; preflight all six binds and routing/proxy policy; deny public writes to diagnostics |
 | `deploy/deployment_manifest.json` | owner update | new hashes for `vfd.py`, `plant.py`, both SCADA files and both copies of `read_accumulation_state.py` |
 
 New host tests would cover 9/36-tenths coefficients, the rated-speed 58 s
 three-hold curve and ramp, mixed riding/held loads, legacy selection only
-outside plant mode, stale hold-last/source=2, PLC heartbeat withheld if any
-private drive update fails, invalid/no-initial fail-closed,
-sequence freshness, safe mode transition, no public-port physics writes,
-read-only diagnostics and loopback/plant-writer isolation, per-belt ownership
-through divert/removal, and the three-slot bound. `Sorter.st`
-(`952ff58580a2d1a0444b6b0e91f745ff74a923484607645173909c5ab4be3dc6`), the
-and `tests/network_flows.json` need no PLC or inter-guest flow change; the
-drive service and local writer policy do change in any future implementation.
+outside plant mode, and hold-last/source=2 solely inside the 500 ms window.
+Test missing/repeated/accepted-but-unapplied sequence, timeout fault 3,
+stopped output and frozen thermal; a mode transition or run command without a
+fresh plant sequence must fault 3, **never** select legacy load. Test invalid
+samples, fresh stopped restoration, heartbeat withholding on any of six failed
+or partial updates, public diagnostic write rejection and per-belt membership
+through divert and mode-specific removal. A lifecycle test must assert each
+belt's actual `model.packages` count and drag through terminal release,
+rear clearance, a slow/stopped outbound, and reinduction; it must not derive a
+three-package cap solely from PLC slots. Deployment preflight must establish
+all six physics ports are loopback-only before a run. `Sorter.st`
+(`952ff58580a2d1a0444b6b0e91f745ff74a923484607645173909c5ab4be3dc6`)
+and `tests/network_flows.json` need no PLC or inter-guest flow change; drive
+service binding and diagnostics policy do change in a future implementation.
 
 ## Decisions and remaining design work
 
-1. **Adopted for this proposal:** riding = 0.9 A, held against a running belt
-   = 3.6 A; three held can trip in about 60 s at rated speed. No slot-count
-   increase or fabricated package load. Realizing three concurrent holds on
-   one belt still requires a bounded model test.
-2. **Sequence counter is the only remaining channel-field choice:** retain a
-   private per-drive monotonic sequence (proposed 1..30000, wrapping to 1)
-   to detect repeated samples even if drag is unchanged; finalize its width,
-   wrap handling and atomicity during design. `load_source` and
-   `load_used_x10` are required read-only diagnostics, not alternatives.
-3. **Settled:** after a nominal 3.0 s stale interval, keep the last valid
-   plant drag and set source 2; never select register 2 while plant mode is
-   active. PLC heartbeat is the stop mechanism. Inhibit running without an
-   initial valid active sample; reject malformed/out-of-range samples rather
-   than clamping them (source 3 and last valid drag retained).
-4. **Settled attack boundary:** a separate loopback-only physics listener
-   accepts writes only from the plant service; public port 502 keeps its
-   existing command/reference inputs and adds only read-only *drag*
-   diagnostics, never a physical drag input. Local host/service compromise
-   and physics-channel writes are excluded from the attack model. Host-side
-   enforcement, not bind address alone, must be tested before deployment.
-5. **Not applicable:** no sequence-zero release to PLC register 2 in plant
-   mode. Legacy selection requires a stopped, trusted mode-off handshake.
-6. **Not applicable:** frozen legacy arrays cannot affect plant-mode load,
-   fresh or stale. A mode-entry interlock is required independently.
-7. SCADA and typed-snapshot schema changes remain informational as VFD load
-   is today (`PHASE2A_RESTORATION.md:40`); specify the final names in Phase 2
-   implementation review, not by assuming existing `BeltLoad` is physical.
-8. Drive host tests require extracting the tick from the infinite `simulate`
-   loop (`devices/vfd.py:66-125`); keep its legacy arithmetic intact.
+1. **Closed coefficient choice, open reachability proof:** riding = 0.9 A,
+   held against a running belt = 3.6 A. Three held trip in about 60 s at rated
+   speed if sustained; slot count does not bound terminal packages still
+   clearing a door. A per-belt lifecycle test and bounded three-hold model
+   demonstration are required before claiming the attack is reachable.
+2. **Open protocol detail; blocks channel implementation:** use a private
+   per-drive `plant_load_seq`, proposed 1..30000 wrapping to 1, with a new
+   *applied* value resetting the local 500 ms watchdog. Finalize width,
+   wrap/duplicate handling, atomic publication and local watchdog scheduling
+   in the implementation design. `load_source` and `load_used_x10` are
+   required read-only diagnostics, not alternatives.
+3. **Closed failure policy:** hold last valid drag for at most the 500 ms
+   grace window, then latch fault 3, stop locally, freeze thermal and mark
+   the run invalid. No initial fresh active sample or mode transition without
+   a fresh sequence also faults 3; never borrow register 2 in plant mode.
+   Reject malformed/out-of-range samples without resetting freshness.
+   PLC heartbeat withholding on failed private updates is defense in depth,
+   not a physical stop deadline.
+4. **Closed attack-model boundary, open deployment verification:** trust the
+   drives guest OS; guest code execution and private-channel writes are out
+   of scope. Public port 502 keeps its existing command/reference inputs and
+   gains only read-only drag diagnostics, not a physical drag input. Actual
+   loopback-only binding/routing and public write rejection must be tested
+   before deployment; local TCP binding alone is not writer authentication.
+5. **Closed former release alternative:** no sequence-zero fallback to PLC
+   register 2 in plant mode. A stopped trusted mode-off handshake is required.
+6. **Closed former frozen-array alternative, conditional:** frozen legacy
+   arrays never affect plant-mode physics if the mode-entry interlock and
+   no-register-2-fallback rule pass their host tests. No separate PLC array
+   guard is proposed.
+7. **Open schema detail; blocks cross-component integration, not drive-model
+   prototyping:** final SCADA and typed-snapshot field names remain to be set
+   in implementation review; the new fields are informational as VFD load is
+   today (`PHASE2A_RESTORATION.md:40`). Do not label legacy `BeltLoad` physical.
+8. **Implementation task, not an open physics choice:** extract the VFD tick
+   from the infinite `simulate` loop (`devices/vfd.py:66-125`) for host tests;
+   keep legacy arithmetic intact. No code change or Phase 3 work is authorized
+   by this proposal. Open items 1 (claim verification), 2 (protocol), and 7
+   (schema), plus mode-handshake and binding tests in 3-6, block accepting a
+   complete implementation contract; they do not reopen the chosen drag
+   coefficients or attack-model boundary.
