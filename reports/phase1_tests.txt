@@ -1,0 +1,586 @@
+# Phase 1 host verification, 2026-09-28T19:32:14Z
+# Checkout: 6b49eee90ea0890798f9025ef61327195714e0fd on claude/blissful-euler-xql91l, with the Phase 1 working-tree changes
+# TESTING.md does not exist in this checkout. Commands are the host set in
+# CHUTE_FULL_CONTRACT.md:169-173 and DEPLOYMENT_RECONCILIATION.md:81.
+# Host interpreter: Python 3.11.15, venv with pexpect 4.9.0 and no pymodbus
+# SORTER_PYMODBUS_PYTHON: Python 3.11.15, pymodbus 3.6.9
+# sha256 devices/scanner.py: b9d90dadaa66bf075b055dc381d29213ee61d2cc18fdc2bcf3dcba957251d803
+
+$ python3 -m unittest tests.test_chute_full tests.test_chute_supervisory_contract tests.test_accumulation_state_snapshot -q
+----------------------------------------------------------------------
+Ran 28 tests in 0.068s
+
+OK
+exit=0
+
+$ bash tests/run_first_package.sh
+tests/run_first_package.sh: line 9: /home/kevin/vm/OpenPLC_Editor/matiec/iec2c: No such file or directory
+exit=127
+
+$ SORTER_PYMODBUS_PYTHON=<pymodbus 3.6.9 venv> PYTHONTRACEMALLOC=1 PYTHONWARNINGS=error::ResourceWarning python3 -m unittest discover -s tests -p 'test_*.py' -v
+test_accepted_route_never_enters_recirc_tail (test_accumulation.AccumulationTest.test_accepted_route_never_enters_recirc_tail) ... ok
+test_drive_stop_is_distinct_from_downstream_hold (test_accumulation.AccumulationTest.test_drive_stop_is_distinct_from_downstream_hold) ... ok
+test_fixture_bounds_and_run_scoped_cleanup (test_accumulation.AccumulationTest.test_fixture_bounds_and_run_scoped_cleanup) ... ok
+test_intentional_hold_keeps_beam_physical (test_accumulation.AccumulationTest.test_intentional_hold_keeps_beam_physical) ... ok
+test_lane_hold_propagates_and_fifo_drains (test_accumulation.AccumulationTest.test_lane_hold_propagates_and_fifo_drains) ... ok
+test_merge_and_lane_hold_preserve_boundary (test_accumulation.AccumulationTest.test_merge_and_lane_hold_preserve_boundary) ... ok
+test_merge_block_fair_three_lanes_and_clearance (test_accumulation.AccumulationTest.test_merge_block_fair_three_lanes_and_clearance) ... ok
+test_route_boundary_classification_and_fallback (test_accumulation.AccumulationTest.test_route_boundary_classification_and_fallback) ... ok
+test_undecided_package_has_bounded_recirc_tail_zone (test_accumulation.AccumulationTest.test_undecided_package_has_bounded_recirc_tail_zone) ... ok
+test_zone_capacity_and_nonoverlap_varying_dimensions (test_accumulation.AccumulationTest.test_zone_capacity_and_nonoverlap_varying_dimensions) ... ok
+test_drive_stop_uses_live_motion_four_and_screenshot (test_accumulation_attempt.BrowserDispatchTests.test_drive_stop_uses_live_motion_four_and_screenshot) ... ok
+test_real_browser_cli_with_fake_live_hmi_dom (test_accumulation_attempt.BrowserDispatchTests.test_real_browser_cli_with_fake_live_hmi_dom) ... ok
+test_changing_dwell_and_position_are_telemetry (test_accumulation_attempt.CommittedReadTests.test_changing_dwell_and_position_are_telemetry) ... ok
+test_consistent_identity_snapshot (test_accumulation_attempt.CommittedReadTests.test_consistent_identity_snapshot) ... ok
+test_hashes_exclude_active_redirected_stdout (test_accumulation_attempt.CommittedReadTests.test_hashes_exclude_active_redirected_stdout) ... ok
+test_inconsistent_commit_is_distinct_and_retryable (test_accumulation_attempt.CommittedReadTests.test_inconsistent_commit_is_distinct_and_retryable) ... ok
+test_approval_expiring_during_fresh_reads_stops_before_worker (test_accumulation_attempt.DelayedReservationTests.test_approval_expiring_during_fresh_reads_stops_before_worker) ... ok
+test_changed_critical_state_fails_before_worker_or_receipt (test_accumulation_attempt.DelayedReservationTests.test_changed_critical_state_fails_before_worker_or_receipt) ... ok
+test_expired_approval_consumes_reservation_without_preflight (test_accumulation_attempt.DelayedReservationTests.test_expired_approval_consumes_reservation_without_preflight) ... ok
+test_failed_operator_reset_remains_separate_from_functional_outcome (test_accumulation_attempt.DelayedReservationTests.test_failed_operator_reset_remains_separate_from_functional_outcome) ... ok
+test_interrupted_evidence_aborts_and_never_passes (test_accumulation_attempt.DelayedReservationTests.test_interrupted_evidence_aborts_and_never_passes) ... ok
+test_lane_attempt_orders_fixture_browser_release_and_cleanup (test_accumulation_attempt.DelayedReservationTests.test_lane_attempt_orders_fixture_browser_release_and_cleanup) ... ok
+test_late_human_then_fresh_baseline_runs_no_package_lifecycle (test_accumulation_attempt.DelayedReservationTests.test_late_human_then_fresh_baseline_runs_no_package_lifecycle) ... ok
+test_missing_approval_rejected_before_monitor (test_accumulation_attempt.DelayedReservationTests.test_missing_approval_rejected_before_monitor) ... ok
+test_monitor_failure_collects_and_cannot_pass (test_accumulation_attempt.DelayedReservationTests.test_monitor_failure_collects_and_cannot_pass) ... ok
+test_new_scenarios_reject_wrong_approval_scope_and_tampered_case (test_accumulation_attempt.DelayedReservationTests.test_new_scenarios_reject_wrong_approval_scope_and_tampered_case) ... ok
+test_new_scenarios_reserve_through_cli_and_dispatch_claimed_run (test_accumulation_attempt.DelayedReservationTests.test_new_scenarios_reserve_through_cli_and_dispatch_claimed_run) ... ok
+test_postflight_transport_failure_gets_one_fresh_probe_and_retry (test_accumulation_attempt.DelayedReservationTests.test_postflight_transport_failure_gets_one_fresh_probe_and_retry) ... ok
+test_tampered_reservation_scope_is_rejected (test_accumulation_attempt.DelayedReservationTests.test_tampered_reservation_scope_is_rejected) ... ok
+test_typed_mismatch_is_not_retried (test_accumulation_attempt.DelayedReservationTests.test_typed_mismatch_is_not_retried) ... ok
+test_unsupported_reservation_rejected_before_plc_read (test_accumulation_attempt.DelayedReservationTests.test_unsupported_reservation_rejected_before_plc_read) ... ok
+test_drive_dispatch_uses_normal_service_and_vfd_runner (test_accumulation_attempt.LifecycleTests.test_drive_dispatch_uses_normal_service_and_vfd_runner) ... ok
+test_merge_dispatch_uses_fixture_browser_and_reset (test_accumulation_attempt.LifecycleTests.test_merge_dispatch_uses_fixture_browser_and_reset) ... ok
+test_mismatched_guest_scenario_cannot_pass (test_accumulation_attempt.LifecycleTests.test_mismatched_guest_scenario_cannot_pass) ... ok
+test_new_cases_cleanup_on_checkpoint_evidence_timeout_and_reset_failure (test_accumulation_attempt.LifecycleTests.test_new_cases_cleanup_on_checkpoint_evidence_timeout_and_reset_failure) ... ok
+test_no_package_owns_complete_sequence_and_cleanup (test_accumulation_attempt.LifecycleTests.test_no_package_owns_complete_sequence_and_cleanup) ... ok
+test_real_subprocess_boundary_uses_exact_browser_case_argv (test_accumulation_attempt.LifecycleTests.test_real_subprocess_boundary_uses_exact_browser_case_argv) ... ok
+test_unsupported_browser_case_rejected_before_any_launch (test_accumulation_attempt.LifecycleTests.test_unsupported_browser_case_rejected_before_any_launch) ... ok
+test_each_representative_required_counter_fails_with_address_and_time (test_accumulation_attempt.RecoveryTests.test_each_representative_required_counter_fails_with_address_and_time) ... ok
+test_serial_next_one_alone_does_not_request_reset (test_accumulation_attempt.RecoveryTests.test_serial_next_one_alone_does_not_request_reset) ... ok
+test_serial_next_one_is_informational_after_required_counters_reset (test_accumulation_attempt.RecoveryTests.test_serial_next_one_is_informational_after_required_counters_reset) ... ok
+test_checkpoint_requires_validated_held_state (test_accumulation_detached.DetachedGuards.test_checkpoint_requires_validated_held_state) ... ok
+test_fixture_commands_are_fixed_and_bounded (test_accumulation_detached.DetachedGuards.test_fixture_commands_are_fixed_and_bounded) ... ok
+test_scenario_and_cleanup_failures_are_separate (test_accumulation_detached.DetachedGuards.test_scenario_and_cleanup_failures_are_separate) ... ok
+test_wrong_release_and_start_tick_rejected (test_accumulation_detached.DetachedGuards.test_wrong_release_and_start_tick_rejected) ... ok
+test_correct_release_completes_and_no_orphan (test_accumulation_detached.DetachedIntegration.test_correct_release_completes_and_no_orphan) ... ok
+test_detached_launch_frees_console_proxy_checkpoint_release_and_exit (test_accumulation_detached.DetachedIntegration.test_detached_launch_frees_console_proxy_checkpoint_release_and_exit) ... ok
+test_timeout_and_matching_abort (test_accumulation_detached.DetachedIntegration.test_timeout_and_matching_abort) ... ok
+test_approval_receipt_cannot_authorize_another_run_or_scenario (test_accumulation_fixture_authorization.AuthorizationTest.test_approval_receipt_cannot_authorize_another_run_or_scenario) ... ok
+test_claim_is_atomic_and_prevents_second_launch (test_accumulation_fixture_authorization.AuthorizationTest.test_claim_is_atomic_and_prevents_second_launch) ... {"run_id": "run_12345678", "pid": 456}
+ok
+test_exact_sudo_argv_no_shell_or_path_resolved_command (test_accumulation_fixture_authorization.AuthorizationTest.test_exact_sudo_argv_no_shell_or_path_resolved_command) ... ok
+test_expired_claim_never_calls_sudo (test_accumulation_fixture_authorization.AuthorizationTest.test_expired_claim_never_calls_sudo) ... ok
+test_fixture_failure_still_attempts_start (test_accumulation_fixture_authorization.AuthorizationTest.test_fixture_failure_still_attempts_start) ... ok
+test_missing_stale_mismatched_reused_and_malformed_rejected (test_accumulation_fixture_authorization.AuthorizationTest.test_missing_stale_mismatched_reused_and_malformed_rejected) ... ok
+test_normal_and_abort_restore_without_orphan (test_accumulation_fixture_authorization.AuthorizationTest.test_normal_and_abort_restore_without_orphan) ... ok
+test_restoration_failure_is_separate (test_accumulation_fixture_authorization.AuthorizationTest.test_restoration_failure_is_separate) ... ok
+test_second_authorization_for_same_directory_is_rejected (test_accumulation_fixture_authorization.AuthorizationTest.test_second_authorization_for_same_directory_is_rejected) ... ok
+test_timeout_restores_and_reports_timeout (test_accumulation_fixture_authorization.AuthorizationTest.test_timeout_restores_and_reports_timeout) ... ok
+test_cleanup_wrong_pid_does_not_signal_other_process (test_accumulation_monitor.ControllerIntegrationTest.test_cleanup_wrong_pid_does_not_signal_other_process) ... ok
+test_dead_pid_and_early_exit_prevent_launch (test_accumulation_monitor.ControllerIntegrationTest.test_dead_pid_and_early_exit_prevent_launch) ... ok
+test_missing_terminal_record_is_a_cleanup_failure (test_accumulation_monitor.ControllerIntegrationTest.test_missing_terminal_record_is_a_cleanup_failure) ... ok
+test_ready_is_observed_while_process_and_jsonl_are_live (test_accumulation_monitor.ControllerIntegrationTest.test_ready_is_observed_while_process_and_jsonl_are_live) ... ok
+test_scenario_failure_and_cleanup_failure_are_both_preserved (test_accumulation_monitor.ControllerIntegrationTest.test_scenario_failure_and_cleanup_failure_are_both_preserved) ... ok
+test_scenario_launch_after_proof_only (test_accumulation_monitor.ControllerIntegrationTest.test_scenario_launch_after_proof_only) ... ok
+test_serial_file_read_accepts_growth_and_terminal_escape (test_accumulation_monitor.ControllerIntegrationTest.test_serial_file_read_accepts_growth_and_terminal_escape) ... ok
+test_serial_launch_uses_one_quoted_argument_layer (test_accumulation_monitor.ControllerIntegrationTest.test_serial_launch_uses_one_quoted_argument_layer) ... ok
+test_timeout_prevents_scenario_launch_and_cleanup_is_separate (test_accumulation_monitor.ControllerIntegrationTest.test_timeout_prevents_scenario_launch_and_cleanup_is_separate) ... ok
+test_wrong_ready_run_id_rejected_and_cleanup_has_no_orphan (test_accumulation_monitor.ControllerIntegrationTest.test_wrong_ready_run_id_rejected_and_cleanup_has_no_orphan) ... ok
+test_connection_failure_has_no_ready_marker (test_accumulation_monitor.MonitorUnitTest.test_connection_failure_has_no_ready_marker) ... ok
+test_existing_marker_is_rejected (test_accumulation_monitor.MonitorUnitTest.test_existing_marker_is_rejected) ... ok
+test_fake_modbus_initial_sample_is_durable_before_ready (test_accumulation_monitor.MonitorUnitTest.test_fake_modbus_initial_sample_is_durable_before_ready) ... ok
+test_initial_read_failure_has_no_ready_marker (test_accumulation_monitor.MonitorUnitTest.test_initial_read_failure_has_no_ready_marker) ... ok
+test_cleanup_errors_are_returned_without_hiding_original_failure (test_accumulation_runner.RunnerCleanupTest.test_cleanup_errors_are_returned_without_hiding_original_failure) ... ok
+test_failure_stops_processes_resets_occupied_slots_then_restores (test_accumulation_runner.RunnerCleanupTest.test_failure_stops_processes_resets_occupied_slots_then_restores) ... ok
+test_new_case_contracts_use_existing_fixture_and_package_assertions (test_accumulation_runner.RunnerCleanupTest.test_new_case_contracts_use_existing_fixture_and_package_assertions) ... ok
+test_service_restored_when_fixture_start_fails (test_accumulation_scenario_control.FixtureCleanupTest.test_service_restored_when_fixture_start_fails) ... ok
+test_authorization_window_expiry_aborts_before_any_fixture (test_accumulation_scenario_control.HostGateTest.test_authorization_window_expiry_aborts_before_any_fixture) ... ok
+test_begin_requires_bounded_fixture (test_accumulation_scenario_control.HostGateTest.test_begin_requires_bounded_fixture) ... ok
+test_changed_plc_or_expired_window_aborts_without_fixture_stop (test_accumulation_scenario_control.HostGateTest.test_changed_plc_or_expired_window_aborts_without_fixture_stop) ... ok
+test_evidence_mismatch_cannot_authorize_release (test_accumulation_scenario_control.HostGateTest.test_evidence_mismatch_cannot_authorize_release) ... ok
+test_failed_gate_cleanup_stops_only_worker_and_monitor (test_accumulation_scenario_control.HostGateTest.test_failed_gate_cleanup_stops_only_worker_and_monitor) ... ok
+test_fixture_start_refuses_expired_worker_without_service_stop (test_accumulation_scenario_control.HostGateTest.test_fixture_start_refuses_expired_worker_without_service_stop) ... ok
+test_fixture_start_requires_one_run_approval_record (test_accumulation_scenario_control.HostGateTest.test_fixture_start_requires_one_run_approval_record) ... ok
+test_fixture_stop_waits_for_matching_supervisor_exit (test_accumulation_scenario_control.HostGateTest.test_fixture_stop_waits_for_matching_supervisor_exit) ... ok
+test_monitor_death_prevents_begin (test_accumulation_scenario_control.HostGateTest.test_monitor_death_prevents_begin) ... ok
+test_post_ready_gate_is_bounded_and_does_not_inventory_hashes (test_accumulation_scenario_control.HostGateTest.test_post_ready_gate_is_bounded_and_does_not_inventory_hashes) ... ok
+test_prelaunch_approval_expiring_after_launch_fails_gate (test_accumulation_scenario_control.HostGateTest.test_prelaunch_approval_expiring_after_launch_fails_gate) ... ok
+test_release_refuses_missing_independent_evidence (test_accumulation_scenario_control.HostGateTest.test_release_refuses_missing_independent_evidence) ... ok
+test_restoration_error_preserves_scenario_failure (test_accumulation_scenario_control.HostGateTest.test_restoration_error_preserves_scenario_failure) ... ok
+test_terminal_outcomes_trigger_one_fixture_restoration (test_accumulation_scenario_control.HostGateTest.test_terminal_outcomes_trigger_one_fixture_restoration) ... ok
+test_wrong_run_response_is_rejected (test_accumulation_scenario_control.HostGateTest.test_wrong_run_response_is_rejected) ... ok
+test_expired_or_wrong_run_approval_rejected_before_launch (test_accumulation_scenario_control.PrelaunchApprovalTest.test_expired_or_wrong_run_approval_rejected_before_launch) ... ok
+test_expiry_after_launch_refuses_fixture_and_aborts (test_accumulation_scenario_control.PrelaunchApprovalTest.test_expiry_after_launch_refuses_fixture_and_aborts) ... ok
+test_failed_gate_never_reaches_guest_fixture_ledger (test_accumulation_scenario_control.PrelaunchApprovalTest.test_failed_gate_never_reaches_guest_fixture_ledger) ... ok
+test_launch_rejects_expired_approval_and_stops_monitor (test_accumulation_scenario_control.PrelaunchApprovalTest.test_launch_rejects_expired_approval_and_stops_monitor) ... ok
+test_same_receipt_cannot_be_prepared_for_another_run (test_accumulation_scenario_control.PrelaunchApprovalTest.test_same_receipt_cannot_be_prepared_for_another_run) ... ok
+test_slow_human_approval_precedes_worker_launch (test_accumulation_scenario_control.PrelaunchApprovalTest.test_slow_human_approval_precedes_worker_launch) ... ok
+test_timely_approval_issues_exact_run_bound_guest_record (test_accumulation_scenario_control.PrelaunchApprovalTest.test_timely_approval_issues_exact_run_bound_guest_record) ... ok
+test_canonical_prepare_then_launch_claims_same_directory_once (test_accumulation_scenario_control.PreparedHandoffTest.test_canonical_prepare_then_launch_claims_same_directory_once) ... ok
+test_launch_failure_has_current_run_postflight_and_no_prior_pass (test_accumulation_scenario_control.PreparedHandoffTest.test_launch_failure_has_current_run_postflight_and_no_prior_pass) ... ok
+test_preflight_failure_spends_approved_attempt_and_runs_postflight (test_accumulation_scenario_control.PreparedHandoffTest.test_preflight_failure_spends_approved_attempt_and_runs_postflight) ... ok
+test_prepare_collision_never_replaces_existing_reservation (test_accumulation_scenario_control.PreparedHandoffTest.test_prepare_collision_never_replaces_existing_reservation) ... ok
+test_prepared_old_schema_and_repeat_prepare_are_rejected (test_accumulation_scenario_control.PreparedHandoffTest.test_prepared_old_schema_and_repeat_prepare_are_rejected) ... ok
+test_prior_pending_gate_is_never_closed_by_failed_handoff (test_accumulation_scenario_control.PreparedHandoffTest.test_prior_pending_gate_is_never_closed_by_failed_handoff) ... ok
+test_verify_clean_rejects_prior_run_pass (test_accumulation_scenario_control.PreparedHandoffTest.test_verify_clean_rejects_prior_run_pass) ... ok
+test_worker_launch_failure_aborts_matching_pid_and_retains_results (test_accumulation_scenario_control.PreparedHandoffTest.test_worker_launch_failure_aborts_matching_pid_and_retains_results) ... ok
+test_wrong_scenario_and_unrelated_contents_rejected (test_accumulation_scenario_control.PreparedHandoffTest.test_wrong_scenario_and_unrelated_contents_rejected) ... ok
+test_92_second_full_preflight_finishes_before_worker_launch (test_accumulation_state_snapshot.SnapshotTests.test_92_second_full_preflight_finishes_before_worker_launch) ... ok
+test_clean_restoration (test_accumulation_state_snapshot.SnapshotTests.test_clean_restoration) ... ok
+test_complete_reader_schema (test_accumulation_state_snapshot.SnapshotTests.test_complete_reader_schema) ... ok
+test_dynamic_changes_accepted (test_accumulation_state_snapshot.SnapshotTests.test_dynamic_changes_accepted) ... ok
+test_exact_operator_setting_and_vfd_configuration (test_accumulation_state_snapshot.SnapshotTests.test_exact_operator_setting_and_vfd_configuration) ... ok
+test_inactive_historical_zone_payload_after_reset (test_accumulation_state_snapshot.SnapshotTests.test_inactive_historical_zone_payload_after_reset) ... ok
+test_missing_required_field (test_accumulation_state_snapshot.SnapshotTests.test_missing_required_field) ... ok
+test_next_scenario_gate_and_baseline_order (test_accumulation_state_snapshot.SnapshotTests.test_next_scenario_gate_and_baseline_order) ... ok
+test_post_ready_gate_ignores_inactive_historical_zone_payload (test_accumulation_state_snapshot.SnapshotTests.test_post_ready_gate_ignores_inactive_historical_zone_payload) ... ok
+test_reset_counters_faults_and_slots (test_accumulation_state_snapshot.SnapshotTests.test_reset_counters_faults_and_slots) ... ok
+test_safe_invariant_orphan_and_master (test_accumulation_state_snapshot.SnapshotTests.test_safe_invariant_orphan_and_master) ... ok
+test_schema_and_program_identity (test_accumulation_state_snapshot.SnapshotTests.test_schema_and_program_identity) ... ok
+test_unsettled_or_faulted_drive (test_accumulation_state_snapshot.SnapshotTests.test_unsettled_or_faulted_drive) ... ok
+test_empty_ack_and_fresh_clear_do_not_resume (test_chute_full.ChuteModelTest.test_empty_ack_and_fresh_clear_do_not_resume) ... ok
+test_event_ack_without_accepted_terminal_remains_provisional (test_chute_full.ChuteModelTest.test_event_ack_without_accepted_terminal_remains_provisional) ... ok
+test_geometry_proof_across_supported_envelope (test_chute_full.ChuteModelTest.test_geometry_proof_across_supported_envelope) ... ok
+test_hold_before_door_with_spacing_and_no_false_load (test_chute_full.ChuteModelTest.test_hold_before_door_with_spacing_and_no_false_load) ... ok
+test_max_feedback_step_preserves_each_beam_edge_and_identity (test_chute_full.ChuteModelTest.test_max_feedback_step_preserves_each_beam_edge_and_identity) ... ok
+test_max_feedback_step_preserves_trailer_beam_and_fifo (test_chute_full.ChuteModelTest.test_max_feedback_step_preserves_trailer_beam_and_fifo) ... ok
+test_past_hold_front_freezes_without_teleporting_and_past_door_faults (test_chute_full.ChuteModelTest.test_past_hold_front_freezes_without_teleporting_and_past_door_faults) ... ok
+test_provisional_reservation_closes_door_before_plc_accepts (test_chute_full.ChuteModelTest.test_provisional_reservation_closes_door_before_plc_accepts) ... ok
+test_restart_and_lost_permissive_fail_closed (test_chute_full.ChuteModelTest.test_restart_and_lost_permissive_fail_closed) ... ok
+test_three_accepted_crossings_not_ack_alone_fill (test_chute_full.ChuteModelTest.test_three_accepted_crossings_not_ack_alone_fill) ... ok
+test_three_global_held_fit_and_fifo_drain_to_refill (test_chute_full.ChuteModelTest.test_three_global_held_fit_and_fifo_drain_to_refill) ... ok
+test_wrong_trailer_duplicate_and_late_confirmation (test_chute_full.ChuteModelTest.test_wrong_trailer_duplicate_and_late_confirmation) ... ok
+test_old_counter_and_new_chute_fault_both_fail (test_chute_migration_postflight.MigrationRestorationTests.test_old_counter_and_new_chute_fault_both_fail) ... ok
+test_safe_restoration_across_identity_and_schema (test_chute_migration_postflight.MigrationRestorationTests.test_safe_restoration_across_identity_and_schema) ... ok
+test_unexpected_program_or_baseline_is_rejected (test_chute_migration_postflight.MigrationRestorationTests.test_unexpected_program_or_baseline_is_rejected) ... ok
+test_hmi_action_packet_is_run_bound_and_ordered (test_chute_supervisory_contract.SupervisoryContractTests.test_hmi_action_packet_is_run_bound_and_ordered) ... ok
+test_hmi_api_exposes_only_trailer_two_as_measured_and_marks_stale (test_chute_supervisory_contract.SupervisoryContractTests.test_hmi_api_exposes_only_trailer_two_as_measured_and_marks_stale) ... ok
+test_new_plc_addresses_are_unique_and_generated_copy_matches (test_chute_supervisory_contract.SupervisoryContractTests.test_new_plc_addresses_are_unique_and_generated_copy_matches) ... ok
+test_command_failure_stops_before_probe (test_deployment_preflight.PreflightTests.test_command_failure_stops_before_probe) ... ok
+test_command_timeout_and_pager_classification (test_deployment_preflight.PreflightTests.test_command_timeout_and_pager_classification) ... ok
+test_distinct_live_probe_and_shell_contract (test_deployment_preflight.PreflightTests.test_distinct_live_probe_and_shell_contract) ... {"guest": "drives", "check": "hash", "result": "ok", "liveness_nonce": "d2ca81aac4ead4138e98f770d455d682", "wrapper_nonce": "4f35ef16be74db5cbb42f4ba9226c26c"}
+ok
+test_liveness_failure_and_stale_output (test_deployment_preflight.PreflightTests.test_liveness_failure_and_stale_output) ... ok
+test_liveness_timeout_stops_after_probe (test_deployment_preflight.PreflightTests.test_liveness_timeout_stops_after_probe) ... ok
+test_missing_marker_and_prompt (test_deployment_preflight.PreflightTests.test_missing_marker_and_prompt) ... ok
+test_service_commands_are_noninteractive (test_deployment_preflight.PreflightTests.test_service_commands_are_noninteractive) ... ok
+test_all_plant_modes_enable_in_one_modbus_transaction (test_live_chute_minimum.ChuteLiveRunnerTests.test_all_plant_modes_enable_in_one_modbus_transaction) ... ok
+test_atomic_mode_failure_stops_before_master (test_live_chute_minimum.ChuteLiveRunnerTests.test_atomic_mode_failure_stops_before_master) ... ok
+test_identity_or_wrong_trailer_is_never_a_pass (test_live_chute_minimum.ChuteLiveRunnerTests.test_identity_or_wrong_trailer_is_never_a_pass) ... ok
+test_measurement_failure_restores_mixed_lane_values (test_live_cleanup.CleanupTest.test_measurement_failure_restores_mixed_lane_values) ... ok
+test_partial_setup_failure_restores_mixed_lane_values (test_live_cleanup.CleanupTest.test_partial_setup_failure_restores_mixed_lane_values) ... ok
+test_empty_process_log_is_valid_evidence (test_missed_phased_runner.MissedPhasedRunner.test_empty_process_log_is_valid_evidence) ... ok
+test_evidence_requires_complete_row_and_agreement (test_missed_phased_runner.MissedPhasedRunner.test_evidence_requires_complete_row_and_agreement) ... ok
+test_failure_restores_plant_before_guest_abort (test_missed_phased_runner.MissedPhasedRunner.test_failure_restores_plant_before_guest_abort) ... ok
+test_missing_latch_observation_does_not_permit_reset (test_missed_phased_runner.MissedPhasedRunner.test_missing_latch_observation_does_not_permit_reset) ... ok
+test_plant_return_and_latch_proof_precede_reset_permission (test_missed_phased_runner.MissedPhasedRunner.test_plant_return_and_latch_proof_precede_reset_permission) ... ok
+test_timeout_is_failure (test_missed_phased_runner.MissedPhasedRunner.test_timeout_is_failure) ... ok
+test_connection_and_refusal_are_distinct (test_network_reachability.ReachabilityTest.test_connection_and_refusal_are_distinct) ... ok
+test_matrix_is_complete_and_unambiguous (test_network_reachability.ReachabilityTest.test_matrix_is_complete_and_unambiguous) ... ok
+test_bounce_is_short_and_then_settles (test_photoeye_model.PhotoeyeModelTest.test_bounce_is_short_and_then_settles) ... ok
+test_five_beams_have_leading_blocked_trailing_clear (test_photoeye_model.PhotoeyeModelTest.test_five_beams_have_leading_blocked_trailing_clear) ... ok
+test_impossible_order_fixture_asserts_downstream_early (test_photoeye_model.PhotoeyeModelTest.test_impossible_order_fixture_asserts_downstream_early) ... ok
+test_invalid_or_incomplete_fixture_refused (test_photoeye_model.PhotoeyeModelTest.test_invalid_or_incomplete_fixture_refused) ... ok
+test_length_and_speed_set_blocked_duration (test_photoeye_model.PhotoeyeModelTest.test_length_and_speed_set_blocked_duration) ... ok
+test_stuck_blocked_persists_after_package_leaves (test_photoeye_model.PhotoeyeModelTest.test_stuck_blocked_persists_after_package_leaves) ... ok
+test_stuck_clear_and_missed_downstream_are_token_bound (test_photoeye_model.PhotoeyeModelTest.test_stuck_clear_and_missed_downstream_are_token_bound) ... ok
+test_bounded_telemetry_tracks_belt_and_recent_sensor (test_plant.PlantModelTest.test_bounded_telemetry_tracks_belt_and_recent_sensor) ... ok
+test_lane_three_failed_confirmation_has_no_trailer_event (test_plant.PlantModelTest.test_lane_three_failed_confirmation_has_no_trailer_event) ... ok
+test_lane_three_shares_outbound_with_lane_two_and_reuses_token (test_plant.PlantModelTest.test_lane_three_shares_outbound_with_lane_two_and_reuses_token) ... ok
+test_lane_two_failed_confirmation_never_loads_trailer (test_plant.PlantModelTest.test_lane_two_failed_confirmation_never_loads_trailer) ... ok
+test_late_decision_recirc_and_missed_confirmation (test_plant.PlantModelTest.test_late_decision_recirc_and_missed_confirmation) ... ok
+test_speed_feedback_stops_position_and_identity_mismatch_does_not_route (test_plant.PlantModelTest.test_speed_feedback_stops_position_and_identity_mismatch_does_not_route) ... ok
+test_three_lanes_share_one_outbound_with_order_and_clearance (test_plant.PlantModelTest.test_three_lanes_share_one_outbound_with_order_and_clearance) ... ok
+test_two_lanes_share_outbound_with_clearance_and_no_loss (test_plant.PlantModelTest.test_two_lanes_share_outbound_with_clearance_and_no_loss) ... ok
+test_two_packages_have_distinct_sensor_and_trailer_events (test_plant.PlantModelTest.test_two_packages_have_distinct_sensor_and_trailer_events) ... ok
+test_incomplete_service_read_fails_closed (test_read_authorization_gate.ReaderTests.test_incomplete_service_read_fails_closed) ... ok
+test_systemd_is_absolute_noninteractive_and_processes_bounded (test_read_authorization_gate.ReaderTests.test_systemd_is_absolute_noninteractive_and_processes_bounded) ... ok
+test_guest_evidence_is_complete_jsonl (test_run_chute_minimum_host.MinimumHostGuards.test_guest_evidence_is_complete_jsonl) ... ok
+test_journal_waits_for_four_matching_outcomes (test_run_chute_minimum_host.MinimumHostGuards.test_journal_waits_for_four_matching_outcomes) ... ok
+test_plan_restore_requires_exact_temporary_hash (test_run_chute_minimum_host.MinimumHostGuards.test_plan_restore_requires_exact_temporary_hash) ... ok
+test_plan_restore_uses_preserved_bytes_and_checks_hash (test_run_chute_minimum_host.MinimumHostGuards.test_plan_restore_uses_preserved_bytes_and_checks_hash) ... ok
+test_cold_plc_restart_reuses_nonce (test_scanner_reset.ScannerResetTest.test_cold_plc_restart_reuses_nonce) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+ok
+test_opt_in_repeat_fixture_preserves_distinct_requests (test_scanner_reset.ScannerResetTest.test_opt_in_repeat_fixture_preserves_distinct_requests) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] seq=    2 serial=   2 bc= 6001 st=4 27x66x27cm
+ok
+test_repeated_sequence_after_reset (test_scanner_reset.ScannerResetTest.test_repeated_sequence_after_reset) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] reset nonce=2 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+ok
+test_reset_clears_stale_response_and_history (test_scanner_reset.ScannerResetTest.test_reset_clears_stale_response_and_history) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] reset nonce=2 seed=137
+ok
+test_reset_without_prepare_does_not_ack (test_scanner_reset.ScannerResetTest.test_reset_without_prepare_does_not_ack) ... ok
+test_same_seed_replays_first_two_scans (test_scanner_reset.ScannerResetTest.test_same_seed_replays_first_two_scans) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] seq=    2 serial=   2 bc= 5002 st=0 27x66x27cm
+[test] reset nonce=2 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] seq=    2 serial=   2 bc= 5002 st=0 27x66x27cm
+ok
+test_failure_rate_does_not_shift_destinations_or_dimensions (test_scanner_sequence.ScannerSequenceTest.test_failure_rate_does_not_shift_destinations_or_dimensions) ... ok
+test_invalid_barcodes_never_look_like_valid_labels (test_scanner_sequence.ScannerSequenceTest.test_invalid_barcodes_never_look_like_valid_labels) ... ok
+test_result_block_encodes_with_pymodbus_3_6_9 (test_scanner_sequence.ScannerSequenceTest.test_result_block_encodes_with_pymodbus_3_6_9) ... ok
+test_written_registers_stay_in_signed_int_range (test_scanner_sequence.ScannerSequenceTest.test_written_registers_stay_in_signed_int_range) ... ok
+test_missing_marker (test_serial_command.SerialTests.test_missing_marker) ... ok
+test_missing_prompt (test_serial_command.SerialTests.test_missing_prompt) ... ok
+test_pager_like_timeout (test_serial_command.SerialTests.test_pager_like_timeout) ... ok
+test_success_detaches_without_logout (test_serial_command.SerialTests.test_success_detaches_without_logout) ... ok
+test_zero_output_marker_survives_terminal_mode_escape (test_serial_command.SerialTests.test_zero_output_marker_survives_terminal_mode_escape) ... ok
+test_asx_plan_file (test_sort_decision.Decisions.test_asx_plan_file) ... ok
+test_delayed_lookup_falls_back (test_sort_decision.Decisions.test_delayed_lookup_falls_back) ... ok
+test_multi_command_carries_full_identity_and_commits_last (test_sort_decision.Decisions.test_multi_command_carries_full_identity_and_commits_last) ... ok
+test_same_barcode_can_have_distinct_package_decisions (test_sort_decision.Decisions.test_same_barcode_can_have_distinct_package_decisions) ... ok
+test_stale_response_rejected (test_sort_decision.Decisions.test_stale_response_rejected) ... ok
+test_unknown_package_has_no_route (test_sort_decision.Decisions.test_unknown_package_has_no_route) ... ok
+test_valid_plan_is_explicit (test_sort_decision.Decisions.test_valid_plan_is_explicit) ... ok
+test_lane_three_identity_and_invalid_lane_fail_closed (test_xle_recovery.Recovery.test_lane_three_identity_and_invalid_lane_fail_closed) ... ok
+test_lane_two_identity_and_asx_request (test_xle_recovery.Recovery.test_lane_two_identity_and_asx_request) ... ok
+test_liveness_fault_recirculates_undecided_slot_without_route (test_xle_recovery.Recovery.test_liveness_fault_recirculates_undecided_slot_without_route) ... {"event": "run_identity_established", "event_ns": 816044399071, "run_epoch": 1}
+{"barcode": 6001, "event": "scan", "event_ns": 816045047121, "lane": 1, "package_id": "l1-1-7-41-2", "package_serial": 2, "plc_scan_tick": 100, "recovered": true, "request_id": "a3de6240-6062-4165-bc61-c0b1fab984d3", "run_epoch": 1, "scanner_run_nonce": 7, "scanner_sequence": 9, "slot_token": 41}
+{"action": "recirculate", "event": "safe_fallback", "event_ns": 816045160405, "package_id": "l1-1-7-41-2", "reason": "xle_liveness_fault", "request_id": "a3de6240-6062-4165-bc61-c0b1fab984d3"}
+{"accept_tick": 102, "acceptance_margin_ms": 3100, "actual_trailer": 0, "command_id": 10, "divert_tick": 133, "event": "plc_outcome", "event_ns": 816248819531, "lane": 1, "package_id": "l1-1-7-41-2", "reason": 1, "scan_tick": 100, "scanner_sequence": 9, "scanner_to_divert_ms": 3300, "slot_token": 41, "state": "recirculated"}
+{"command_id": 11, "event": "plc_release", "event_ns": 816249190451, "package_id": "l1-1-7-41-2"}
+ok
+test_nonce_change_discards_in_flight_asx_answer (test_xle_recovery.Recovery.test_nonce_change_discards_in_flight_asx_answer) ... ok
+test_old_asx_answer_cannot_route_reused_slot_after_cold_restart (test_xle_recovery.Recovery.test_old_asx_answer_cannot_route_reused_slot_after_cold_restart) ... {"event": "run_identity_established", "event_ns": 816571465146, "run_epoch": 1}
+{"barcode": 6001, "event": "scan", "event_ns": 816572397978, "lane": 1, "package_id": "l1-1-7-41-2", "package_serial": 2, "plc_scan_tick": 100, "recovered": true, "request_id": "5154009f-009c-4867-bcc4-ec2bdfd0909b", "run_epoch": 1, "scanner_run_nonce": 7, "scanner_sequence": 9, "slot_token": 41}
+{"event": "asx_lookup", "event_ns": 816572599088, "package_id": "l1-1-7-41-2", "request_id": "5154009f-009c-4867-bcc4-ec2bdfd0909b", "timeout_ms": 800}
+{"event": "run_identity_established", "event_ns": 816674527397, "run_epoch": 2}
+{"event": "run_abandoned", "event_ns": 816674803938, "new_run": [2, 7], "old_run": [1, 7], "package_id": "l1-1-7-41-2"}
+{"barcode": 6001, "event": "scan", "event_ns": 816675108972, "lane": 1, "package_id": "l1-2-7-41-2", "package_serial": 2, "plc_scan_tick": 5, "recovered": false, "request_id": "38cb766d-6203-49db-8041-c2a202dbd578", "run_epoch": 2, "scanner_run_nonce": 7, "scanner_sequence": 9, "slot_token": 41}
+{"event": "asx_lookup", "event_ns": 816675219409, "package_id": "l1-2-7-41-2", "request_id": "38cb766d-6203-49db-8041-c2a202dbd578", "timeout_ms": 800}
+{"destination": 2, "event": "asx_decision", "event_ns": 816775896021, "package_id": "l1-2-7-41-2", "request_id": "38cb766d-6203-49db-8041-c2a202dbd578"}
+{"command_id": 11, "destination": 2, "event": "plc_command", "event_ns": 816776164285, "package_id": "l1-2-7-41-2", "run_epoch": 2, "run_nonce": 7, "slot": 0, "slot_token": 41}
+{"accept_tick": 0, "acceptance_margin_ms": null, "actual_trailer": 2, "command_id": 11, "divert_tick": 0, "event": "plc_outcome", "event_ns": 816878498812, "lane": 1, "package_id": "l1-2-7-41-2", "reason": 0, "scan_tick": 5, "scanner_sequence": 9, "scanner_to_divert_ms": -500, "slot_token": 41, "state": "loaded"}
+{"command_id": 12, "event": "plc_release", "event_ns": 816878799612, "package_id": "l1-2-7-41-2"}
+ok
+test_restart_with_accepted_route_waits_for_outcome (test_xle_recovery.Recovery.test_restart_with_accepted_route_waits_for_outcome) ... ok
+test_restart_with_already_terminal_slot (test_xle_recovery.Recovery.test_restart_with_already_terminal_slot) ... ok
+test_restart_with_scanned_slot_reissues_identity_bound_lookup (test_xle_recovery.Recovery.test_restart_with_scanned_slot_reissues_identity_bound_lookup) ... ok
+test_retry_state_requires_fresh_journal_proof (test_xle_recovery.Recovery.test_retry_state_requires_fresh_journal_proof) ... ok
+test_same_seed_cold_restart_keeps_distinct_journal_outcomes (test_xle_recovery.Recovery.test_same_seed_cold_restart_keeps_distinct_journal_outcomes) ... {"event": "run_identity_established", "event_ns": 817219995205, "run_epoch": 1}
+{"command_id": 10, "event": "plc_recovered", "event_ns": 817220372631, "package_id": "l1-1-7-41-2", "slot": 0, "slot_token": 41, "state": 5}
+{"accept_tick": 102, "acceptance_margin_ms": 3100, "actual_trailer": 2, "command_id": 10, "divert_tick": 133, "event": "plc_outcome", "event_ns": 817221753237, "lane": 1, "package_id": "l1-1-7-41-2", "reason": 0, "scan_tick": 100, "scanner_sequence": 9, "scanner_to_divert_ms": 3300, "slot_token": 41, "state": "loaded"}
+{"command_id": 11, "event": "plc_release", "event_ns": 817221983202, "package_id": "l1-1-7-41-2"}
+ok
+test_terminal_outcome_is_durable_once_across_restart (test_xle_recovery.Recovery.test_terminal_outcome_is_durable_once_across_restart) ... ok
+test_third_slot_terminal_recovery_journals_once (test_xle_recovery.Recovery.test_third_slot_terminal_recovery_journals_once) ... ok
+test_unknown_active_epoch_fails_closed (test_xle_recovery.Recovery.test_unknown_active_epoch_fails_closed) ... ok
+test_unreadable_identity_journal_fails_closed (test_xle_recovery.Recovery.test_unreadable_identity_journal_fails_closed) ... {"action": "sorter_stopped", "event": "external_sort_fault", "event_ns": 817252591500, "reason": "XLe journal identity check failed: corrupt"}
+ok
+test_fault_runner_cleanup_disables_plant_before_external_mode (test_xle_vm_recovery.RecoveryOrderTests.test_fault_runner_cleanup_disables_plant_before_external_mode) ... ok
+test_missing_fresh_plant_recommit_fails_closed (test_xle_vm_recovery.RecoveryOrderTests.test_missing_fresh_plant_recommit_fails_closed) ... ok
+test_undecided_reset_recommit_and_safe_mode_teardown (test_xle_vm_recovery.RecoveryOrderTests.test_undecided_reset_recommit_and_safe_mode_teardown) ... ok
+
+----------------------------------------------------------------------
+Ran 219 tests in 32.369s
+
+OK
+exit=0
+
+$ PYTHONTRACEMALLOC=1 PYTHONWARNINGS=error::ResourceWarning python3 -m unittest discover -s tests -p 'test_*.py' -v   (no SORTER_PYMODBUS_PYTHON)
+test_accepted_route_never_enters_recirc_tail (test_accumulation.AccumulationTest.test_accepted_route_never_enters_recirc_tail) ... ok
+test_drive_stop_is_distinct_from_downstream_hold (test_accumulation.AccumulationTest.test_drive_stop_is_distinct_from_downstream_hold) ... ok
+test_fixture_bounds_and_run_scoped_cleanup (test_accumulation.AccumulationTest.test_fixture_bounds_and_run_scoped_cleanup) ... ok
+test_intentional_hold_keeps_beam_physical (test_accumulation.AccumulationTest.test_intentional_hold_keeps_beam_physical) ... ok
+test_lane_hold_propagates_and_fifo_drains (test_accumulation.AccumulationTest.test_lane_hold_propagates_and_fifo_drains) ... ok
+test_merge_and_lane_hold_preserve_boundary (test_accumulation.AccumulationTest.test_merge_and_lane_hold_preserve_boundary) ... ok
+test_merge_block_fair_three_lanes_and_clearance (test_accumulation.AccumulationTest.test_merge_block_fair_three_lanes_and_clearance) ... ok
+test_route_boundary_classification_and_fallback (test_accumulation.AccumulationTest.test_route_boundary_classification_and_fallback) ... ok
+test_undecided_package_has_bounded_recirc_tail_zone (test_accumulation.AccumulationTest.test_undecided_package_has_bounded_recirc_tail_zone) ... ok
+test_zone_capacity_and_nonoverlap_varying_dimensions (test_accumulation.AccumulationTest.test_zone_capacity_and_nonoverlap_varying_dimensions) ... ok
+test_drive_stop_uses_live_motion_four_and_screenshot (test_accumulation_attempt.BrowserDispatchTests.test_drive_stop_uses_live_motion_four_and_screenshot) ... ok
+test_real_browser_cli_with_fake_live_hmi_dom (test_accumulation_attempt.BrowserDispatchTests.test_real_browser_cli_with_fake_live_hmi_dom) ... ok
+test_changing_dwell_and_position_are_telemetry (test_accumulation_attempt.CommittedReadTests.test_changing_dwell_and_position_are_telemetry) ... ok
+test_consistent_identity_snapshot (test_accumulation_attempt.CommittedReadTests.test_consistent_identity_snapshot) ... ok
+test_hashes_exclude_active_redirected_stdout (test_accumulation_attempt.CommittedReadTests.test_hashes_exclude_active_redirected_stdout) ... ok
+test_inconsistent_commit_is_distinct_and_retryable (test_accumulation_attempt.CommittedReadTests.test_inconsistent_commit_is_distinct_and_retryable) ... ok
+test_approval_expiring_during_fresh_reads_stops_before_worker (test_accumulation_attempt.DelayedReservationTests.test_approval_expiring_during_fresh_reads_stops_before_worker) ... ok
+test_changed_critical_state_fails_before_worker_or_receipt (test_accumulation_attempt.DelayedReservationTests.test_changed_critical_state_fails_before_worker_or_receipt) ... ok
+test_expired_approval_consumes_reservation_without_preflight (test_accumulation_attempt.DelayedReservationTests.test_expired_approval_consumes_reservation_without_preflight) ... ok
+test_failed_operator_reset_remains_separate_from_functional_outcome (test_accumulation_attempt.DelayedReservationTests.test_failed_operator_reset_remains_separate_from_functional_outcome) ... ok
+test_interrupted_evidence_aborts_and_never_passes (test_accumulation_attempt.DelayedReservationTests.test_interrupted_evidence_aborts_and_never_passes) ... ok
+test_lane_attempt_orders_fixture_browser_release_and_cleanup (test_accumulation_attempt.DelayedReservationTests.test_lane_attempt_orders_fixture_browser_release_and_cleanup) ... ok
+test_late_human_then_fresh_baseline_runs_no_package_lifecycle (test_accumulation_attempt.DelayedReservationTests.test_late_human_then_fresh_baseline_runs_no_package_lifecycle) ... ok
+test_missing_approval_rejected_before_monitor (test_accumulation_attempt.DelayedReservationTests.test_missing_approval_rejected_before_monitor) ... ok
+test_monitor_failure_collects_and_cannot_pass (test_accumulation_attempt.DelayedReservationTests.test_monitor_failure_collects_and_cannot_pass) ... ok
+test_new_scenarios_reject_wrong_approval_scope_and_tampered_case (test_accumulation_attempt.DelayedReservationTests.test_new_scenarios_reject_wrong_approval_scope_and_tampered_case) ... ok
+test_new_scenarios_reserve_through_cli_and_dispatch_claimed_run (test_accumulation_attempt.DelayedReservationTests.test_new_scenarios_reserve_through_cli_and_dispatch_claimed_run) ... ok
+test_postflight_transport_failure_gets_one_fresh_probe_and_retry (test_accumulation_attempt.DelayedReservationTests.test_postflight_transport_failure_gets_one_fresh_probe_and_retry) ... ok
+test_tampered_reservation_scope_is_rejected (test_accumulation_attempt.DelayedReservationTests.test_tampered_reservation_scope_is_rejected) ... ok
+test_typed_mismatch_is_not_retried (test_accumulation_attempt.DelayedReservationTests.test_typed_mismatch_is_not_retried) ... ok
+test_unsupported_reservation_rejected_before_plc_read (test_accumulation_attempt.DelayedReservationTests.test_unsupported_reservation_rejected_before_plc_read) ... ok
+test_drive_dispatch_uses_normal_service_and_vfd_runner (test_accumulation_attempt.LifecycleTests.test_drive_dispatch_uses_normal_service_and_vfd_runner) ... ok
+test_merge_dispatch_uses_fixture_browser_and_reset (test_accumulation_attempt.LifecycleTests.test_merge_dispatch_uses_fixture_browser_and_reset) ... ok
+test_mismatched_guest_scenario_cannot_pass (test_accumulation_attempt.LifecycleTests.test_mismatched_guest_scenario_cannot_pass) ... ok
+test_new_cases_cleanup_on_checkpoint_evidence_timeout_and_reset_failure (test_accumulation_attempt.LifecycleTests.test_new_cases_cleanup_on_checkpoint_evidence_timeout_and_reset_failure) ... ok
+test_no_package_owns_complete_sequence_and_cleanup (test_accumulation_attempt.LifecycleTests.test_no_package_owns_complete_sequence_and_cleanup) ... ok
+test_real_subprocess_boundary_uses_exact_browser_case_argv (test_accumulation_attempt.LifecycleTests.test_real_subprocess_boundary_uses_exact_browser_case_argv) ... ok
+test_unsupported_browser_case_rejected_before_any_launch (test_accumulation_attempt.LifecycleTests.test_unsupported_browser_case_rejected_before_any_launch) ... ok
+test_each_representative_required_counter_fails_with_address_and_time (test_accumulation_attempt.RecoveryTests.test_each_representative_required_counter_fails_with_address_and_time) ... ok
+test_serial_next_one_alone_does_not_request_reset (test_accumulation_attempt.RecoveryTests.test_serial_next_one_alone_does_not_request_reset) ... ok
+test_serial_next_one_is_informational_after_required_counters_reset (test_accumulation_attempt.RecoveryTests.test_serial_next_one_is_informational_after_required_counters_reset) ... ok
+test_checkpoint_requires_validated_held_state (test_accumulation_detached.DetachedGuards.test_checkpoint_requires_validated_held_state) ... ok
+test_fixture_commands_are_fixed_and_bounded (test_accumulation_detached.DetachedGuards.test_fixture_commands_are_fixed_and_bounded) ... ok
+test_scenario_and_cleanup_failures_are_separate (test_accumulation_detached.DetachedGuards.test_scenario_and_cleanup_failures_are_separate) ... ok
+test_wrong_release_and_start_tick_rejected (test_accumulation_detached.DetachedGuards.test_wrong_release_and_start_tick_rejected) ... ok
+test_correct_release_completes_and_no_orphan (test_accumulation_detached.DetachedIntegration.test_correct_release_completes_and_no_orphan) ... ok
+test_detached_launch_frees_console_proxy_checkpoint_release_and_exit (test_accumulation_detached.DetachedIntegration.test_detached_launch_frees_console_proxy_checkpoint_release_and_exit) ... ERROR
+test_timeout_and_matching_abort (test_accumulation_detached.DetachedIntegration.test_timeout_and_matching_abort) ... ok
+test_approval_receipt_cannot_authorize_another_run_or_scenario (test_accumulation_fixture_authorization.AuthorizationTest.test_approval_receipt_cannot_authorize_another_run_or_scenario) ... ok
+test_claim_is_atomic_and_prevents_second_launch (test_accumulation_fixture_authorization.AuthorizationTest.test_claim_is_atomic_and_prevents_second_launch) ... {"run_id": "run_12345678", "pid": 456}
+ok
+test_exact_sudo_argv_no_shell_or_path_resolved_command (test_accumulation_fixture_authorization.AuthorizationTest.test_exact_sudo_argv_no_shell_or_path_resolved_command) ... ok
+test_expired_claim_never_calls_sudo (test_accumulation_fixture_authorization.AuthorizationTest.test_expired_claim_never_calls_sudo) ... ok
+test_fixture_failure_still_attempts_start (test_accumulation_fixture_authorization.AuthorizationTest.test_fixture_failure_still_attempts_start) ... ok
+test_missing_stale_mismatched_reused_and_malformed_rejected (test_accumulation_fixture_authorization.AuthorizationTest.test_missing_stale_mismatched_reused_and_malformed_rejected) ... ok
+test_normal_and_abort_restore_without_orphan (test_accumulation_fixture_authorization.AuthorizationTest.test_normal_and_abort_restore_without_orphan) ... ok
+test_restoration_failure_is_separate (test_accumulation_fixture_authorization.AuthorizationTest.test_restoration_failure_is_separate) ... ok
+test_second_authorization_for_same_directory_is_rejected (test_accumulation_fixture_authorization.AuthorizationTest.test_second_authorization_for_same_directory_is_rejected) ... ok
+test_timeout_restores_and_reports_timeout (test_accumulation_fixture_authorization.AuthorizationTest.test_timeout_restores_and_reports_timeout) ... ok
+test_cleanup_wrong_pid_does_not_signal_other_process (test_accumulation_monitor.ControllerIntegrationTest.test_cleanup_wrong_pid_does_not_signal_other_process) ... ok
+test_dead_pid_and_early_exit_prevent_launch (test_accumulation_monitor.ControllerIntegrationTest.test_dead_pid_and_early_exit_prevent_launch) ... ok
+test_missing_terminal_record_is_a_cleanup_failure (test_accumulation_monitor.ControllerIntegrationTest.test_missing_terminal_record_is_a_cleanup_failure) ... ok
+test_ready_is_observed_while_process_and_jsonl_are_live (test_accumulation_monitor.ControllerIntegrationTest.test_ready_is_observed_while_process_and_jsonl_are_live) ... ok
+test_scenario_failure_and_cleanup_failure_are_both_preserved (test_accumulation_monitor.ControllerIntegrationTest.test_scenario_failure_and_cleanup_failure_are_both_preserved) ... ok
+test_scenario_launch_after_proof_only (test_accumulation_monitor.ControllerIntegrationTest.test_scenario_launch_after_proof_only) ... ok
+test_serial_file_read_accepts_growth_and_terminal_escape (test_accumulation_monitor.ControllerIntegrationTest.test_serial_file_read_accepts_growth_and_terminal_escape) ... ok
+test_serial_launch_uses_one_quoted_argument_layer (test_accumulation_monitor.ControllerIntegrationTest.test_serial_launch_uses_one_quoted_argument_layer) ... ok
+test_timeout_prevents_scenario_launch_and_cleanup_is_separate (test_accumulation_monitor.ControllerIntegrationTest.test_timeout_prevents_scenario_launch_and_cleanup_is_separate) ... ok
+test_wrong_ready_run_id_rejected_and_cleanup_has_no_orphan (test_accumulation_monitor.ControllerIntegrationTest.test_wrong_ready_run_id_rejected_and_cleanup_has_no_orphan) ... ok
+test_connection_failure_has_no_ready_marker (test_accumulation_monitor.MonitorUnitTest.test_connection_failure_has_no_ready_marker) ... ok
+test_existing_marker_is_rejected (test_accumulation_monitor.MonitorUnitTest.test_existing_marker_is_rejected) ... ok
+test_fake_modbus_initial_sample_is_durable_before_ready (test_accumulation_monitor.MonitorUnitTest.test_fake_modbus_initial_sample_is_durable_before_ready) ... ok
+test_initial_read_failure_has_no_ready_marker (test_accumulation_monitor.MonitorUnitTest.test_initial_read_failure_has_no_ready_marker) ... ok
+test_cleanup_errors_are_returned_without_hiding_original_failure (test_accumulation_runner.RunnerCleanupTest.test_cleanup_errors_are_returned_without_hiding_original_failure) ... ok
+test_failure_stops_processes_resets_occupied_slots_then_restores (test_accumulation_runner.RunnerCleanupTest.test_failure_stops_processes_resets_occupied_slots_then_restores) ... ok
+test_new_case_contracts_use_existing_fixture_and_package_assertions (test_accumulation_runner.RunnerCleanupTest.test_new_case_contracts_use_existing_fixture_and_package_assertions) ... ok
+test_service_restored_when_fixture_start_fails (test_accumulation_scenario_control.FixtureCleanupTest.test_service_restored_when_fixture_start_fails) ... ok
+test_authorization_window_expiry_aborts_before_any_fixture (test_accumulation_scenario_control.HostGateTest.test_authorization_window_expiry_aborts_before_any_fixture) ... ok
+test_begin_requires_bounded_fixture (test_accumulation_scenario_control.HostGateTest.test_begin_requires_bounded_fixture) ... ok
+test_changed_plc_or_expired_window_aborts_without_fixture_stop (test_accumulation_scenario_control.HostGateTest.test_changed_plc_or_expired_window_aborts_without_fixture_stop) ... ok
+test_evidence_mismatch_cannot_authorize_release (test_accumulation_scenario_control.HostGateTest.test_evidence_mismatch_cannot_authorize_release) ... ok
+test_failed_gate_cleanup_stops_only_worker_and_monitor (test_accumulation_scenario_control.HostGateTest.test_failed_gate_cleanup_stops_only_worker_and_monitor) ... ok
+test_fixture_start_refuses_expired_worker_without_service_stop (test_accumulation_scenario_control.HostGateTest.test_fixture_start_refuses_expired_worker_without_service_stop) ... ok
+test_fixture_start_requires_one_run_approval_record (test_accumulation_scenario_control.HostGateTest.test_fixture_start_requires_one_run_approval_record) ... ok
+test_fixture_stop_waits_for_matching_supervisor_exit (test_accumulation_scenario_control.HostGateTest.test_fixture_stop_waits_for_matching_supervisor_exit) ... ok
+test_monitor_death_prevents_begin (test_accumulation_scenario_control.HostGateTest.test_monitor_death_prevents_begin) ... ok
+test_post_ready_gate_is_bounded_and_does_not_inventory_hashes (test_accumulation_scenario_control.HostGateTest.test_post_ready_gate_is_bounded_and_does_not_inventory_hashes) ... ok
+test_prelaunch_approval_expiring_after_launch_fails_gate (test_accumulation_scenario_control.HostGateTest.test_prelaunch_approval_expiring_after_launch_fails_gate) ... ok
+test_release_refuses_missing_independent_evidence (test_accumulation_scenario_control.HostGateTest.test_release_refuses_missing_independent_evidence) ... ok
+test_restoration_error_preserves_scenario_failure (test_accumulation_scenario_control.HostGateTest.test_restoration_error_preserves_scenario_failure) ... ok
+test_terminal_outcomes_trigger_one_fixture_restoration (test_accumulation_scenario_control.HostGateTest.test_terminal_outcomes_trigger_one_fixture_restoration) ... ok
+test_wrong_run_response_is_rejected (test_accumulation_scenario_control.HostGateTest.test_wrong_run_response_is_rejected) ... ok
+test_expired_or_wrong_run_approval_rejected_before_launch (test_accumulation_scenario_control.PrelaunchApprovalTest.test_expired_or_wrong_run_approval_rejected_before_launch) ... ok
+test_expiry_after_launch_refuses_fixture_and_aborts (test_accumulation_scenario_control.PrelaunchApprovalTest.test_expiry_after_launch_refuses_fixture_and_aborts) ... ok
+test_failed_gate_never_reaches_guest_fixture_ledger (test_accumulation_scenario_control.PrelaunchApprovalTest.test_failed_gate_never_reaches_guest_fixture_ledger) ... ok
+test_launch_rejects_expired_approval_and_stops_monitor (test_accumulation_scenario_control.PrelaunchApprovalTest.test_launch_rejects_expired_approval_and_stops_monitor) ... ok
+test_same_receipt_cannot_be_prepared_for_another_run (test_accumulation_scenario_control.PrelaunchApprovalTest.test_same_receipt_cannot_be_prepared_for_another_run) ... ok
+test_slow_human_approval_precedes_worker_launch (test_accumulation_scenario_control.PrelaunchApprovalTest.test_slow_human_approval_precedes_worker_launch) ... ok
+test_timely_approval_issues_exact_run_bound_guest_record (test_accumulation_scenario_control.PrelaunchApprovalTest.test_timely_approval_issues_exact_run_bound_guest_record) ... ok
+test_canonical_prepare_then_launch_claims_same_directory_once (test_accumulation_scenario_control.PreparedHandoffTest.test_canonical_prepare_then_launch_claims_same_directory_once) ... ok
+test_launch_failure_has_current_run_postflight_and_no_prior_pass (test_accumulation_scenario_control.PreparedHandoffTest.test_launch_failure_has_current_run_postflight_and_no_prior_pass) ... ok
+test_preflight_failure_spends_approved_attempt_and_runs_postflight (test_accumulation_scenario_control.PreparedHandoffTest.test_preflight_failure_spends_approved_attempt_and_runs_postflight) ... ok
+test_prepare_collision_never_replaces_existing_reservation (test_accumulation_scenario_control.PreparedHandoffTest.test_prepare_collision_never_replaces_existing_reservation) ... ok
+test_prepared_old_schema_and_repeat_prepare_are_rejected (test_accumulation_scenario_control.PreparedHandoffTest.test_prepared_old_schema_and_repeat_prepare_are_rejected) ... ok
+test_prior_pending_gate_is_never_closed_by_failed_handoff (test_accumulation_scenario_control.PreparedHandoffTest.test_prior_pending_gate_is_never_closed_by_failed_handoff) ... ok
+test_verify_clean_rejects_prior_run_pass (test_accumulation_scenario_control.PreparedHandoffTest.test_verify_clean_rejects_prior_run_pass) ... ok
+test_worker_launch_failure_aborts_matching_pid_and_retains_results (test_accumulation_scenario_control.PreparedHandoffTest.test_worker_launch_failure_aborts_matching_pid_and_retains_results) ... ok
+test_wrong_scenario_and_unrelated_contents_rejected (test_accumulation_scenario_control.PreparedHandoffTest.test_wrong_scenario_and_unrelated_contents_rejected) ... ok
+test_92_second_full_preflight_finishes_before_worker_launch (test_accumulation_state_snapshot.SnapshotTests.test_92_second_full_preflight_finishes_before_worker_launch) ... ok
+test_clean_restoration (test_accumulation_state_snapshot.SnapshotTests.test_clean_restoration) ... ok
+test_complete_reader_schema (test_accumulation_state_snapshot.SnapshotTests.test_complete_reader_schema) ... ok
+test_dynamic_changes_accepted (test_accumulation_state_snapshot.SnapshotTests.test_dynamic_changes_accepted) ... ok
+test_exact_operator_setting_and_vfd_configuration (test_accumulation_state_snapshot.SnapshotTests.test_exact_operator_setting_and_vfd_configuration) ... ok
+test_inactive_historical_zone_payload_after_reset (test_accumulation_state_snapshot.SnapshotTests.test_inactive_historical_zone_payload_after_reset) ... ok
+test_missing_required_field (test_accumulation_state_snapshot.SnapshotTests.test_missing_required_field) ... ok
+test_next_scenario_gate_and_baseline_order (test_accumulation_state_snapshot.SnapshotTests.test_next_scenario_gate_and_baseline_order) ... ok
+test_post_ready_gate_ignores_inactive_historical_zone_payload (test_accumulation_state_snapshot.SnapshotTests.test_post_ready_gate_ignores_inactive_historical_zone_payload) ... ok
+test_reset_counters_faults_and_slots (test_accumulation_state_snapshot.SnapshotTests.test_reset_counters_faults_and_slots) ... ok
+test_safe_invariant_orphan_and_master (test_accumulation_state_snapshot.SnapshotTests.test_safe_invariant_orphan_and_master) ... ok
+test_schema_and_program_identity (test_accumulation_state_snapshot.SnapshotTests.test_schema_and_program_identity) ... ok
+test_unsettled_or_faulted_drive (test_accumulation_state_snapshot.SnapshotTests.test_unsettled_or_faulted_drive) ... ok
+test_empty_ack_and_fresh_clear_do_not_resume (test_chute_full.ChuteModelTest.test_empty_ack_and_fresh_clear_do_not_resume) ... ok
+test_event_ack_without_accepted_terminal_remains_provisional (test_chute_full.ChuteModelTest.test_event_ack_without_accepted_terminal_remains_provisional) ... ok
+test_geometry_proof_across_supported_envelope (test_chute_full.ChuteModelTest.test_geometry_proof_across_supported_envelope) ... ok
+test_hold_before_door_with_spacing_and_no_false_load (test_chute_full.ChuteModelTest.test_hold_before_door_with_spacing_and_no_false_load) ... ok
+test_max_feedback_step_preserves_each_beam_edge_and_identity (test_chute_full.ChuteModelTest.test_max_feedback_step_preserves_each_beam_edge_and_identity) ... ok
+test_max_feedback_step_preserves_trailer_beam_and_fifo (test_chute_full.ChuteModelTest.test_max_feedback_step_preserves_trailer_beam_and_fifo) ... ok
+test_past_hold_front_freezes_without_teleporting_and_past_door_faults (test_chute_full.ChuteModelTest.test_past_hold_front_freezes_without_teleporting_and_past_door_faults) ... ok
+test_provisional_reservation_closes_door_before_plc_accepts (test_chute_full.ChuteModelTest.test_provisional_reservation_closes_door_before_plc_accepts) ... ok
+test_restart_and_lost_permissive_fail_closed (test_chute_full.ChuteModelTest.test_restart_and_lost_permissive_fail_closed) ... ok
+test_three_accepted_crossings_not_ack_alone_fill (test_chute_full.ChuteModelTest.test_three_accepted_crossings_not_ack_alone_fill) ... ok
+test_three_global_held_fit_and_fifo_drain_to_refill (test_chute_full.ChuteModelTest.test_three_global_held_fit_and_fifo_drain_to_refill) ... ok
+test_wrong_trailer_duplicate_and_late_confirmation (test_chute_full.ChuteModelTest.test_wrong_trailer_duplicate_and_late_confirmation) ... ok
+test_old_counter_and_new_chute_fault_both_fail (test_chute_migration_postflight.MigrationRestorationTests.test_old_counter_and_new_chute_fault_both_fail) ... ok
+test_safe_restoration_across_identity_and_schema (test_chute_migration_postflight.MigrationRestorationTests.test_safe_restoration_across_identity_and_schema) ... ok
+test_unexpected_program_or_baseline_is_rejected (test_chute_migration_postflight.MigrationRestorationTests.test_unexpected_program_or_baseline_is_rejected) ... ok
+test_hmi_action_packet_is_run_bound_and_ordered (test_chute_supervisory_contract.SupervisoryContractTests.test_hmi_action_packet_is_run_bound_and_ordered) ... ok
+test_hmi_api_exposes_only_trailer_two_as_measured_and_marks_stale (test_chute_supervisory_contract.SupervisoryContractTests.test_hmi_api_exposes_only_trailer_two_as_measured_and_marks_stale) ... ok
+test_new_plc_addresses_are_unique_and_generated_copy_matches (test_chute_supervisory_contract.SupervisoryContractTests.test_new_plc_addresses_are_unique_and_generated_copy_matches) ... ok
+test_command_failure_stops_before_probe (test_deployment_preflight.PreflightTests.test_command_failure_stops_before_probe) ... ok
+test_command_timeout_and_pager_classification (test_deployment_preflight.PreflightTests.test_command_timeout_and_pager_classification) ... ok
+test_distinct_live_probe_and_shell_contract (test_deployment_preflight.PreflightTests.test_distinct_live_probe_and_shell_contract) ... {"guest": "drives", "check": "hash", "result": "ok", "liveness_nonce": "5f181b6b3aa9bc090f6bfb4633a20261", "wrapper_nonce": "b1d787de78056946c00771ee7680753f"}
+ok
+test_liveness_failure_and_stale_output (test_deployment_preflight.PreflightTests.test_liveness_failure_and_stale_output) ... ok
+test_liveness_timeout_stops_after_probe (test_deployment_preflight.PreflightTests.test_liveness_timeout_stops_after_probe) ... ok
+test_missing_marker_and_prompt (test_deployment_preflight.PreflightTests.test_missing_marker_and_prompt) ... ok
+test_service_commands_are_noninteractive (test_deployment_preflight.PreflightTests.test_service_commands_are_noninteractive) ... ok
+test_all_plant_modes_enable_in_one_modbus_transaction (test_live_chute_minimum.ChuteLiveRunnerTests.test_all_plant_modes_enable_in_one_modbus_transaction) ... ok
+test_atomic_mode_failure_stops_before_master (test_live_chute_minimum.ChuteLiveRunnerTests.test_atomic_mode_failure_stops_before_master) ... ok
+test_identity_or_wrong_trailer_is_never_a_pass (test_live_chute_minimum.ChuteLiveRunnerTests.test_identity_or_wrong_trailer_is_never_a_pass) ... ok
+test_measurement_failure_restores_mixed_lane_values (test_live_cleanup.CleanupTest.test_measurement_failure_restores_mixed_lane_values) ... ok
+test_partial_setup_failure_restores_mixed_lane_values (test_live_cleanup.CleanupTest.test_partial_setup_failure_restores_mixed_lane_values) ... ok
+test_empty_process_log_is_valid_evidence (test_missed_phased_runner.MissedPhasedRunner.test_empty_process_log_is_valid_evidence) ... ok
+test_evidence_requires_complete_row_and_agreement (test_missed_phased_runner.MissedPhasedRunner.test_evidence_requires_complete_row_and_agreement) ... ok
+test_failure_restores_plant_before_guest_abort (test_missed_phased_runner.MissedPhasedRunner.test_failure_restores_plant_before_guest_abort) ... ok
+test_missing_latch_observation_does_not_permit_reset (test_missed_phased_runner.MissedPhasedRunner.test_missing_latch_observation_does_not_permit_reset) ... ok
+test_plant_return_and_latch_proof_precede_reset_permission (test_missed_phased_runner.MissedPhasedRunner.test_plant_return_and_latch_proof_precede_reset_permission) ... ok
+test_timeout_is_failure (test_missed_phased_runner.MissedPhasedRunner.test_timeout_is_failure) ... ok
+test_connection_and_refusal_are_distinct (test_network_reachability.ReachabilityTest.test_connection_and_refusal_are_distinct) ... ok
+test_matrix_is_complete_and_unambiguous (test_network_reachability.ReachabilityTest.test_matrix_is_complete_and_unambiguous) ... ok
+test_bounce_is_short_and_then_settles (test_photoeye_model.PhotoeyeModelTest.test_bounce_is_short_and_then_settles) ... ok
+test_five_beams_have_leading_blocked_trailing_clear (test_photoeye_model.PhotoeyeModelTest.test_five_beams_have_leading_blocked_trailing_clear) ... ok
+test_impossible_order_fixture_asserts_downstream_early (test_photoeye_model.PhotoeyeModelTest.test_impossible_order_fixture_asserts_downstream_early) ... ok
+test_invalid_or_incomplete_fixture_refused (test_photoeye_model.PhotoeyeModelTest.test_invalid_or_incomplete_fixture_refused) ... ok
+test_length_and_speed_set_blocked_duration (test_photoeye_model.PhotoeyeModelTest.test_length_and_speed_set_blocked_duration) ... ok
+test_stuck_blocked_persists_after_package_leaves (test_photoeye_model.PhotoeyeModelTest.test_stuck_blocked_persists_after_package_leaves) ... ok
+test_stuck_clear_and_missed_downstream_are_token_bound (test_photoeye_model.PhotoeyeModelTest.test_stuck_clear_and_missed_downstream_are_token_bound) ... ok
+test_bounded_telemetry_tracks_belt_and_recent_sensor (test_plant.PlantModelTest.test_bounded_telemetry_tracks_belt_and_recent_sensor) ... ok
+test_lane_three_failed_confirmation_has_no_trailer_event (test_plant.PlantModelTest.test_lane_three_failed_confirmation_has_no_trailer_event) ... ok
+test_lane_three_shares_outbound_with_lane_two_and_reuses_token (test_plant.PlantModelTest.test_lane_three_shares_outbound_with_lane_two_and_reuses_token) ... ok
+test_lane_two_failed_confirmation_never_loads_trailer (test_plant.PlantModelTest.test_lane_two_failed_confirmation_never_loads_trailer) ... ok
+test_late_decision_recirc_and_missed_confirmation (test_plant.PlantModelTest.test_late_decision_recirc_and_missed_confirmation) ... ok
+test_speed_feedback_stops_position_and_identity_mismatch_does_not_route (test_plant.PlantModelTest.test_speed_feedback_stops_position_and_identity_mismatch_does_not_route) ... ok
+test_three_lanes_share_one_outbound_with_order_and_clearance (test_plant.PlantModelTest.test_three_lanes_share_one_outbound_with_order_and_clearance) ... ok
+test_two_lanes_share_outbound_with_clearance_and_no_loss (test_plant.PlantModelTest.test_two_lanes_share_outbound_with_clearance_and_no_loss) ... ok
+test_two_packages_have_distinct_sensor_and_trailer_events (test_plant.PlantModelTest.test_two_packages_have_distinct_sensor_and_trailer_events) ... ok
+test_incomplete_service_read_fails_closed (test_read_authorization_gate.ReaderTests.test_incomplete_service_read_fails_closed) ... ok
+test_systemd_is_absolute_noninteractive_and_processes_bounded (test_read_authorization_gate.ReaderTests.test_systemd_is_absolute_noninteractive_and_processes_bounded) ... ok
+test_guest_evidence_is_complete_jsonl (test_run_chute_minimum_host.MinimumHostGuards.test_guest_evidence_is_complete_jsonl) ... ok
+test_journal_waits_for_four_matching_outcomes (test_run_chute_minimum_host.MinimumHostGuards.test_journal_waits_for_four_matching_outcomes) ... ok
+test_plan_restore_requires_exact_temporary_hash (test_run_chute_minimum_host.MinimumHostGuards.test_plan_restore_requires_exact_temporary_hash) ... ok
+test_plan_restore_uses_preserved_bytes_and_checks_hash (test_run_chute_minimum_host.MinimumHostGuards.test_plan_restore_uses_preserved_bytes_and_checks_hash) ... ok
+test_cold_plc_restart_reuses_nonce (test_scanner_reset.ScannerResetTest.test_cold_plc_restart_reuses_nonce) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+ok
+test_opt_in_repeat_fixture_preserves_distinct_requests (test_scanner_reset.ScannerResetTest.test_opt_in_repeat_fixture_preserves_distinct_requests) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] seq=    2 serial=   2 bc= 6001 st=4 27x66x27cm
+ok
+test_repeated_sequence_after_reset (test_scanner_reset.ScannerResetTest.test_repeated_sequence_after_reset) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] reset nonce=2 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+ok
+test_reset_clears_stale_response_and_history (test_scanner_reset.ScannerResetTest.test_reset_clears_stale_response_and_history) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] reset nonce=2 seed=137
+ok
+test_reset_without_prepare_does_not_ack (test_scanner_reset.ScannerResetTest.test_reset_without_prepare_does_not_ack) ... ok
+test_same_seed_replays_first_two_scans (test_scanner_reset.ScannerResetTest.test_same_seed_replays_first_two_scans) ... [test] reset nonce=1 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] seq=    2 serial=   2 bc= 5002 st=0 27x66x27cm
+[test] reset nonce=2 seed=137
+[test] seq=    1 serial=   1 bc= 6001 st=0 25x69x25cm
+[test] seq=    2 serial=   2 bc= 5002 st=0 27x66x27cm
+ok
+test_failure_rate_does_not_shift_destinations_or_dimensions (test_scanner_sequence.ScannerSequenceTest.test_failure_rate_does_not_shift_destinations_or_dimensions) ... ok
+test_invalid_barcodes_never_look_like_valid_labels (test_scanner_sequence.ScannerSequenceTest.test_invalid_barcodes_never_look_like_valid_labels) ... ok
+test_result_block_encodes_with_pymodbus_3_6_9 (test_scanner_sequence.ScannerSequenceTest.test_result_block_encodes_with_pymodbus_3_6_9) ... skipped 'pymodbus 3.6.9 unavailable; set SORTER_PYMODBUS_PYTHON'
+test_written_registers_stay_in_signed_int_range (test_scanner_sequence.ScannerSequenceTest.test_written_registers_stay_in_signed_int_range) ... ok
+test_missing_marker (test_serial_command.SerialTests.test_missing_marker) ... ok
+test_missing_prompt (test_serial_command.SerialTests.test_missing_prompt) ... ok
+test_pager_like_timeout (test_serial_command.SerialTests.test_pager_like_timeout) ... ok
+test_success_detaches_without_logout (test_serial_command.SerialTests.test_success_detaches_without_logout) ... ok
+test_zero_output_marker_survives_terminal_mode_escape (test_serial_command.SerialTests.test_zero_output_marker_survives_terminal_mode_escape) ... ok
+test_asx_plan_file (test_sort_decision.Decisions.test_asx_plan_file) ... ok
+test_delayed_lookup_falls_back (test_sort_decision.Decisions.test_delayed_lookup_falls_back) ... ok
+test_multi_command_carries_full_identity_and_commits_last (test_sort_decision.Decisions.test_multi_command_carries_full_identity_and_commits_last) ... ok
+test_same_barcode_can_have_distinct_package_decisions (test_sort_decision.Decisions.test_same_barcode_can_have_distinct_package_decisions) ... ok
+test_stale_response_rejected (test_sort_decision.Decisions.test_stale_response_rejected) ... ok
+test_unknown_package_has_no_route (test_sort_decision.Decisions.test_unknown_package_has_no_route) ... ok
+test_valid_plan_is_explicit (test_sort_decision.Decisions.test_valid_plan_is_explicit) ... ok
+test_lane_three_identity_and_invalid_lane_fail_closed (test_xle_recovery.Recovery.test_lane_three_identity_and_invalid_lane_fail_closed) ... ok
+test_lane_two_identity_and_asx_request (test_xle_recovery.Recovery.test_lane_two_identity_and_asx_request) ... ok
+test_liveness_fault_recirculates_undecided_slot_without_route (test_xle_recovery.Recovery.test_liveness_fault_recirculates_undecided_slot_without_route) ... {"event": "run_identity_established", "event_ns": 848568748915, "run_epoch": 1}
+{"barcode": 6001, "event": "scan", "event_ns": 848569229530, "lane": 1, "package_id": "l1-1-7-41-2", "package_serial": 2, "plc_scan_tick": 100, "recovered": true, "request_id": "a86d595b-00ef-436a-9e59-450fbf8998ea", "run_epoch": 1, "scanner_run_nonce": 7, "scanner_sequence": 9, "slot_token": 41}
+{"action": "recirculate", "event": "safe_fallback", "event_ns": 848569599555, "package_id": "l1-1-7-41-2", "reason": "xle_liveness_fault", "request_id": "a86d595b-00ef-436a-9e59-450fbf8998ea"}
+{"accept_tick": 102, "acceptance_margin_ms": 3100, "actual_trailer": 0, "command_id": 10, "divert_tick": 133, "event": "plc_outcome", "event_ns": 848773054706, "lane": 1, "package_id": "l1-1-7-41-2", "reason": 1, "scan_tick": 100, "scanner_sequence": 9, "scanner_to_divert_ms": 3300, "slot_token": 41, "state": "recirculated"}
+{"command_id": 11, "event": "plc_release", "event_ns": 848773461465, "package_id": "l1-1-7-41-2"}
+ok
+test_nonce_change_discards_in_flight_asx_answer (test_xle_recovery.Recovery.test_nonce_change_discards_in_flight_asx_answer) ... ok
+test_old_asx_answer_cannot_route_reused_slot_after_cold_restart (test_xle_recovery.Recovery.test_old_asx_answer_cannot_route_reused_slot_after_cold_restart) ... {"event": "run_identity_established", "event_ns": 849092418061, "run_epoch": 1}
+{"barcode": 6001, "event": "scan", "event_ns": 849093476262, "lane": 1, "package_id": "l1-1-7-41-2", "package_serial": 2, "plc_scan_tick": 100, "recovered": true, "request_id": "08c6202b-a2f5-4d26-b510-11be432b3fd2", "run_epoch": 1, "scanner_run_nonce": 7, "scanner_sequence": 9, "slot_token": 41}
+{"event": "asx_lookup", "event_ns": 849093760199, "package_id": "l1-1-7-41-2", "request_id": "08c6202b-a2f5-4d26-b510-11be432b3fd2", "timeout_ms": 800}
+{"destination": 2, "event": "asx_decision", "event_ns": 849093897566, "package_id": "l1-1-7-41-2", "request_id": "08c6202b-a2f5-4d26-b510-11be432b3fd2"}
+{"event": "decision_discarded", "event_ns": 849093998068, "package_id": "l1-1-7-41-2", "reason": "run_or_slot_changed"}
+{"event": "run_identity_established", "event_ns": 849195995835, "run_epoch": 2}
+{"event": "run_abandoned", "event_ns": 849196372077, "new_run": [2, 7], "old_run": [1, 7], "package_id": "l1-1-7-41-2"}
+{"barcode": 6001, "event": "scan", "event_ns": 849196759707, "lane": 1, "package_id": "l1-2-7-41-2", "package_serial": 2, "plc_scan_tick": 5, "recovered": false, "request_id": "6b99b60c-d13a-4e74-8a2a-714cf4236d51", "run_epoch": 2, "scanner_run_nonce": 7, "scanner_sequence": 9, "slot_token": 41}
+{"event": "asx_lookup", "event_ns": 849197093835, "package_id": "l1-2-7-41-2", "request_id": "6b99b60c-d13a-4e74-8a2a-714cf4236d51", "timeout_ms": 800}
+{"destination": 2, "event": "asx_decision", "event_ns": 849197176136, "package_id": "l1-2-7-41-2", "request_id": "6b99b60c-d13a-4e74-8a2a-714cf4236d51"}
+{"command_id": 11, "destination": 2, "event": "plc_command", "event_ns": 849197341802, "package_id": "l1-2-7-41-2", "run_epoch": 2, "run_nonce": 7, "slot": 0, "slot_token": 41}
+{"accept_tick": 0, "acceptance_margin_ms": null, "actual_trailer": 2, "command_id": 11, "divert_tick": 0, "event": "plc_outcome", "event_ns": 849299516072, "lane": 1, "package_id": "l1-2-7-41-2", "reason": 0, "scan_tick": 5, "scanner_sequence": 9, "scanner_to_divert_ms": -500, "slot_token": 41, "state": "loaded"}
+{"command_id": 12, "event": "plc_release", "event_ns": 849299816321, "package_id": "l1-2-7-41-2"}
+ok
+test_restart_with_accepted_route_waits_for_outcome (test_xle_recovery.Recovery.test_restart_with_accepted_route_waits_for_outcome) ... ok
+test_restart_with_already_terminal_slot (test_xle_recovery.Recovery.test_restart_with_already_terminal_slot) ... ok
+test_restart_with_scanned_slot_reissues_identity_bound_lookup (test_xle_recovery.Recovery.test_restart_with_scanned_slot_reissues_identity_bound_lookup) ... ok
+test_retry_state_requires_fresh_journal_proof (test_xle_recovery.Recovery.test_retry_state_requires_fresh_journal_proof) ... ok
+test_same_seed_cold_restart_keeps_distinct_journal_outcomes (test_xle_recovery.Recovery.test_same_seed_cold_restart_keeps_distinct_journal_outcomes) ... {"event": "run_identity_established", "event_ns": 849643774757, "run_epoch": 1}
+{"command_id": 10, "event": "plc_recovered", "event_ns": 849644144128, "package_id": "l1-1-7-41-2", "slot": 0, "slot_token": 41, "state": 5}
+{"accept_tick": 102, "acceptance_margin_ms": 3100, "actual_trailer": 2, "command_id": 10, "divert_tick": 133, "event": "plc_outcome", "event_ns": 849645586468, "lane": 1, "package_id": "l1-1-7-41-2", "reason": 0, "scan_tick": 100, "scanner_sequence": 9, "scanner_to_divert_ms": 3300, "slot_token": 41, "state": "loaded"}
+{"command_id": 11, "event": "plc_release", "event_ns": 849645919182, "package_id": "l1-1-7-41-2"}
+ok
+test_terminal_outcome_is_durable_once_across_restart (test_xle_recovery.Recovery.test_terminal_outcome_is_durable_once_across_restart) ... ok
+test_third_slot_terminal_recovery_journals_once (test_xle_recovery.Recovery.test_third_slot_terminal_recovery_journals_once) ... ok
+test_unknown_active_epoch_fails_closed (test_xle_recovery.Recovery.test_unknown_active_epoch_fails_closed) ... ok
+test_unreadable_identity_journal_fails_closed (test_xle_recovery.Recovery.test_unreadable_identity_journal_fails_closed) ... {"action": "sorter_stopped", "event": "external_sort_fault", "event_ns": 849679259675, "reason": "XLe journal identity check failed: corrupt"}
+ok
+test_fault_runner_cleanup_disables_plant_before_external_mode (test_xle_vm_recovery.RecoveryOrderTests.test_fault_runner_cleanup_disables_plant_before_external_mode) ... ok
+test_missing_fresh_plant_recommit_fails_closed (test_xle_vm_recovery.RecoveryOrderTests.test_missing_fresh_plant_recommit_fails_closed) ... ok
+test_undecided_reset_recommit_and_safe_mode_teardown (test_xle_vm_recovery.RecoveryOrderTests.test_undecided_reset_recommit_and_safe_mode_teardown) ... ok
+
+======================================================================
+ERROR: test_detached_launch_frees_console_proxy_checkpoint_release_and_exit (test_accumulation_detached.DetachedIntegration.test_detached_launch_frees_console_proxy_checkpoint_release_and_exit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/user/ics-sorter-range/tests/test_accumulation_detached.py", line 150, in test_detached_launch_frees_console_proxy_checkpoint_release_and_exit
+    while time.monotonic() < end and guest.inspect(self.directory, guest.identity(
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/ics-sorter-range/tests/live_accumulation_detached.py", line 84, in inspect
+    raise ValueError("PID command line does not match canonical worker")
+ValueError: PID command line does not match canonical worker
+
+----------------------------------------------------------------------
+Ran 219 tests in 31.695s
+
+FAILED (errors=1, skipped=1)
+exit=1
+
+$ python3 -m compileall -q devices services scada tests
+exit=0
+
+$ git diff --check
+exit=0
+
+# Note on the one error in the second discover run above.
+# test_accumulation_detached.DetachedIntegration raised
+# "PID command line does not match canonical worker" (tests/live_accumulation_detached.py:83).
+# The test does not import devices/scanner.py. Repeated 15 times each under the same
+# PYTHONTRACEMALLOC=1 PYTHONWARNINGS=error::ResourceWarning settings:
+#   unchanged HEAD tree (git archive HEAD):  pass=13 fail=2
+#   Phase 1 working tree:                    pass=11 fail=4
+# It is intermittent before this change and is not addressed in Phase 1.
