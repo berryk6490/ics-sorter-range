@@ -136,9 +136,10 @@ class InspectProcessRaceTest(unittest.TestCase):
             sample = samples.popleft()
             if sample is None:
                 raise FileNotFoundError(path)
-            state, ticks = sample
-            return f"{pid} (monitor.py) " + " ".join(
-                [state] + ["0"] * 18 + [str(ticks)])
+            state, ticks, *flags = sample
+            fields = [state] + ["0"] * 18 + [str(ticks)]
+            fields[6] = str(flags[0]) if flags else "0"
+            return f"{pid} (monitor.py) " + " ".join(fields)
 
         def stat(path, *args, **kwargs):
             if path == proc:
@@ -168,6 +169,18 @@ class InspectProcessRaceTest(unittest.TestCase):
     def test_empty_argv_with_running_process_is_identity_error(self):
         with self.assertRaisesRegex(ValueError, "PID does not run the canonical monitor"):
             self.inspect([("R", 12345)] * 3)
+
+    def test_empty_argv_with_pf_exiting_and_running_state_is_exited(self):
+        result = self.inspect([("R", 12345), ("R", 12345),
+                               ("R", 12345, 0x4)])
+        self.assertEqual(result, {"run_id": "run_12345678", "pid": 4242,
+                                  "start_ticks": 12345, "alive": False,
+                                  "matches": False})
+
+    def test_empty_argv_with_unrelated_flags_is_identity_error(self):
+        with self.assertRaisesRegex(ValueError, "PID does not run the canonical monitor"):
+            self.inspect([("R", 12345), ("R", 12345),
+                          ("R", 12345, 0x8)])
 
     def test_different_script_is_identity_error(self):
         with self.assertRaisesRegex(ValueError, "PID does not run the canonical monitor"):
