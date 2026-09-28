@@ -5,24 +5,24 @@ seed, and the external-route enable after the run.
 """
 import json
 import time
-from pymodbus.client.sync import ModbusTcpClient
+from pymodbus.client import ModbusTcpClient
 
 
 def read(c, address, count=1):
-    r = c.read_holding_registers(address, count, unit=1)
+    r = c.read_holding_registers(address, count, slave=1)
     if r.isError():
         raise RuntimeError(r)
     return r.registers
 
 
 def coil(c, address, value):
-    r = c.write_coil(address, value, unit=1)
+    r = c.write_coil(address, value, slave=1)
     if r.isError():
         raise RuntimeError(r)
 
 
 def register(c, address, value):
-    r = c.write_register(address, value, unit=1)
+    r = c.write_register(address, value, slave=1)
     if r.isError():
         raise RuntimeError(r)
 
@@ -30,8 +30,8 @@ def register(c, address, value):
 def main():
     c = ModbusTcpClient("127.0.0.1", port=502, timeout=2)
     assert c.connect()
-    enables = tuple(c.read_coils(881, 7, unit=1).bits[:7])
-    external = bool(c.read_coils(914, 1, unit=1).bits[0])
+    enables = tuple(c.read_coils(881, 7, slave=1).bits[:7])
+    external = bool(c.read_coils(914, 1, slave=1).bits[0])
     setpoints = read(c, 200, 11)
     seed = read(c, 247)[0]
     try:
@@ -51,7 +51,7 @@ def main():
         coil(c, 883, False)
         coil(c, 884, False)
         coil(c, 914, True)
-        assert c.read_coils(914, 1, unit=1).bits[0], "XLe mode did not latch"
+        assert c.read_coils(914, 1, slave=1).bits[0], "XLe mode did not latch"
         coil(c, 880, True)
         deadline = time.monotonic() + 90
         saw_scan = False
@@ -82,7 +82,7 @@ def main():
         try:
             coil(c, 880, False)
             time.sleep(.3)  # wait for a PLC scan before disabling one-shot mode
-            assert not c.read_coils(880, 1, unit=1).bits[0]
+            assert not c.read_coils(880, 1, slave=1).bits[0]
         except Exception as exc:
             errors.append(f"stop: {exc}")
         actions = [(coil, 914, external), (register, 247, seed)]

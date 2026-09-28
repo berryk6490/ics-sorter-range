@@ -1,37 +1,37 @@
 """Run on the PLC guest to verify the deployed program against live Modbus devices.
 
-Requires pymodbus 2.5.x and the drives guest on the isolated ics-l1 network.
+Requires pymodbus 3.6.9 and the drives guest on the isolated ics-l1 network.
 The script leaves the sorter stopped, with its counters available to inspect.
 """
 
 import json
 import time
 
-from pymodbus.client.sync import ModbusTcpClient
+from pymodbus.client import ModbusTcpClient
 
 
 def registers(client, address, count=1, input_registers=False):
     read = client.read_input_registers if input_registers else client.read_holding_registers
-    reply = read(address, count, unit=1)
+    reply = read(address, count, slave=1)
     if reply.isError():
         raise RuntimeError(f"Modbus read {address}: {reply}")
     return reply.registers
 
 
 def set_coil(client, address, value):
-    reply = client.write_coil(address, value, unit=1)
+    reply = client.write_coil(address, value, slave=1)
     if reply.isError():
         raise RuntimeError(f"Modbus coil {address}: {reply}")
 
 
 def set_register(client, address, value):
-    reply = client.write_register(address, value, unit=1)
+    reply = client.write_register(address, value, slave=1)
     if reply.isError():
         raise RuntimeError(f"Modbus register {address}: {reply}")
 
 
 def coils(client, address, count):
-    reply = client.read_coils(address, count, unit=1)
+    reply = client.read_coils(address, count, slave=1)
     if reply.isError():
         raise RuntimeError(f"Modbus coils {address}: {reply}")
     return tuple(bool(value) for value in reply.bits[:count])

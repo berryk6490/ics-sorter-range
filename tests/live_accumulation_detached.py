@@ -79,6 +79,17 @@ def inspect(directory, expected, script=None):
             return {**record, "alive": False, "matches": False}
         argv = [part.decode(errors="replace") for part in
                 (proc / "cmdline").read_bytes().split(b"\0") if part]
+        if not argv:
+            # Keep this exit race handling in sync with live_accumulation_monitor.py;
+            # the two files deploy to different guests. proc_pid_stat(5): state
+            # (3), flags (9), starttime (22) are indices 0, 6, 19 after comm;
+            # PF_EXITING=0x4 (sched.h) can precede zombie state.
+            stat = (proc / "stat").read_text()
+            fields = stat[stat.rfind(")") + 2:].split()
+            if int(fields[19]) != record["start_ticks"]:
+                raise ValueError("PID owner or start ticks mismatch")
+            if fields[0] in ("Z", "X") or int(fields[6]) & 0x4:
+                return {**record, "alive": False, "matches": False}
         if (str(Path(script or __file__).resolve()) not in argv or "worker" not in argv or
             "--run-id" not in argv or argv[argv.index("--run-id") + 1] != expected["run_id"]):
             raise ValueError("PID command line does not match canonical worker")

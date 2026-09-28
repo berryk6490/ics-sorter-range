@@ -22,7 +22,8 @@ reason as the drive profile: OpenPLC writes a mapped output block as a unit.
     2  seed         master   PRNG root, mirrored from the PLC's master_seed
     3  noread_rate  master   per mille, pushed down from the controller
     4  result_seq   scanner  echoes trig_seq when the result is ready
-    5  barcode      scanner  destination x 1000 + serial, 0 on a failed read
+    5  barcode      scanner  destination x 1000 + serial, 0 on a failed read,
+                             10000..10999 on an invalid read
     6  status       scanner  see the status constants below
     7  length_cm    scanner
     8  width_cm     scanner
@@ -78,6 +79,9 @@ RATE_DUPLICATE = 2
 RATE_INVALID = 1
 
 OVERSIZE_CM = 120           # any dimension past this is an oversize result
+# Invalid labels decode above every valid barcode (1000..9999) and stay below
+# 32767: registers are 16-bit on the wire and the PLC reads them as signed INT.
+INVALID_BASE = 10000
 DT = 0.05                   # service loop period, faster than the PLC scan
 
 
@@ -113,6 +117,11 @@ class Scanner:
         self.s_dest = Stream(1103515245, 12345, 7919 * lane)
         self.s_fail = Stream(1103515245, 12345, 6271 * lane + 11)
         self.s_dims = Stream(1103515245, 12345, 5081 * lane + 23)
+        # Outcome-only draws get their own streams. Every scan takes exactly
+        # one s_fail, one s_dest and three s_dims draws whatever the outcome,
+        # so a failure rate change cannot shift later destinations or sizes.
+        self.s_invalid = Stream(1103515245, 12345, 4001 * lane + 37)
+        self.s_oversize = Stream(1103515245, 12345, 3571 * lane + 41)
         self.last_seed = None
         self.last_seq = 0
         self.run_nonce = 0
@@ -145,6 +154,8 @@ class Scanner:
                 self.s_dest.seed(seed)
                 self.s_fail.seed(seed)
                 self.s_dims.seed(seed)
+                self.s_invalid.seed(seed)
+                self.s_oversize.seed(seed)
                 self.recent = []
                 self.last_seq = 0
                 self.scan_count = 0
@@ -173,7 +184,7 @@ class Scanner:
             status, barcode = ST_MULTIPLE, 0
         elif roll < rate_noread + RATE_MULTIPLE + RATE_OVERSIZE:
             status = ST_OVERSIZE
-            length = OVERSIZE_CM + self.s_dims.next(40)
+            length = OVERSIZE_CM + self.s_oversize.next(40)
         elif roll < rate_noread + RATE_MULTIPLE + RATE_OVERSIZE + RATE_DUPLICATE:
             # The same label read twice: a real barcode belonging to a package
             # already counted. The read succeeded, which is what makes this
@@ -185,7 +196,7 @@ class Scanner:
                      + RATE_DUPLICATE + RATE_INVALID):
             # Decoded cleanly but into something that is not a valid label.
             status = ST_INVALID
-            barcode = 99000 + self.s_dest.next(999)
+            barcode = INVALID_BASE + self.s_invalid.next(1000)
         else:
             status = ST_GOOD
 

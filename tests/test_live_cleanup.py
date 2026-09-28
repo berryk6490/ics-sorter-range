@@ -39,22 +39,22 @@ class Plc(Client):
         self.events = []
         self.fail_at = fail_at
 
-    def read_coils(self, address, count, unit):
+    def read_coils(self, address, count, slave):
         self.events.append(("read", address, count))
         return Reply(bits=[self.state[address + index] for index in range(count)])
 
-    def read_holding_registers(self, address, count, unit):
+    def read_holding_registers(self, address, count, slave):
         return Reply(registers=[self.state.get(address + index, 0)
                                 for index in range(count)])
 
-    def read_input_registers(self, address, count, unit):
+    def read_input_registers(self, address, count, slave):
         if address in (158, 169, 180):
             return Reply(registers=[32767])
         if address in (160, 171, 182):
             return Reply(registers=[6])
         raise RuntimeError("injected measurement failure")
 
-    def write_coil(self, address, value, unit):
+    def write_coil(self, address, value, slave):
         self.events.append(("write", address, value))
         if (address, value) == self.fail_at:
             self.fail_at = None
@@ -67,7 +67,7 @@ class Plc(Client):
                 self.state[coil] = True
         return Reply()
 
-    def write_register(self, address, value, unit):
+    def write_register(self, address, value, slave):
         self.events.append(("register", address, value))
         self.state[address] = value
         return Reply()
@@ -75,8 +75,8 @@ class Plc(Client):
 
 def load_run():
     modules = {name: types.ModuleType(name)
-               for name in ("pymodbus", "pymodbus.client", "pymodbus.client.sync")}
-    modules["pymodbus.client.sync"].ModbusTcpClient = Client
+               for name in ("pymodbus", "pymodbus.client")}
+    setattr(modules["pymodbus.client"], "ModbusTcpClient", Client)
     path = pathlib.Path(__file__).with_name("live_first_package.py")
     with patch.dict(sys.modules, modules):
         return runpy.run_path(str(path), run_name="live_test")["run"]

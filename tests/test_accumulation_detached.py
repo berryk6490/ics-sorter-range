@@ -1,5 +1,6 @@
 """Detached lifecycle and exclusive-console regression tests; no real PLC writes."""
 import contextlib
+from collections import deque
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -12,6 +13,7 @@ import tempfile
 import threading
 import time
 import types
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -244,6 +246,65 @@ class DetachedGuards(unittest.TestCase):
             self.assertTrue(terminal["cleanup_failed"])
             self.assertEqual(terminal["cleanup"]["errors"], ["reset failed"])
             self.assertIn("scenario failed", terminal["original_error"])
+
+
+class InspectRaceTest(unittest.TestCase):
+    """Model a detached worker exiting between stat and cmdline reads."""
+
+    def inspect(self, states, cmdline=b""):
+        pid, run_id, start_ticks = 4242, "test_12345678", 12345
+        root = Path("/fake/detached-run")
+        proc = Path(f"/proc/{pid}")
+        record = {"run_id": run_id, "scenario": "smoke", "pid": pid,
+                  "start_ticks": start_ticks}
+        samples = deque(states)
+        original_stat = Path.stat
+
+        def read_text(path, *args, **kwargs):
+            if path == root / "pid.json":
+                return json.dumps(record)
+            self.assertEqual(path, proc / "stat")
+            state, ticks, flags = samples.popleft()
+            fields = [state] + ["0"] * 18 + [str(ticks)]
+            fields[6] = str(flags)
+            return f"{pid} (worker.py) " + " ".join(fields)
+
+        def stat(path, *args, **kwargs):
+            if path == proc:
+                return SimpleNamespace(st_uid=os.getuid())
+            return original_stat(path, *args, **kwargs)
+
+        def read_bytes(path, *args, **kwargs):
+            self.assertEqual(path, proc / "cmdline")
+            return cmdline
+
+        with patch.object(guest, "paths", return_value={"pid": root / "pid.json"}), \
+             patch.object(Path, "read_text", autospec=True, side_effect=read_text), \
+             patch.object(Path, "stat", autospec=True, side_effect=stat), \
+             patch.object(Path, "read_bytes", autospec=True, side_effect=read_bytes):
+            result = guest.inspect(root, record)
+        self.assertFalse(samples, "unexpected number of /proc/stat reads")
+        return result
+
+    def test_pf_exiting_with_empty_argv_returns_exited(self):
+        result = self.inspect([("R", 12345, 0), ("R", 12345, 0),
+                               ("R", 12345, 0x4)])
+        self.assertEqual((result["alive"], result["matches"]), (False, False))
+
+    def test_empty_argv_without_pf_exiting_raises(self):
+        with self.assertRaisesRegex(ValueError, "PID command line does not match canonical worker"):
+            self.inspect([("R", 12345, 0), ("R", 12345, 0),
+                          ("R", 12345, 0x8)])
+
+    def test_empty_argv_after_zombie_returns_exited(self):
+        result = self.inspect([("R", 12345, 0), ("R", 12345, 0),
+                               ("Z", 12345, 0)])
+        self.assertEqual((result["alive"], result["matches"]), (False, False))
+
+    def test_empty_argv_with_reused_pid_raises(self):
+        with self.assertRaisesRegex(ValueError, "PID owner or start ticks mismatch"):
+            self.inspect([("R", 12345, 0), ("R", 12345, 0),
+                          ("Z", 99999, 0)])
 
 
 if __name__ == "__main__":

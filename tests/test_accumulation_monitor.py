@@ -1,6 +1,7 @@
 """Readiness ordering, failure closure, PID ownership and live-file tests."""
 import argparse
 import base64
+from collections import deque
 import json
 import os
 from pathlib import Path
@@ -12,12 +13,13 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from accumulation_monitor_control import (Controller, GuestCommandError,
                                           SerialGuest, load_control)
-from live_accumulation_monitor import run_monitor
+from live_accumulation_monitor import inspect_process, run_monitor
 
 MONITOR = Path(__file__).with_name("live_accumulation_monitor.py")
 
@@ -114,6 +116,88 @@ class MonitorUnitTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 run_monitor(args, FakeClient, install_signals=False)
             self.assertFalse(Path(args.output).exists())
+
+
+class InspectProcessRaceTest(unittest.TestCase):
+    """Model /proc changing between the state and cmdline reads."""
+
+    def inspect(self, states, cmdline=b"", start_ticks=12345):
+        pid, run_id = 4242, "run_12345678"
+        pid_file = Path("/fake/monitor-pid.json")
+        proc = Path(f"/proc/{pid}")
+        samples = deque(states)
+        original_stat = Path.stat
+
+        def read_text(path, *args, **kwargs):
+            if path == pid_file:
+                return json.dumps({"run_id": run_id, "pid": pid,
+                                   "start_ticks": start_ticks})
+            self.assertEqual(path, proc / "stat")
+            sample = samples.popleft()
+            if sample is None:
+                raise FileNotFoundError(path)
+            state, ticks, *flags = sample
+            fields = [state] + ["0"] * 18 + [str(ticks)]
+            fields[6] = str(flags[0]) if flags else "0"
+            return f"{pid} (monitor.py) " + " ".join(fields)
+
+        def stat(path, *args, **kwargs):
+            if path == proc:
+                return SimpleNamespace(st_uid=os.getuid())
+            return original_stat(path, *args, **kwargs)
+
+        def read_bytes(path, *args, **kwargs):
+            self.assertEqual(path, proc / "cmdline")
+            return cmdline
+
+        with patch.object(Path, "read_text", autospec=True, side_effect=read_text), \
+             patch.object(Path, "stat", autospec=True, side_effect=stat), \
+             patch.object(Path, "read_bytes", autospec=True, side_effect=read_bytes):
+            result = inspect_process(pid_file, run_id, pid)
+        self.assertFalse(samples, "unexpected number of /proc/stat reads")
+        return result
+
+    def test_empty_argv_after_exit_is_not_identity_error(self):
+        for state in ("Z", "X"):
+            with self.subTest(state=state):
+                result = self.inspect([("R", 12345), ("R", 12345),
+                                       (state, 12345)])
+                self.assertEqual(result, {"run_id": "run_12345678", "pid": 4242,
+                                          "start_ticks": 12345, "alive": False,
+                                          "matches": False})
+
+    def test_empty_argv_with_running_process_is_identity_error(self):
+        with self.assertRaisesRegex(ValueError, "PID does not run the canonical monitor"):
+            self.inspect([("R", 12345)] * 3)
+
+    def test_empty_argv_with_pf_exiting_and_running_state_is_exited(self):
+        result = self.inspect([("R", 12345), ("R", 12345),
+                               ("R", 12345, 0x4)])
+        self.assertEqual(result, {"run_id": "run_12345678", "pid": 4242,
+                                  "start_ticks": 12345, "alive": False,
+                                  "matches": False})
+
+    def test_empty_argv_with_unrelated_flags_is_identity_error(self):
+        with self.assertRaisesRegex(ValueError, "PID does not run the canonical monitor"):
+            self.inspect([("R", 12345), ("R", 12345),
+                          ("R", 12345, 0x8)])
+
+    def test_different_script_is_identity_error(self):
+        with self.assertRaisesRegex(ValueError, "PID does not run the canonical monitor"):
+            self.inspect([("R", 12345)] * 2,
+                         b"/usr/bin/python3\0/elsewhere/other.py\0--run-id\0run_12345678\0")
+
+    def test_start_ticks_mismatch_is_still_reused(self):
+        with self.assertRaisesRegex(ValueError, "monitor PID was reused"):
+            self.inspect([("R", 99999)])
+
+    def test_empty_argv_with_reused_zombie_is_still_reused(self):
+        with self.assertRaisesRegex(ValueError, "monitor PID was reused"):
+            self.inspect([("R", 12345), ("R", 12345), ("Z", 99999)])
+
+    def test_empty_argv_after_proc_disappears_is_exited(self):
+        result = self.inspect([("R", 12345), ("R", 12345), None])
+        self.assertEqual((result["alive"], result["matches"]), (False, False))
 
 
 class FakePLC(socketserver.ThreadingTCPServer):

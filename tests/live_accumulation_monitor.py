@@ -70,6 +70,20 @@ def inspect_process(pid_file, run_id, expected_pid):
                     "alive": False, "matches": False}
         argv = [part.decode(errors="replace") for part in
                 (proc / "cmdline").read_bytes().split(b"\0") if part]
+        if not argv:
+            # Keep this local copy in sync with live_accumulation_detached.py;
+            # the two files deploy to different guests.
+            # A monitor can lose its mm (empty cmdline) before state becomes Z.
+            # proc_pid_stat(5): fields (3) state, (9) flags, (22) starttime
+            # are indices 0, 6, 19 after comm; PF_EXITING=0x4 (sched.h).
+            stat = (proc / "stat").read_text()
+            fields = stat[stat.rfind(")") + 2:].split()
+            if int(fields[19]) != record["start_ticks"]:
+                raise ValueError("monitor PID was reused")
+            if fields[0] in ("Z", "X") or int(fields[6]) & 0x4:
+                return {"run_id": run_id, "pid": pid,
+                        "start_ticks": record["start_ticks"],
+                        "alive": False, "matches": False}
         script = Path(__file__).resolve()
         if not any(Path(arg).resolve() == script for arg in argv if arg.endswith(".py")):
             raise ValueError("PID does not run the canonical monitor")
