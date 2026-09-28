@@ -71,6 +71,8 @@ def inspect_process(pid_file, run_id, expected_pid):
         argv = [part.decode(errors="replace") for part in
                 (proc / "cmdline").read_bytes().split(b"\0") if part]
         if not argv:
+            # Keep this local copy in sync with live_accumulation_detached.py;
+            # the two files deploy to different guests.
             # A monitor can lose its mm (empty cmdline) before state becomes Z.
             # proc_pid_stat(5): fields (3) state, (9) flags, (22) starttime
             # are indices 0, 6, 19 after comm; PF_EXITING=0x4 (sched.h).
