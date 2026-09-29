@@ -1,10 +1,10 @@
-# Belt-local sightings and confirmed diverts, version 1 (proposal, not implemented)
+# Belt-local sightings and confirmed chute entries, version 1 (PROPOSAL, not implemented)
 
 This contract describes a realism phase for the range: tracking that is local
-to each belt, identity that crosses belts only through XLe, diverts that the
-plant executes only from PLC output coils, chute confirmation from a
-photoeye, and a recycle loop instead of deleting missed packages. Nothing
-here is implemented. No PLC, plant, drive, scanner, XLe, ASX, SCADA, test,
+to each belt, identity across belts established only by private offline
+evidence, actuator feedback distinct from PLC door coils, confirmation at a
+top-of-chute photoeye, and a recycle loop instead of deleting missed packages.
+Nothing here is implemented. No PLC, plant, drive, scanner, XLe, ASX, SCADA, test,
 deploy or manifest file changes for it. Every statement about current
 behavior cites the source at commit f587cd6.
 
@@ -24,7 +24,8 @@ The PLC tracks a package end to end in one of three global slots
 (`Sorter.st:728-731`), allocated at request time (`Sorter.st:2163-2168`) and
 carried from induction to trailer confirmation. The slot token and serial
 travel on Modbus in every plant event (`devices/plant.py:849-852`) and in the
-slot rows XLe reads (`services/xle.py:173`, `224-231`).
+slot rows XLe reads (`services/xle.py:134-150`, `350-353`); XLe also sends
+them in its command payload (`services/xle.py:163-175`).
 
 There are nine destinations, three outbounds of three doors. The mapping is
 fixed in both the PLC, `((dest - 1) / 3) + 1` (`Sorter.st:2001`), and the
@@ -45,335 +46,425 @@ mode the PLC clears all nine lane divert coils every scan
 the DIVERT event (`Sorter.st:1998-2021`), so the coil echoes the physical
 event instead of causing it. The door coils (`Sorter.st:27-35`) are written
 only inside the legacy outbound block (`Sorter.st:2705-3111`). The plant's
-trailer event reports `p.target`, which it copied from the PLC destination
-(`devices/plant.py:332-338`, `509-522`), so outputs cannot disagree with
-outcomes. Forcing a divert coil therefore has no physical effect today.
+normal trailer event reports `p.target`, which it copied from the PLC
+destination (`devices/plant.py:332-338`, `509-522`); that event does not
+independently validate a coil-driven door actuation. Forcing a divert coil
+therefore has no physical effect today.
 
-## 1. Layout
+## 1. Layout and movement assumptions
 
-The physical route is a graph that lives only in `devices/plant.py`. Belts
-are separate model sections with their own coordinates; a package is on
-exactly one section at a time. The reference configuration is:
+**Version 1 design decision, not facility geometry.** Model three primary
+belts and three outbound belts, retaining the existing nine-door arrangement:
+three doors on each outbound. Primary lane 1 hands off to outbound 1, lane 2
+to outbound 2, and lane 3 to outbound 3 at fixed transfer points. A package
+occupies exactly one modeled section at a time. There is no coil-selected
+primary transfer in version 1. An outbound sighting's destination on another
+outbound is not silently reassigned: the PLC rejects that section-incompatible
+instruction, and the package takes the defined no-route/recycle path. XLe requests an
+independent decision for each sighting, including an outbound re-sighting;
+a primary-belt decision cannot authorize a later outbound door after the
+primary association closes.
 
-| Section | Kind | Tunnel | Doors | Successor at its end |
-| --- | --- | --- | --- | --- |
-| primary belt | carrying belt | primary tunnel | none | transfer to outbound A |
-| transfer | explicit hand-off point | none | none | head of outbound A |
-| outbound A | carrying belt | outbound tunnel, upstream of the first door | door inventory, section 8 | recycle return |
-| recycle return | carrying belt | none | none | outbound A, upstream of the outbound tunnel |
+| Section | Camera tunnel | Motion source | Exit or successor |
+| --- | --- | --- | --- |
+| Primary belt, each lane | One primary tunnel | Its induct VFD feedback | Fixed handoff to its paired outbound |
+| Outbound belt, each lane | One new tunnel upstream of doors | Its outbound VFD feedback | Confirmed chute entry or recycle section |
+| Recycle section, each outbound | None | Same outbound VFD feedback, by simulation assumption | Rejoins that outbound upstream of its tunnel |
 
-The current three-lane, three-outbound range is expressed as three primary
-belts, each with a transfer onto the outbound its sighting's destination
-selects, and three outbounds, each with its own recycle return. Every belt end
-must name a successor in the plant configuration; the plant refuses a
-configuration with a dead end. No package leaves the model except by a
-confirmed chute entry (section 4) or a journaled operator removal.
+The recycle return is an explicit physical section. It is not a new drive or
+a deletion-and-reinduction shortcut. Its path and speed law are simulated
+assumptions, not surveyed facility geometry. A future configuration may use
+coil-selected transfers or a separate recycle drive; neither is version 1.
+Today the range has six VFDs, three induct and three outbound
+(`devices/plant.py:19-20`, `deploy/vfd/induct1.conf` .. `outbnd3.conf`), and
+its modeled movement uses their feedback (`devices/plant.py:331`, `356`,
+`482`, `786`). The current destination-selected merge and lane recirculation
+are different (`devices/plant.py:361-381`, `586-613`).
 
-**Drives.** Each carrying section needs its own drive if it is to move
-independently of the others, and the model uses drive speed feedback as the
-only source of motion (`devices/plant.py:356`, `482`, `786`). Today there are
-six drives, one per induct lane and one per outbound (`devices/plant.py:19-20`,
-`deploy/vfd/induct1.conf` .. `outbnd3.conf`). The primary belts and outbounds
-keep those drives. **No drive exists for a recycle return.** Whether the
-recycle return has its own drive, shares the outbound's, or is gravity or
-passive is not settled by the source and is an open question for the owner.
-The same holds for whether the transfer is powered.
+Each section has finite occupancy and spacing. A transfer is permitted only
+when the receiving section has safe capacity; otherwise the package holds
+upstream. The modeled recycle section also has finite capacity. The current
+plant defines lane and outbound zones and a merge spacing check
+(`devices/plant.py:98-107`, `586-613`); the proposed geometry requires its
+own measured or configured lengths and stopping margins.
 
-## 2. Tracking
+## 2. Occupancy, sightings and identity
 
-The PLC holds **belt-local associations**, one table per carrying section.
-An association opens when the plant reports a package entering that section
-and closes when the plant reports it leaving through a transfer, a chute or
-the recycle return. After a transfer the PLC has no association for the
-package on the new section until that section's tunnel reads it. The current
-three global slots become per-section tables whose capacity is part of the
-configuration.
+An object entering a section first creates **unidentified occupancy**. The
+plant assigns an opaque, section-local handle at entry and reports it with
+the entry event; the PLC validates its run, section, event sequence and
+uniqueness before tracking its position. No barcode, sighting or route
+permission exists yet. A PLC-validated tunnel event then associates exactly
+one occupancy handle with one **identified sighting**. If multiple objects could
+have generated the same read, the result is genuinely ambiguous: do not
+guess an identity or issue a route. An unreadable result is likewise an
+exception/no-route condition. Equal barcode values on two unambiguous reads
+are not ambiguous identity.
 
-Each tunnel read creates a new **sighting**. A sighting identity is the
-tuple (run epoch, scanner nonce, section, tunnel sequence, sighting number),
-with the sighting number allocated by the PLC 1..30000 per run and wrapping
-to 1, the same convention the range uses for every other sequence
-(`CHUTE_FULL_CONTRACT.md:56-58`). The barcode and read status are attributes
-of the sighting, not its key: two sightings may carry the same barcode.
+A sighting key is `(durable_run_epoch, scanner_nonce, section_id,
+section_entry_handle, tunnel_event_sequence, sighting_id)`. The PLC allocates
+`sighting_id` once per validated tunnel event and never reuses it within the
+run; bounded representation and exhaustion behavior require a register audit.
+The tunnel sequence may wrap under the existing 1..30000 convention, but a
+wrapped sequence alone cannot identify a sighting. The PLC binds the handle,
+event sequence and sighting key in one validated record. XLe uses the **full
+sighting key**, never barcode alone, for work, ASX requests, commands and its
+durable outcome journal. Barcode is an attribute and duplicate-barcode is a
+diagnostic attached to each affected sighting.
 
-**Hidden physical ID.** The plant assigns each physical package an internal
-ID at induction. It exists only inside the plant process and in the plant's
-evidence journal. It is never written to the PLC, a drive, a scanner, XLe,
-ASX or any Modbus or OPC UA surface, following the same rule that keeps the
-private physics sample off the public endpoint in `LOAD_CONTRACT.md:124`
-and `160`. The plant refers to a package on Modbus only by the current
-section's belt-local handle, which the PLC allocates per section entry and
-which cannot be linked across sections. Cross-section identity is XLe's
-inference from barcodes, and ground truth is recovered only offline by
-joining the plant journal with the XLe journal (section 11).
+**Global bound.** Version 1 retains a maximum of three active *identified*
+packages across all sections, matching the current three PLC slots
+(`Sorter.st:728-731`, `2163-2168`). Section-local association tables do not
+raise this global bound. Pending camera-slot reservations share the same
+three-slot budget, so transfer closes the old association and reserves the
+receiving one atomically; it never temporarily allocates a fourth slot.
+Unidentified occupancy consumes physical section
+capacity and cannot be routed; when a sighting slot is unavailable, the
+controller must hold or reject new admission safely rather than create an
+untracked identified package. Admission reserves an identified slot before
+the object can reach a camera: a primary package waits before induction, a
+transferring package waits before handoff, and a recycling package waits in
+the finite recycle section if no slot is available. Per-section capacities
+can become configurable later, after physical and register-map review.
 
-## 3. Routing
+At transfer, the old section association and its route authority close. The
+receiving section opens a new, unidentified belt-local handle. Its tunnel
+opens a new sighting, even when the barcode repeats. Neither a matching
+barcode nor temporal proximity proves that two section sightings are the
+same physical package. XLe routes each independently and never carries an
+old door command across the transfer.
 
-XLe issues a destination for **the current sighting only**. The command keeps
-every existing check: run epoch, scanner nonce, slot token, serial, scanner
-sequence and barcode must all match (`Sorter.st:2112-2127`,
-`services/xle.py:173`), and a route is accepted once
-(`Sorter.st:2126-2140`). The command adds the sighting number, and the PLC
-accepts it only while that sighting's association is open on that section.
-A decision for a sighting whose association has closed, because the package
-transferred, entered the recycle return or was read again, is rejected with a
-distinct reason and journaled; it can never apply to a later sighting of the
-same package.
+**Private ground truth.** The plant assigns an internal physical ID and logs
+`physical_id -> old_handle -> transfer_event -> new_handle` only in a private
+plant evidence journal. No Modbus register, OPC UA node, XLe/ASX message,
+HMI field or route command contains that ID. The public plant event carries
+only the section, belt-local handle and event sequence; the PLC adds its
+validated tunnel event and sighting key. An offline join uses the private
+plant journal's `(section, handle, tunnel_event_sequence)`, the PLC's
+validated tunnel event, and XLe's full sighting key. A join gap stays a gap;
+barcode equality never repairs it. This follows the existing separation of
+private physics samples from public drive endpoints
+(`LOAD_CONTRACT.md:124`, `160`), but the physical-ID journal is new design.
 
-**Concurrent sightings of one barcode.** XLe keys its pending work by
-sighting, never by barcode. Today it keys by epoch, nonce, token, serial and
-scanner sequence (`services/xle.py:383`), and ASX can already distinguish
-two parcels bearing one label only by the PLC serial
-(`services/asx.py:16-20`), which becomes belt-local under this contract. When a
-second sighting of a barcode opens while an earlier sighting of that barcode
-is still open, XLe:
+## 3. Routing and concurrent equal barcodes
 
-1. leaves any route already accepted for the earlier sighting in place, since
-   the PLC accepts a route once and has no revoke operation
-   (`Sorter.st:2126-2143`);
-2. issues no route for the new sighting, so it follows the no-destination path
-   to the recycle return; and
-3. journals both sightings as `duplicate_concurrent`, with their sections,
-   tunnel sequences and read statuses.
+For every readable, unambiguous sighting, XLe makes its own ASX request and
+records an independent section-scoped decision. A primary sighting cannot
+command an outbound door: its section has only the fixed physical handoff,
+and its decision is closed at transfer. An outbound sighting can command a
+door on its own outbound after its independent ASX result. Two concurrently
+open sightings with the same barcode retain independent routing eligibility;
+when both are on actionable outbound sections, both may receive door
+commands, even to different doors.
+XLe records `duplicate_barcode` with both sighting keys for diagnosis; it
+never uses that diagnostic to deny the second route. Only unreadable or
+genuinely ambiguous sightings take an exception/no-route path. For an
+outbound sighting, a missing or late ASX decision follows an explicit safe
+no-door-route and recycle path rather than a fabricated destination. On a
+primary, the fixed handoff remains a physical transfer, never authority for
+an outbound door.
 
-A sighting is open until its association closes. A recycled package's
-earlier sighting is closed as `recycled` when the recycle entry is reported,
-so its later read is not concurrent with it. Whether the owner's operation
-instead sends concurrent duplicates to a dedicated exception door is an open
-question.
+The command must match the full sighting key, accepted ASX request/response,
+current open section association, selected door and bounded command ID. It
+cannot act on a later sighting with the same barcode, a transferred package,
+or a closed association. The PLC accepts one route for the live sighting and
+rejects stale, duplicate, wrong-run, wrong-section and wrong-handle commands.
+This extends the existing epoch, nonce, token, serial, scanner sequence and
+barcode checks and one-accept rule (`Sorter.st:2112-2143`,
+`services/xle.py:165-185`). Current XLe pending work is already keyed by
+epoch, nonce, token, serial and scan sequence (`services/xle.py:378-389`),
+and ASX has a parcel-serial override for a shared barcode
+(`services/asx.py:12-25`); neither is the proposed belt-local key.
 
-## 4. Divert confirmation
+The fixed handoff cannot satisfy a route to a door on a different outbound.
+The PLC reports a section-incompatible decision and safely withholds that
+door command. XLe journals the rejection against the original sighting.
 
-A divert has three distinct events, each journaled with its own sequence:
+## 4. Door command, actuator and chute-entry confirmation
 
-| Event | Source | Meaning |
+Three observations remain distinct and separately sequenced:
+
+| Observation | Authority | Meaning |
 | --- | --- | --- |
-| command accepted | PLC | XLe route accepted for the open sighting, as the existing ack (`Sorter.st:2140`) |
-| diverter fired | PLC output coil | the door's divert coil was on while the package was in that door's actuation window |
-| chute photoeye interrupted | plant raw beam | the chute entry beam for that door went blocked |
+| Accepted route and commanded door coil | PLC | The output was requested for this live sighting and door; it does not prove motion. |
+| Diverter actuation feedback | Plant raw sensor, PLC validated | The modeled diverter physically reached its required position; feedback may fail while the coil is energized. |
+| Top-of-chute photoeye pulse | Plant raw beam, PLC validated | An object crossed the chute entry; it does not prove loading inside a trailer. |
 
-The plant moves a package into a chute **only** when the PLC output coil for
-that door is on while the package is in the door's actuation window. It never
-reads the slot table's destination to decide a divert. This closes the
-earlier finding that forcing a divert coil had no physical effect: under this
-contract the coil is the actuator. The same rule applies to a coil-selected
-transfer between a primary belt and an outbound.
+The plant's simulated actuator has its own state and feedback. Energizing the
+coil requests actuation; a failed or late actuator may leave the package on
+the belt. The plant must not synthesize successful actuation merely from the
+coil bit or the accepted destination. The PLC confirms **chute entry** only
+when the applicable command, identity-matched valid actuator feedback and
+matching door photoeye pulse agree. A coil alone, feedback alone or photoeye
+edge alone cannot increment a success count. Current plant mode instead
+chooses a target from PLC slot destination and raises a trailer event from
+that target (`devices/plant.py:361-374`, `509-522`, `787-790`), while lane
+coils are set after a plant DIVERT event (`Sorter.st:1815-1818`,
+`1998-2021`); this proposed feedback path is not current behavior.
 
-A chute entry counts only when all of these hold:
+**Finalization decision for version 1:** the leading beam edge creates a
+pending physical chute-entry observation; a *valid completed pulse* (leading
+edge, plausible blocked interval and debounced clear) is required before the
+PLC finalizes a successful chute entry. A beam that remains blocked cannot
+silently count as ordinary success. The physical package may already have
+left the belt while confirmation is pending; the model must not move it on
+toward recycle. If the pulse fails quality checks, record an unconfirmed
+physical exit and stop as described below.
 
-- the fired diverter and the photoeye event name the same belt-local handle
-  and the same physical door;
-- that door is the door the accepted command's destination maps to under the
-  door inventory; and
-- the beam goes blocked within a window that opens at `t_fire + d / v` and
-  closes at `t_fire + (d + L) / v` plus a tolerance, where `d` is the travel
-  distance from the diverter to the chute photoeye, `v` the chute entry speed
-  and `L` the package length.
+The actuation window depends on the configured door geometry, package front
+and length. Expected travel from actuation to the photoeye is evaluated along
+the **modeled path** by integrating fresh, quality-valid speed feedback over
+time. Variable speed changes the predicted interval; zero speed pauses path
+progress but a bounded wall-clock observation limit still prevents an
+infinite pending result. A drive stop is not mistaken for a missed pulse.
+Stale or unavailable feedback makes timing quality unknown and prevents a
+success confirmation until fresh evidence resolves it within a bound. Valid
+blocked duration depends on package length, effective beam width and the
+same time-varying speed path, not a fixed `L / v` shortcut. Travel distance,
+timing tolerance, valid pulse length, blockage threshold, clear debounce,
+door actuation geometry and the real package-length distribution are
+**unmeasured configuration inputs**, not facility measurements. Fail closed
+if a required parameter or sensor quality is unavailable.
 
-The window is derived from package length and chute entry speed, never a
-fixed constant. The pulse length must also be consistent with `L / v`. The
-values of `d`, `v` and the tolerance are open questions.
+## 5. Misses, recycle and unexpected physical exits
 
-## 5. Miss and recycle
+A commanded but unactuated diverter, or an actuated diverter without a
+matching chute pulse, remains **unconfirmed**. If the package is observed
+continuing on the outbound and safely reaches its end, it enters the recycle
+section; its old sighting closes as `recycled`. It rejoins upstream of the
+outbound tunnel, where a fresh read opens a new sighting and XLe makes a new
+independent decision. A recirculation does not increment a chute-entry count.
+Old commands cannot be applied to the new sighting. If the package's path is
+not observed, keep the outcome unresolved and fail closed rather than infer
+recycle from elapsed time.
 
-A fired diverter without a matching photoeye event, or an accepted command
-whose door never fired, leaves the outcome **unconfirmed**. It stays
-unconfirmed until physical movement shows where the package went: it enters
-the recycle return, it interrupts another chute photoeye (section 6), or it
-is read by the next tunnel. An unconfirmed outcome never increments a
-trailer counter.
+An unexpected top-photoeye entry, including an entry at the wrong door or one
+without the applicable command and matching actuator feedback, is treated as
+a **physical exit** with an **unconfirmed** outcome. The PLC latches the
+door, time, sensor quality and nearby belt-local handle or explicit unknown
+identity, raises an alarm and commands a controlled whole-sorter stop. That
+physical package is removed from the belt model at the observed crossing; it
+cannot continue toward recycle, and no successful chute-entry count rises.
+The outcome and alarm remain in the journals. A quality-failed pulse after a
+pending physical exit takes the same unconfirmed stop path. This is a
+controlled process stop, not an emergency-stop circuit.
 
-A package that reaches the end of an outbound enters its recycle return and
-rides back onto the outbound upstream of the outbound tunnel. Its old sighting
-closes as `recycled`; the next tunnel read creates a new sighting, which XLe
-routes afresh. Recycling cannot produce a successful load. Only a matched
-fired-plus-photoeye pair counts, and a recycled package's earlier accepted
-command is dead once its association closes.
+A top photoeye blocked beyond its configured threshold latches a separate
+`chute_blocked` alarm and the same controlled whole-sorter stop. Acknowledge
+marks the alarm seen but cannot clear it or restart motion. Recovery requires
+beam clear for the configured debounce, healthy actuator/photoeye/plant
+quality, current run identity, reconciliation of pending and physically
+exited package outcomes, then a separate operator reset/retry. An unexpected
+entry likewise cannot be cleared by acknowledgement alone. The existing
+path-photoeye contract already latches an overlong block and stops the sorter
+(`STATEFUL_PHOTOEYES.md:44-48`); the top-chute path is new design. Neither
+fault is the reserved Phase 2B `JAMMED` motion state.
 
-## 6. Unexpected chute events
+## 6. Counts, nine doors and register version
 
-A chute photoeye interruption at a door with no matching fired diverter in
-its window is its own event class, `unexpected_chute_entry`. It is not a
-load, and it is not merely a fault. Its causes include a physical mis-sort (a
-package leaving the belt where no divert fired) and a tampered or failing
-sensor. The PLC latches it with the door, time and the belt-local handles
-present near that door, raises an alarm, and journals it. A fired diverter
-whose photoeye event lands at a different door is classed `missort_candidate`
-for both doors. Neither class increments any counter. Whether an unexpected
-entry must also stop the sorter is an open question; sustained blockage is
-handled by section 7 regardless.
+Introduce `confirmed_chute_entry_count[door]` and HMI label **Confirmed chute
+entries**. It counts only completed, PLC-validated matching pulses. It does
+not claim that a trailer was loaded. Keep the current nine `tr*_ct` register
+addresses as compatibility aliases during migration, incremented by the
+*same* confirmed chute-entry transition, never by a second counter path.
+Consumers must label these legacy registers as chute-entry confirmations and
+must not present them as proven trailer inventory. Historical values from
+before migration had the old plant-event meaning and need a version label;
+do not silently combine unlike periods. Keep wrong-door, unconfirmed exit,
+actuator failure and recycle diagnostics separate from success. At f587cd6,
+`tr*_ct` increments on an accepted plant trailer event
+(`Sorter.st:2029-2053`), and OPC UA exposes a fixed 3-by-3 counter tree
+(`scada/opcua_server.py:444-451`).
 
-## 7. Chute blockage
+Version 1 keeps three outbounds with three physical doors each, and the
+current nine-door destination order. A larger, roughly 20-door layout is
+illustrative only. It needs a source-wide register and output-address audit
+before any mapping is assigned: today nine door coils are mapped at
+`Sorter.st:27-35`, and nine success plus nine wrong-destination counters at
+`Sorter.st:72-89`. Do not allocate proposed addresses by assumption.
 
-Each chute photoeye reports continuous blocked time. A valid pulse, whose
-length is consistent with `L / v`, confirms entry. Blockage that continues
-past a threshold latches `chute_blocked` for that door and commands a
-**controlled stop of the whole sorter**, the same stop path the PLC already
-uses for a plant fault (`Sorter.st:1831`). Operator acknowledge does not clear
-it. Reset requires the beam clear for a debounce period, a healthy process
-state (plant heartbeat fresh, plant and photoeye faults zero, run identity
-matched) and then an explicit reset. The range already treats "blocked too
-long" on a path photoeye as a latched, sorter-stopping quality
-(`STATEFUL_PHOTOEYES.md:44-48`). The blockage threshold must exceed the
-longest valid pulse and is an open question.
+Add a `register_map_version` beside the existing PLC program identity
+`prog_hash` (`Sorter.st:99`, `793`) only after that audit. The manifest
+(`deploy/deployment_manifest.json:419`), OPC UA offsets
+(`scada/opcua_server.py:80-95`, `436`, `580`), HMI and typed readers must
+agree on the version before interpreting any new fields. This document
+names signals and invariants, not approved numeric registers.
 
-## 8. Doors and register map version
+The existing trailer-2 chute-full capacity experiment remains separate:
+its current configured capacity is three (`devices/plant.py:56-58`;
+`CHUTE_FULL_CONTRACT.md:3-8`). Chute-full is controlled backpressure from
+inventory; a stuck top photoeye is a sensor-quality stop. Neither should be
+called Phase 2B `JAMMED`.
 
-Physical door number and routing destination are separate. A door inventory
-lists each door as (outbound, physical door number, position along the
-outbound, enabled, destination it serves). XLe and ASX route to a
-destination; the PLC maps the destination to a door through the inventory,
-and the plant places doors from the same inventory. Neither side keeps the
-current hard-coded arithmetic (`Sorter.st:2001`, `devices/plant.py:61-64`).
+## 7. OPC UA and HMI
 
-The default inventory reproduces today's nine destinations: three outbounds,
-three doors each, destinations 1..9 in the current order. A larger
-illustrative configuration has one outbound with about 20 doors. It needs
-more door coils and counters than the nine the program maps today
-(`Sorter.st:27-35`, `72-89`). Their addresses need a source-wide mapped
-address audit, as the chute-full slice required
-(`CHUTE_FULL_CONTRACT.md:15-19`).
+Publish **PLC-validated** section occupancy quality, anonymous belt-local
+handle, current sighting key if identified, duplicate-barcode diagnostic,
+commanded door coil, distinct actuator feedback and quality, top-photoeye
+raw/conditioned state and quality, pending/completed pulse state, blocked
+duration, confirmed chute-entry count, unconfirmed physical exit, recycle
+outcome, and controlled-stop/alarm state. OPC UA and HMI must not read plant
+internals or private physical IDs. They may show raw sensor *values only as
+validated by the PLC*, clearly distinct from conditioned values.
 
-The program gains a `register_map_version` word beside the existing program
-identity `prog_hash` (`Sorter.st:99`, `793`). The PLC program identity in
-the manifest (`deploy/deployment_manifest.json:419`) and the OPC UA offset
-table (`scada/opcua_server.py:80-95`, `436`, `580`) must carry the same
-version. The OPC UA server and the typed readers refuse to publish or compare
-when the version read from the PLC differs from theirs, so the program, the
-manifest and the OPC UA mapping change together.
+Use explicit HMI labels: **Commanded**, **Actuated**, **Chute entry pending**,
+**Confirmed chute entry**, **Unconfirmed exit**, **Recycled**, and **Sensor
+quality unavailable**. Acknowledge and reset/retry are separate actions; an
+acknowledgement cannot clear blockage or unexpected-entry stop. Existing
+trailer counter tags remain available as versioned compatibility aliases,
+with a label explaining the top photoeye does not prove trailer loading.
 
-## 9. Chute-full
+## 8. Evidence, journals and reset
 
-The existing chute-full slice (`CHUTE_FULL_CONTRACT.md:3-8`) remains an
-optional accumulation experiment for one trailer with capacity three
-(`devices/plant.py:56-58`). **It is not the realistic chute protection.**
-Section 7's blockage latch is. The two are independent: chute-full holds
-packages upstream on a capacity count, while blockage stops the sorter on a
-sustained beam.
+For each sighting, XLe journals the full key, barcode/read status, duplicate
+diagnostic, ASX request and response IDs, decision, PLC command and ack,
+PLC-validated actuator feedback reference, pulse reference, outcome, and any
+rejection reason. The current durable XLe outcome journal is keyed by full PLC package
+identity (`services/xle.py:188-218`); the proposed sighting journal extends
+that rule. The proposed PLC event record and counters contain only validated
+transitions.
+Plant ground truth records physical ID, section entry/exit, old/new handles,
+actuator state, raw beam edges, speed samples and private coordinates.
 
-## 10. OPC UA and HMI
+An offline evidence join must use:
 
-The OPC UA tree and HMI gain, per section and per door, read-only:
+1. the plant's private `(section, belt-local handle, entry/transfer event,
+   tunnel event sequence)` mapped to physical ID;
+2. the PLC's validated `(run epoch, nonce, section, handle, tunnel event,
+   sighting key)` and command/feedback/photoeye sequence; and
+3. XLe's exact sighting key and request/command/outcome IDs.
 
-- tracking quality per section and the open association count;
-- last sighting per tunnel: sighting number, barcode, read status, time;
-- commanded door per open sighting;
-- diverter feedback per door: coil state and last fire time;
-- chute photoeye state per door and the running blocked timer;
-- `chute_blocked` and `unexpected_chute_entry` latches per door; and
-- outcome per sighting: `requested`, `fired`, `confirmed`, `unconfirmed`,
-  `recycled`.
+Keep raw observations, rejected identity tuples, stale samples, clock quality
+and missing records; do not fill gaps with barcode matches or assume a failed
+read was success. Timestamp source and synchronization uncertainty must be
+recorded. A successful chute entry needs command, actuator and completed
+matching pulse evidence; an unconfirmed physical exit is journaled but does
+not increment success. In current plant mode the counter changes after an
+accepted plant terminal event (`Sorter.st:2029-2064`); the
+three-observation gate is new.
 
-The hidden physical ID never appears. Trailer counter nodes follow the door
-inventory instead of the fixed 3 by 3 tree.
+Run reset must not reuse an active sighting key or silently turn pending
+chute exits into successes. Preserve terminal/unconfirmed evidence, stop
+induction, reconcile in-flight occupancy and sensor quality, and establish a
+fresh durable epoch/nonce before accepting new sightings. If identity or
+physical exit cannot be reconciled, retain the latched stop and require
+operator investigation; acknowledgement alone is not reset.
 
-## 11. Evidence
+## 9. Interaction with existing model
 
-XLe journals every sighting and its outcome, keyed by sighting identity, in
-the existing durable journal (`services/xle.py:188-218`). The plant journals
-every physical transition (section entry, transfer, fire observed, chute
-entry, recycle entry) with its hidden physical ID and the belt-local handle
-current at that moment. Evidence links a sighting to its physical outcome
-only by joining the two journals offline, outside every control surface.
+The separate, still-unimplemented load proposal would count plant
+`model.packages` membership per belt and would not cap physical membership
+at three PLC slots (`LOAD_CONTRACT.md:1-8`, `139-143`, `164-170`). The
+current plant already tracks packages in its own model, including terminal
+packages clearing a door (`devices/plant.py:523-528`). Version 1 keeps
+physical occupancy distinct from **three global active identified sightings**.
+Unidentified section occupancy and terminal packages clearing a chute can
+still contribute physical load; section capacity and induction guards must
+prevent overflow. The recycle return uses the outbound VFD feedback for
+motion and load attribution by declared simulation assumption; a future
+separate recycle drive would require a revised load and register contract.
 
-Trailer counters stay confirmation-only, as today, where only a terminal
-event increments them (`Sorter.st:2029-2064`). Each increment additionally
-records the diverter-fired sequence and the chute photoeye sequence that
-caused it; a counter increment without both is invalid evidence.
-
-## 12. Interactions
-
-**Load contract.** Drag stays per-belt `model.packages` membership
-(`LOAD_CONTRACT.md:164-170`), now over more sections. The recycle return adds
-membership that belongs to whichever drive moves it, which depends on the
-open recycle-drive question. The load contract's six private ports
-(`LOAD_CONTRACT.md:127-128`) would grow if a recycle drive is added. Its
-lifecycle test must include transfer, chute entry and recycle entry.
-
-**Three-slot limit.** The three global slots are replaced by per-section
-association tables. The load contract's rule that slot count does not bound
-physical membership (`LOAD_CONTRACT.md:140-141`) applies with more force: a
-recycling package holds no association at all while on the recycle return.
-
-**Accumulation.** Accumulation zones are defined on today's lane and merge
-coordinates (`devices/plant.py:98-107`) with admission at the merge
-(`devices/plant.py:586-613`). They must be redefined per section, and the
-merge admission becomes a coil-driven transfer under section 4. Holds on an
-outbound and the chute-full experiment keep their current meaning inside
-their sections.
+Today accumulation and merge admission use lane and outbound coordinates
+(`devices/plant.py:98-107`, `586-613`). Version 1 must retest spacing and
+backpressure through fixed transfers, three identified slots and the recycle
+return. A chute-full hold remains a capacity hold; an unexpected chute entry
+or sustained beam blockage causes a controlled stop instead of another hold.
 
 ## Diagrams
 
 ```mermaid
 flowchart LR
-    IND([induction]) --> PB[primary belt]
-    PT{{primary tunnel}} -.reads.- PB
-    PB --> TR((transfer))
-    TR --> OA[outbound A]
-    OT{{outbound tunnel}} -.reads.- OA
-    OA -->|door coil fired| D1[door 1 chute]
-    OA -->|door coil fired| D2[door 2 chute]
-    OA -->|door coil fired| DN[door N chute]
-    D1 --- P1((chute photoeye))
-    D2 --- P2((chute photoeye))
-    DN --- PN((chute photoeye))
-    OA -->|end of outbound| RR[recycle return]
-    RR -->|rejoins upstream of outbound tunnel| OA
+    IN([induction]) --> P[primary belt: anonymous occupancy]
+    P --> PT{{primary tunnel: new sighting}}
+    PT --> FH((fixed handoff; close primary association))
+    FH --> O[outbound: new anonymous handle]
+    O --> OT{{outbound tunnel: new independent sighting}}
+    OT --> D{PLC door command}
+    D --> AF{plant actuator feedback}
+    AF -->|actuated| PE{{top chute photoeye: leading edge; exit pending}}
+    PE -->|valid completed pulse| CE([confirmed chute entry; not proven trailer load])
+    PE -->|bad pulse or sustained block| STOP([unconfirmed exit / latched controlled stop])
+    AF -->|failed or missed entry; package observed on belt| R[recycle section]
+    AF -->|physical exit without matching feedback| STOP
+    OT -->|no valid route| R
+    R -->|outbound VFD feedback; rejoins upstream of tunnel| O
+    O -->|unexpected chute entry| STOP
 ```
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Sighted: tunnel read opens sighting
-    Sighted --> Requested: XLe route accepted for this sighting
-    Sighted --> NoRoute: no route or duplicate_concurrent
-    Requested --> Fired: door coil on in actuation window
-    Requested --> Unconfirmed: no fire at commanded door
-    Fired --> Confirmed: matching photoeye pulse in window
-    Fired --> Unconfirmed: no matching photoeye
-    Unconfirmed --> Recycled: recycle entry observed
-    Unconfirmed --> UnexpectedEntry: photoeye at other door
-    NoRoute --> Recycled: recycle entry observed
-    Recycled --> [*]: sighting closed; next read opens a new one
-    Confirmed --> [*]: counter increments with fire and photoeye sequences
-    UnexpectedEntry --> [*]: latched, never counted
+    [*] --> Anonymous: section entry / local handle
+    Anonymous --> Sighted: validated tunnel event / new sighting key
+    Sighted --> Requested: independent XLe and ASX decision
+    Sighted --> Exception: unreadable or ambiguous read
+    Requested --> Commanded: PLC accepts section-scoped door command
+    Requested --> Recycle: no valid route; observed recycle entry closes sighting
+    Commanded --> Actuated: matching physical actuator feedback
+    Commanded --> Recycle: actuator fails; observed recycle entry closes sighting
+    Commanded --> UnconfirmedStop: physical exit without matching feedback
+    Actuated --> PendingEntry: matching top beam leading edge
+    PendingEntry --> ConfirmedEntry: valid completed pulse and clear
+    PendingEntry --> UnconfirmedStop: bad pulse or sustained blockage
+    Actuated --> Recycle: missed entry; observed recycle entry closes sighting
+    Actuated --> UnconfirmedStop: wrong-door physical entry
+    Anonymous --> UnconfirmedStop: unknown object enters a chute
+    Sighted --> UnconfirmedStop: unexpected physical chute entry
+    Exception --> Recycle: observed recycle entry closes sighting
+    Recycle --> Anonymous: rejoin upstream of outbound tunnel; new local handle
+    ConfirmedEntry --> [*]: one confirmed chute-entry increment
+    UnconfirmedStop --> [*]: latched controlled stop; no success count
 ```
 
-## Bounded plan
+The diagram's recycle arrows require observed on-belt continuation. A
+physical chute exit never follows them. Transfer similarly closes one
+association before the receiving section becomes anonymous.
 
-1. **Contract.** This document; owner answers to the open questions below.
-2. **Sightings and recycle.** Per-section associations, outbound tunnels,
-   sighting identity on the XLe command, the recycle loop and the hidden
-   physical ID.
-3. **Diverter feedback and chute photoeye.** Coil-driven diverts and
-   transfers, the three confirmation events, unexpected entries, the blockage
-   latch, the door inventory and `register_map_version`.
-4. **OPC UA, HMI and live evidence.** Section 10 surfaces, both journals and
-   a live run with the offline join.
+## Bounded four-step implementation plan
 
-## Open questions for the owner
+1. **Contract and measured configuration.** Review section lengths, fixed
+   handoffs, door geometry, actuator feedback, beam placement, sensor quality,
+   speed/length ranges, register addresses and three-slot bounds. Preserve
+   the nine-door baseline and version every new field. Keep this document a
+   proposal until those choices and tests are approved.
+2. **Belt-local occupancy, sightings and recycle.** Add anonymous handles,
+   validated tunnel events, independent XLe/ASX work keyed by sighting,
+   private physical-ID evidence, fixed transfers and bounded recycle motion
+   on outbound VFD feedback. Test equal barcodes, wrap, transfer closure,
+   capacity, FIFO and no hidden-ID leakage before live operation.
+3. **Actuation and chute-entry validation.** Separate coil command from
+   actuator feedback, add top-beam edge/pulse quality, path-integrated timing,
+   unconfirmed physical-exit stop, blockage latch, reset interlocks and
+   confirmation-only counters. Test variable/zero/stale speed, actuator
+   failure, wrong door, unexpected exit and held beam. Do not count on the
+   leading edge.
+4. **OPC UA, HMI and offline evidence.** Publish only PLC-validated fields,
+   version compatibility aliases, show pending/unconfirmed/stop states, and
+   join plant and XLe journals offline using handles and tunnel events. Run
+   bounded regression and live scenarios with independent typed restoration;
+   preserve missing and rejected observations as evidence.
 
-1. Recycle return drive: its own drive, shared with the outbound, or passive.
-2. Whether the primary-to-outbound transfer is powered, and whether it is a
-   routed (coil-selected) transfer or a fixed hand-off in the operation this
-   models.
-3. Where a primary belt's tail goes when a package does not transfer, in
-   configurations with more than one outbound.
-4. Where the recycle return rejoins the outbound, relative to the outbound
-   tunnel and the first door.
-5. Chute entry speed `v`.
-6. Travel distance `d` from diverter to chute photoeye, and the chute
-   photoeye's mounting position ("top" of chute or elsewhere).
-7. Confirmation window tolerance around `d / v` and `(d + L) / v`.
-8. Valid pulse length bounds relative to `L / v`.
-9. Chute blockage threshold, and the beam-clear debounce required before
-   reset.
-10. Door actuation window along the outbound: where a door's coil must be on
-    relative to the package front and length.
-11. Whether concurrent duplicate sightings go to the recycle return or to a
-    dedicated exception door.
-12. Whether an `unexpected_chute_entry` alone must stop the sorter.
-13. Per-section association capacity, replacing three global slots.
-14. Package length distribution the window and threshold must cover; today
-    the plant uses one configured length (`devices/plant.py:190-194`).
-15. Door inventory for the larger configuration: door count, spacing and the
-    destination each door serves.
+## Open questions and unmeasured inputs
+
+The version 1 choices above are design decisions, not claimed facility facts.
+The following must be measured, configured or approved before implementation:
+
+1. Primary, outbound and recycle section lengths, transfer locations and
+   safe stopping margins; whether the modeled fixed handoff matches the
+   actual process.
+2. Door positions and actuation geometry relative to package front and
+   length, actuator feedback type/quality, and its bounded response time.
+3. Diverter-to-top-photoeye path distance, beam aperture/mounting position,
+   speed-feedback freshness, integration tolerance and maximum observation
+   time, including zero-speed and restart behavior.
+4. Valid completed-pulse length bounds, sustained blockage threshold and
+   beam-clear debounce across the real package-length distribution. Success
+   is defined here as **after** a valid completed pulse; those numeric bounds
+   remain unresolved.
+5. Per-section physical capacities, recycle spacing and overflow response,
+   while the first implementation retains three global identified slots.
+6. Future alternatives: coil-selected primary transfers, a separate recycle
+   drive, and a larger roughly 20-door inventory, each requiring a new
+   geometry, power and register-address audit.
+7. How to validate that the top photoeye truly corresponds to chute entry
+   under sensor failure or tampering. It cannot by itself prove delivery into
+   a trailer.
