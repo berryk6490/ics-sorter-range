@@ -741,7 +741,7 @@ flowchart LR
     H -->|bounded wait exceeded| TF([transfer fault: controlled stop])
     FH --> OE{{outbound_entry 0 cm: fresh outbound values}}
     OE --> ME{{merge_entry 150 cm: validate pass-by or recycle transfer}}
-    OE -->|missing or stale edge by deadline| MF([merge visibility fault: controlled stop])
+    ME -->|missing or stale edge by deadline| MF([merge visibility fault: controlled stop])
     ME -->|fresh edge uniquely attributed| OT{{outbound tunnel 300 cm: new sighting}}
     OT --> DZ[door 1 zone 800-880 cm: fire bound to tracked package]
     DZ -->|bound fire, actuated, bound valid pulse| CE([confirmed chute entry])
@@ -757,7 +757,6 @@ flowchart LR
     R --> RG{{recycle_gate 1450 cm: approach to hold}}
     RG --> AG[spacing and merge admission]
     AG -->|admitted; await fresh position/time match| ME
-    AG -->|missing or stale edge by deadline| MF
     ME -->|unexpected or ambiguous edge| MF
 ```
 
