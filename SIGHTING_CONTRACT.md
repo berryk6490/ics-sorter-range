@@ -742,14 +742,14 @@ flowchart LR
     FH --> OE{{outbound_entry 0 cm: fresh outbound values}}
     OE --> ME{{merge_entry 150 cm: validate pass-by or recycle transfer}}
     OE -->|missing or stale edge by deadline| MF([merge visibility fault: controlled stop])
-    ME --> OT{{outbound tunnel 300 cm: new sighting}}
+    ME -->|fresh edge uniquely attributed| OT{{outbound tunnel 300 cm: new sighting}}
     OT --> DZ[door 1 zone 800-880 cm: fire bound to tracked package]
     DZ -->|bound fire, actuated, bound valid pulse| CE([confirmed chute entry])
     DZ --> EZ[door E zone 1000-1080 cm: exception]
     EZ -->|not admitted at opening or unreadable: bound fire, actuated, bound valid pulse| EX([exception entry])
     EZ -->|exception divert unconfirmed| STOP([controlled whole-sorter stop])
     DZ -->|unexpected pulse, blockage, second fire, speed fault, stale feedback| STOP
-    EZ -->|no route, withheld or unconfirmed fire| EOE{{end-of-outbound photoeye 1300 cm}}
+    EZ -->|ordinary no-route or unconfirmed ordinary fire| EOE{{end-of-outbound photoeye 1300 cm}}
     EOE -->|pulse in predicted window| RE{{outbound-end boundary: validate recycle entry}}
     RE -->|validated transfer| R[recycle return: outbound A feedback]
     RE -->|missing or invalid transfer| STOP
