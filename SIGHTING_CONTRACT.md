@@ -56,21 +56,22 @@ about any facility**.
    of the outbound camera tunnel and upstream of its first divert door,
    behind a spacing and admission gate, so a repeat camera read is possible.
    The geometry is illustrative until real placement is established.
-5. **Duplicate sightings.** Ambiguous concurrent sightings of one barcode go
-   to recycle within the conservative pass budget (section 6), then to the
-   exception door. An earlier accepted route is preserved unless an explicit,
-   validated cancellation mechanism is added later. XLe journals the
-   ambiguity and does not assert which physical package was seen again.
+5. **Duplicate sightings.** Concurrent sightings with the same readable
+   barcode have independent sighting keys and may each receive a valid route.
+   XLe journals `duplicate_barcode` as a diagnostic; equality alone neither
+   denies a route nor proves that the same physical package was seen again.
+   Unreadable or genuinely ambiguous tunnel reads use the exception path.
 6. **Unexpected chute entry.** Latch an alarm, journal the event and command
    a controlled whole-sorter stop; no successful entry count rises. This has
    an availability risk: a spoofed or faulty chute photoeye can trigger that
    stop. The stop is a controlled process stop, **not an emergency-stop
    circuit**.
-7. **Pass bound.** `N = 3` recycle passes per barcode group, as an
-   illustrative limit, and unreadable packages go directly to the exception
-   door. Under a barcode-only cross-belt link, an unreadable package cannot
-   reliably carry a retry count to its next sighting without adding another
-   identity channel (section 6).
+7. **Pass admission threshold.** `N = 3` is the illustrative spent-count
+   threshold checked when a new sighting opens in a run-scoped readable-barcode
+   group. It is not a strict group-wide total: concurrently admitted sightings
+   can later make spent exceed three. Unreadable packages go directly to the
+   exception door; without a readable group, XLe cannot carry their retry
+   count across sightings (section 6).
 8. **Model values, not measurements.** The simulation does not wait for
    measurements from a real sorter. Every distance, speed and time in
    sections 1, 3 and 5 is an internally consistent, illustrative model value,
@@ -142,8 +143,8 @@ coordinate system; nothing here is facility geometry.
 | Primary hold point | 950 cm | front holds here while outbound A is not ready |
 | Primary end, fixed handoff | 1000 cm | enters outbound A at 0 cm |
 | Outbound A, length | 1400 cm | moves on its outbound VFD feedback |
-| Handoff entry | 0 cm | gate: readiness, reservation, clear gap |
-| Recycle merge | 150 cm | gate: readiness, reservation, clear gap |
+| `outbound_entry` at handoff | 0 cm | observes fixed primary-to-outbound entry; gate checks readiness, reservation, clear gap |
+| `merge_entry` at recycle merge | 150 cm | observes a crossing at the recycle-to-outbound merge; gate checks readiness, reservation, clear gap |
 | Outbound tunnel beam | 300 cm | outbound sighting |
 | Route cutoff | 700 cm | no route accepted after the front passes it |
 | Door 1 divert zone | 800 to 880 cm | diverter at 840 cm |
@@ -151,7 +152,7 @@ coordinate system; nothing here is facility geometry.
 | End-of-outbound photoeye | 1300 cm | recycle evidence (section 6) |
 | Outbound end | 1400 cm | enters recycle return at 0 cm |
 | Recycle return, length | 1500 cm | moves on outbound A's fresh VFD feedback |
-| Recycle hold point | 1450 cm | front holds here while the merge gate is closed |
+| `recycle_gate` at recycle hold point | 1450 cm | observes approach to the hold point while merge admission is closed |
 | Recycle end | 1500 cm | enters outbound A at the 150 cm merge |
 | Door chute path, diverter to top-of-chute photoeye | 20 cm | chute confirmation (section 5) |
 
@@ -203,8 +204,11 @@ alone cannot identify a sighting.
 
 **No public value survives a transfer except the barcode.** At transfer or
 recycle entry, the old association, its token, serial, sighting number and
-route authority all close. The receiving section gets fresh values. Run
-identity (epoch and nonce) is run-scoped, not package-scoped. The package's
+route authority all close. The receiving section gets fresh values. The PLC
+attributes a recycle merge crossing from position and time, then allocates
+fresh outbound values; the merge beam never carries a belt-local identifier
+across sections or proves that two sightings are one package. Run identity
+(epoch and nonce) is run-scoped, not package-scoped. The package's
 label is owned by the plant, assigned at induction and independent of every
 PLC value; the scanner reads that label. Today's derivation of the barcode
 from the PLC serial (`devices/scanner.py:177`) would carry a PLC value across
@@ -329,8 +333,8 @@ records a section-scoped decision. A primary sighting cannot command an
 outbound door; its decision closes at transfer. An outbound sighting can
 command a door on its own outbound. A destination on a different outbound is
 section-incompatible: the PLC rejects it, and the package takes the no-route
-path to recycle within the budget. For an outbound sighting, a missing or late
-ASX decision takes the same no-route path.
+path to recycle if admitted under the opening-time threshold. For an outbound
+sighting, a missing or late ASX decision takes the same no-route path.
 
 The command must match the full sighting key, the accepted ASX request and
 response, the open section association, the selected door and a bounded
@@ -343,21 +347,16 @@ keyed by epoch, nonce, token, serial and scan sequence
 barcode (`services/asx.py:12-25`); it cannot survive fresh belt-local serials
 and is not part of this design.
 
-**Ambiguous duplicates.** If a new sighting opens with a barcode that another
-open sighting already carries, both belong to an ambiguous group for that
-barcode (simulation choice 5). XLe:
-
-1. keeps any route already accepted for the earlier sighting, since the PLC
-   accepts one route and has no revoke operation (`Sorter.st:2126-2142`);
-2. issues no route for the new sighting, so it takes the recycle path while
-   the group's budget allows, and the exception door after that (section 6);
-   and
-3. journals `duplicate_barcode_ambiguous` with every sighting key in the group,
-   without asserting which physical package was seen again.
-
-A non-concurrent repeat (the earlier sighting already closed as recycled,
-confirmed, lost or exception) is not ambiguous by itself, but it draws on the
-same run-scoped budget.
+**Concurrent equal barcodes.** Each readable sighting has its own work,
+decision, command and outcome, even if another open sighting carries the same
+barcode. A duplicate barcode is journaled as `duplicate_barcode` with the
+affected keys. It is not a route-denial reason: both sightings may receive
+valid routes, and the PLC's one-accept rule applies to each key separately
+(`Sorter.st:2126-2142`). XLe does not infer that the two keys name the same
+physical package. If either has no valid decision, its own opening-time
+recycle admission applies (section 6). A non-concurrent repeat shares the
+same run-scoped spent count without proving a physical link. Exception
+handling remains for unreadable or genuinely ambiguous tunnel reads.
 
 ## 5. Door command, actuator and chute-entry confirmation
 
@@ -490,17 +489,20 @@ existing path-photoeye contract already latches an overlong block and stops
 the sorter (`STATEFUL_PHOTOEYES.md:44-48`); the top-chute path is new design.
 Neither fault is the reserved Phase 2B `JAMMED` motion state.
 
-## 6. Recycle evidence, pass budget and the identity limit
+## 6. Recycle evidence, admission threshold and the identity limit
 
 **End-of-outbound photoeye.** A photoeye sits after the last door of outbound
 A, before the recycle return. When a package's tracked footprint approaches
 it, the PLC opens a predicted window from the tracked position and fresh
 speed feedback. A pulse in that window binds to that package under the
-section 3 rules. Only then is the package **recycled**: its outbound
-association and sighting close as `recycled`, and the recycle return opens a
-fresh, unidentified association. The window and pulse rules are the belt
-photoeye rules of section 5. Illustratively, at the default 66.57 cm/s a
-valid pulse lasts (L + 2) / 66.57, from 0.33 s for 20 cm to 1.82 s for
+section 3 rules. Only then does its outbound sighting close as **recycled**.
+The PLC continues tracking physical outbound occupancy until the modeled
+plant boundary event at the outbound end; the validated section transfer
+closes the outbound association and opens fresh, unidentified recycle
+occupancy. A missing or unvalidated transfer within a bounded travel window
+is a fault, not invented recycle occupancy. The window and pulse rules are
+the belt photoeye rules of section 5. Illustratively, at the default
+66.57 cm/s a valid pulse lasts (L + 2) / 66.57, from 0.33 s for 20 cm to 1.82 s for
 119 cm, and successive leading edges are at least 120 / 66.57 = 1.80 s apart.
 
 If no matching pulse arrives in the window, the package is **lost**. The PLC
@@ -509,29 +511,67 @@ tracked position. A lost package is never counted as recycled and never as a
 chute entry. A pulse at that eye outside every window is an unexpected
 object, journaled and alarmed. Recycle is never inferred from elapsed time.
 
-**Pass budget, enforced online by XLe.** No unroutable package may recycle
-indefinitely. XLe enforces the bound online, from its durable, run-scoped
-barcode-group history in its journal. Because cross-belt identity is
-barcode-only, XLe counts per group, not per physical package:
+**`merge_entry` at the recycle rejoin.** After the validated end-of-outbound
+pulse and physical entry into the recycle return, `recycle_gate` observes the
+unidentified recycle occupancy's approach to the recycle hold point; it is
+not the transfer into the outbound. Once spacing and the merge permit are
+valid, the PLC predicts the recycle head's arrival
+at `merge_entry` from its tracked position, a bounded time window and fresh
+outbound VFD feedback (the version 1 recycle-motion assumption). The raw
+`merge_entry` beam observes a crossing at outbound coordinate 150 cm. A
+through package that entered at `outbound_entry` (0 cm) also crosses that
+beam; the PLC predicts its crossing separately. An edge by itself cannot
+identify a recycling package.
+
+If exactly one tracked recycle head fits the position/time window and no
+outbound through-traffic footprint competes for that edge, the PLC validates
+the recycle-to-outbound transition, closes the recycle association and opens
+**fresh unidentified outbound values**. A through-traffic match is logged as
+a pass-by and retains its existing outbound association. The outbound tunnel
+at 300 cm opens a new sighting only after its own validated read. A stale or
+missing `merge_entry` edge cannot validate either a recycle transfer or a
+through pass-by: hold upstream while safe, then latch
+`merge_visibility_fault` and command a controlled stop at a bounded deadline.
+If an object may already have crossed, retain unresolved occupancy rather
+than inventing or reversing a transfer. An edge outside both predicted
+windows, or one ambiguous between recycle and through
+traffic, latches `unexpected_merge_entry`/attribution fault and the same
+controlled stop. Preserve raw edges, candidate footprints, timestamps,
+feedback age and rejected attribution. Neither `merge_entry` nor the new
+outbound values link two sightings as one physical package; XLe's later
+barcode match remains an inference, and the plant's hidden ID remains
+offline evidence only.
+
+**Pass admission threshold, enforced online by XLe.** XLe uses durable,
+run-scoped readable-barcode-group history in its journal to decide whether
+each new outbound sighting may recycle if it remains unroutable. Because
+cross-belt identity is barcode-only, XLe records spent attempts per group,
+not per physical package:
 
 - **Label group:** all sightings in the run with a readable barcode `b`,
-  including an ambiguous duplicate group. Budget `N = 3` recycles, an
-  illustrative limit confirmed by the owner.
+  including concurrent duplicates. The group key is `(run identity, b)`,
+  where run identity includes epoch and nonce. `N = 3` is its illustrative
+  **admission threshold**, not a group-wide maximum number of eventual
+  closures.
 - **Unreadable sightings:** no-read, multiple or invalid. These go directly
-  to the exception door and consume no recycle budget. An unreadable package
-  cannot reliably carry a retry count to its next sighting without another
-  identity channel, which this design does not add.
+  to the exception door and do not add to a readable group's spent count. An
+  unreadable package cannot reliably carry a retry count to its next sighting
+  without another identity channel, which this design does not add.
 
-A group's budget is consumed each time one of its sightings closes as
-recycled or lost; a lost sighting counts because it may be recycling unseen.
-The history is durable across an XLe restart and **never resets when a
-belt-local sighting closes**; it resets only with a new run. When a new
-outbound sighting's group has used its budget, XLe commands the exception
-door. It does so no later than the bound, whether or not an ordinary route or
-duplicate resolution is pending. When barcodes are duplicated, the shared
-conservative budget may send a package to exception before its own third
-pass. That costs exception-door capacity, and it avoids claiming that XLe
-knows which duplicate returned.
+At **sighting opening**, XLe durably records the current group spent count
+and its admission decision. If `spent < N`, this sighting may use the recycle
+path if it has no valid route; if `spent >= N`, XLe commands the exception
+door instead. Each validated `recycled` or conservative `lost` closure spends
+one, exactly once; lost counts because the package may recycle unseen.
+Closures do not reset history, and an XLe process restart preserves it. A
+new run starts a new group. A later rise in spent does not retroactively
+revoke an already admitted sighting. Thus, if spent is two when three
+concurrent sightings open, all three may be admitted and their later
+closures can raise spent to five. The global three-slot limit bounds the
+number of simultaneously active identified sightings, not the group's
+eventual spent total. A shared group can also send one physical package to
+exception before its own third recycle. XLe cannot identify which duplicate
+returned from barcode equality alone.
 
 An exception-door entry is confirmed like any other chute entry, counted as
 an exception rather than a successful destination load, and journaled. **If an
@@ -541,16 +581,19 @@ the PLC latches `exception_divert_failed`, raises an alarm and commands a
 controlled stop. It never sends the package around again, so a failing
 exception door cannot become an unbounded loop.
 
-**The limit, stated plainly.** Three passes is a **policy bound for a stable,
-readable barcode group**. It is not a provable per-physical-package limit
-under every sensor failure or barcode misread. Under the version 1
-simulation, a readable scan returns the package's own plant-owned label, so a
-package read consistently recycles at most three times. If a scanner misreads
-a package as another valid label, that package's passes draw on other groups,
-and its total is bounded only by three times the number of distinct labels it
-is read as. The hidden physical ID is used only offline. The plant journal
-can expose these cases by reporting each physical package's true pass count
-against the bound. It must not quietly supply identity to XLe.
+**The conditional individual limit.** A physical package read with the same
+valid barcode at every outbound tunnel pass recycles at most three times
+**if** each of its recycle or lost closures is recorded durably before its
+next sighting opens, each new read stays in the same run, and an admitted
+exception request produces the specified no-more-recycle outcome. Its own
+prior closure then raises group spent before its next admission check;
+other packages' closures may make it reach exception sooner. This does not
+bound the **group's total** to three when sightings overlap. Nor is it a
+proved physical limit if a read is missing, invalid or changes barcode, a
+closure is unobserved, or the exception path fails. The hidden physical ID
+is used only offline: the plant journal compares each physical package's
+true pass count with this conditional claim and never supplies identity to
+XLe.
 
 ## 7. Counts, doors and register version
 
@@ -576,9 +619,9 @@ The first opt-in configuration has exactly two doors: door 1 serves
 destination 1, and door E is the exception door. It also keeps the current
 global limit of three identified packages. Its test sort plan routes readable
 labels to destination 1. Any other destination has no door on outbound A and
-takes the no-route path within the pass budget. Two outputs and their
-feedback, photoeye and counter words are needed. Today nine door coils are
-mapped at `Sorter.st:27-35` and written only by the legacy outbound block
+takes the no-route path only if admitted under the opening-time threshold.
+Two outputs and their feedback, photoeye and counter words are needed. Today
+nine door coils are mapped at `Sorter.st:27-35` and written only by the legacy outbound block
 (`Sorter.st:2705-3111`), and nine success plus nine wrong-destination
 counters are mapped at `Sorter.st:72-89`. Whether two existing door coils and
 counters can serve the opt-in mode, or new addresses are needed, is decided
@@ -607,9 +650,12 @@ tunnel; duplicate-barcode diagnostic; commanded door; door coil fire and
 binding; actuator feedback and quality; top-photoeye raw and conditioned
 state, quality, pending or completed pulse, and blocked timer; end-of-outbound
 photoeye state and window; per-belt moving, stopped-belt or held-under-beam
-state and feedback age; withheld fires; per-group recycle budget used;
-`transfer_fault`, `chute_blocked`, `eye_blocked`, unexpected entry,
-`package_lost`, attribution fault, `speed_fault`, `speed_feedback_stale` and
+state and feedback age; withheld fires; `outbound_entry`, `recycle_gate` and
+`merge_entry` validated beam state, attribution and quality; run-scoped
+readable-group spent count, `N` admission threshold and this sighting's
+opening-time admission decision; `transfer_fault`, `chute_blocked`,
+`eye_blocked`, unexpected entry, `package_lost`, attribution fault,
+`speed_fault`, `speed_feedback_stale` and
 `exception_divert_failed` latches; and confirmed and exception entry counts.
 OPC UA and HMI must not read plant internals or the physical ID.
 
@@ -624,8 +670,9 @@ to explain that the top photoeye does not prove trailer loading.
 
 For each sighting, XLe journals the full key, barcode and read status, the
 barcode link it inferred and why, duplicate and ambiguity diagnostics, the
-group budget before and after, ASX request and response IDs, decision, PLC
-command and ack, fire binding, actuator feedback and pulse references,
+group spent count and admission decision at opening, each later closure
+spend, ASX request and response IDs, decision, PLC command and ack, fire
+binding, actuator feedback and pulse references,
 outcome, and any rejection reason. The current durable XLe outcome journal is
 keyed by full PLC package identity (`services/xle.py:188-218`); the sighting
 journal extends that rule. The PLC's event record and counters contain only
@@ -637,8 +684,13 @@ exits with their PLC-allocated tokens and serials, actuator state, raw beam
 edges, speed samples and private coordinates. The offline join uses the plant
 journal's `(section, token, serial, event sequence)`, the PLC's validated
 `(run epoch, nonce, section, token, serial, tunnel event, sighting key)` and
-fire, feedback and pulse sequences, and XLe's sighting key and IDs. The join
-judges two things independently: whether XLe's barcode links named the same
+fire, feedback and pulse sequences, and XLe's sighting key and IDs. Preserve
+raw and PLC-validated `outbound_entry`, `recycle_gate`, `merge_entry` and
+outbound-tunnel transitions, including candidate position/time footprints,
+freshness, speed-feedback age, accepted pass-by or transfer attribution and
+rejected edges. A missing merge edge remains a gap; a barcode match or
+fresh outbound token cannot fill it. The join judges two things
+independently: whether XLe's barcode links named the same
 physical package, and whether each PLC binding attributed the fire and pulses
 to the right package. A join gap stays a gap; barcode equality never repairs
 it. Keep raw observations, rejected tuples, stale samples, clock quality and
@@ -646,13 +698,13 @@ missing records. In current plant mode the counter changes after an accepted
 plant terminal event (`Sorter.st:2029-2064`); the bound three-observation gate
 is new.
 
-Run reset must not reuse an active sighting key, reset a pass budget in the
-same run, or silently turn pending exits into successes. Preserve terminal
+Run reset must not reuse an active sighting key, reset a group spent count in
+the same run, or silently turn pending exits into successes. Preserve terminal
 and unconfirmed evidence, stop induction, reconcile occupancy and sensor
 quality, and establish a fresh epoch and nonce before accepting new
-sightings; budgets start fresh only with the new run. If identity or physical
-exit cannot be reconciled, the latched stop remains and needs operator
-investigation.
+sightings; group spent counts start fresh only with the new run. If identity
+or physical exit cannot be reconciled, the latched stop remains and needs
+operator investigation.
 
 ## 10. Interaction with existing model
 
@@ -687,19 +739,26 @@ flowchart LR
     PT --> H[hold before end]
     H -->|receiving ready and gap| FH((fixed handoff: primary association closes))
     H -->|bounded wait exceeded| TF([transfer fault: controlled stop])
-    FH --> O[outbound A: fresh token and serial]
-    O --> OT{{outbound tunnel: sighting}}
+    FH --> OE{{outbound_entry 0 cm: fresh outbound values}}
+    OE --> ME{{merge_entry 150 cm: validate pass-by or recycle transfer}}
+    OE -->|missing or stale edge by deadline| MF([merge visibility fault: controlled stop])
+    ME --> OT{{outbound tunnel 300 cm: new sighting}}
     OT --> DZ[door 1 zone 800-880 cm: fire bound to tracked package]
     DZ -->|bound fire, actuated, bound valid pulse| CE([confirmed chute entry])
     DZ --> EZ[door E zone 1000-1080 cm: exception]
-    EZ -->|budget used or unreadable: bound fire, actuated, bound valid pulse| EX([exception entry])
+    EZ -->|not admitted at opening or unreadable: bound fire, actuated, bound valid pulse| EX([exception entry])
     EZ -->|exception divert unconfirmed| STOP([controlled whole-sorter stop])
     DZ -->|unexpected pulse, blockage, second fire, speed fault, stale feedback| STOP
     EZ -->|no route, withheld or unconfirmed fire| EOE{{end-of-outbound photoeye 1300 cm}}
-    EOE -->|pulse in predicted window| R[recycle return: outbound A feedback]
+    EOE -->|pulse in predicted window| RE{{outbound-end boundary: validate recycle entry}}
+    RE -->|validated transfer| R[recycle return: outbound A feedback]
+    RE -->|missing or invalid transfer| STOP
     EOE -->|no matching pulse| LOST([package lost: alarm])
-    R --> AG[admission gate]
-    AG -->|rejoins upstream of tunnel and first door| O
+    R --> RG{{recycle_gate 1450 cm: approach to hold}}
+    RG --> AG[spacing and merge admission]
+    AG -->|admitted; await fresh position/time match| ME
+    AG -->|missing or stale edge by deadline| MF
+    ME -->|unexpected or ambiguous edge| MF
 ```
 
 ```mermaid
@@ -707,8 +766,8 @@ stateDiagram-v2
     [*] --> Unidentified: section entry, fresh token and serial
     Unidentified --> Sighted: validated tunnel read
     Sighted --> Requested: XLe route accepted for this sighting
-    Sighted --> NoRoute: no route, ambiguous duplicate, or incompatible door
-    Sighted --> ExceptionRequested: group budget used or unreadable
+    Sighted --> NoRoute: no route or incompatible door
+    Sighted --> ExceptionRequested: spent >= N at opening or unreadable
     Requested --> Fired: coil fired, bound to tracked package in zone
     Requested --> Unconfirmed: fire withheld
     ExceptionRequested --> ExceptionFired: exception coil fired and bound
@@ -723,10 +782,16 @@ stateDiagram-v2
     NoRoute --> Recycled: end-of-outbound pulse in window
     Unconfirmed --> Lost: no pulse in window
     NoRoute --> Lost: no pulse in window
-    Recycled --> Unidentified: recycle return, then admission gate
+    Recycled --> RecycleEntry: validated outbound-end transfer
+    Recycled --> Stopped: missing or invalid transfer by deadline
+    RecycleEntry --> RecycleGate: unidentified recycle occupancy approaches hold
+    RecycleGate --> MergeEntry: admitted; edge arrives in fresh position/time window
+    MergeEntry --> Unidentified: validated crossing, fresh outbound values
+    RecycleGate --> Stopped: missing or stale merge edge by deadline
+    MergeEntry --> Stopped: unexpected or ambiguous edge
     Confirmed --> [*]: confirmed entry count, fire and pulse recorded
     ExceptionEntry --> [*]: exception count
-    Lost --> [*]: latched alarm, budget consumed, never recycled
+    Lost --> [*]: latched alarm, group spent incremented, never confirmed recycled
     Stopped --> [*]: latched controlled stop, no success count
 ```
 
@@ -734,9 +799,14 @@ Unexpected entries, unbound fires and second fires are door-level events, not
 transitions of any sighting; they stop the sorter and are attributed only
 offline. Speed faults and stale feedback stop the sorter from any state; a
 held-under-beam observation resumes only on fresh feedback. The diagram's
-recycle arrows require a bound end-of-outbound pulse. Recycled and lost
-sightings each consume one unit of their group's budget; an exception
-sighting never recycles.
+recycle arrows require a bound end-of-outbound pulse. `merge_entry` also sees
+through traffic from `outbound_entry`; its pass-by leaves that outbound
+association intact. Its validated recycle crossing closes only the recycle
+association, and the next outbound tunnel opens a new sighting. The merge
+event never proves two sightings are the same package. Recycled and lost
+sightings each add one to their run-scoped readable group's spent count;
+concurrent admissions can raise that count above `N`. An exception sighting
+never recycles.
 
 ## Bounded four-step plan
 
@@ -746,8 +816,10 @@ sighting never recycles.
    every new field.
 2. **Sightings and recycle.** Fresh PLC values per section entry, plant-owned
    labels, sighting-keyed XLe work with barcode links, the fixed handoff and
-   transfer fault, the end-of-outbound photoeye, recycle and lost outcomes,
-   pass budgets and the exception door, and private physical-ID evidence.
+   transfer fault, the end-of-outbound photoeye, `recycle_gate`, validated
+   `merge_entry` attribution, recycle and lost outcomes, opening-time group
+   admission with concurrent-spend tests, the exception door, and private
+   physical-ID evidence.
 3. **Diverter feedback and chute photoeye.** Coil-driven actuation, fire and
    pulse attribution, the spacing invariant, derived windows, the stopped-belt
    state, bound three-observation confirmation, unexpected entry, attribution
@@ -774,8 +846,10 @@ implementation work, with acceptance criteria already stated:
 3. **Later configurations.** Per-lane replication, a coil-selected transfer,
    a separate recycle drive and the larger layout of about 20 doors, each with
    its own geometry and address audit.
-4. **Accepted identity limit.** The three-pass bound is a policy bound for a
-   stable, readable barcode group, not a provable per-physical-package limit
-   under every sensor failure or misread (section 6). Offline evidence
-   measures how often it is exceeded; nothing supplies identity to XLe at
-   runtime.
+4. **Accepted identity limit.** `N = 3` is an admission threshold for a
+   run-scoped readable-barcode group, not a strict cap on that group's
+   eventual spent count. The individual at-most-three claim requires the
+   same valid barcode at each outbound read, a durable closure before the
+   next opening, the same run and an effective exception outcome (section 6).
+   Offline evidence tests those conditions; nothing supplies physical
+   identity to XLe at runtime.
