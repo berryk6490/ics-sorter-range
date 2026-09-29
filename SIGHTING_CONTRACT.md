@@ -66,6 +66,16 @@ about any facility**.
    an availability risk: a spoofed or faulty chute photoeye can trigger that
    stop. The stop is a controlled process stop, **not an emergency-stop
    circuit**.
+7. **Pass bound.** `N = 3` recycle passes per barcode group, as an
+   illustrative limit, and unreadable packages go directly to the exception
+   door. Under a barcode-only cross-belt link, an unreadable package cannot
+   reliably carry a retry count to its next sighting without adding another
+   identity channel (section 6).
+8. **Model values, not measurements.** The simulation does not wait for
+   measurements from a real sorter. Every distance, speed and time in
+   sections 1, 3 and 5 is an internally consistent, illustrative model value,
+   configurable and tested across a wider range. This contract settles the
+   rules; the exact values stay configuration.
 
 ## Current range, for contrast
 
@@ -116,20 +126,42 @@ therefore has no physical effect today.
 ## 1. Layout and movement
 
 The opt-in version 1 configuration has one primary belt, one outbound
-("outbound A") and one recycle return. The physical route lives only in
+("outbound A"), one recycle return, one normal door ("door 1") and one
+exception door ("door E"). The physical route lives only in
 `devices/plant.py`. A package occupies exactly one modeled section at a time.
 
-| Section | Camera tunnel | Motion source | Exit or successor |
-| --- | --- | --- | --- |
-| Primary belt | Primary tunnel | Its induct VFD feedback | Fixed handoff to outbound A, behind a readiness and spacing gate |
-| Outbound A | Outbound tunnel, upstream of the first door | Its outbound VFD feedback | Confirmed chute entry, exception door, or end-of-outbound photoeye then recycle return |
-| Recycle return | None | Outbound A's fresh VFD feedback (simulation choice 1) | Admission gate, then outbound A upstream of its tunnel and first door |
+**Model coordinates, illustrative.** Positions are centimetres along each
+section from its start, measured to a package's front. Each section is its own
+coordinate system; nothing here is facility geometry.
 
-Outbound A carries destination doors and one **exception door**. The
-end-of-outbound photoeye sits after the last door and before the recycle
-return (section 6). With the opt-in mode off, the existing three-lane,
-nine-door behavior is unchanged. Replicating the pairing per lane, a
-coil-selected transfer or a separate recycle drive are later configurations.
+| Section and point | Coordinate | Role |
+| --- | ---: | --- |
+| Primary belt, length | 1000 cm | moves on its induct VFD feedback |
+| Primary induction admission | 0 cm | gate: capacity, three-slot reservation, clear gap |
+| Primary tunnel beam | 400 cm | primary sighting |
+| Primary hold point | 950 cm | front holds here while outbound A is not ready |
+| Primary end, fixed handoff | 1000 cm | enters outbound A at 0 cm |
+| Outbound A, length | 1400 cm | moves on its outbound VFD feedback |
+| Handoff entry | 0 cm | gate: readiness, reservation, clear gap |
+| Recycle merge | 150 cm | gate: readiness, reservation, clear gap |
+| Outbound tunnel beam | 300 cm | outbound sighting |
+| Route cutoff | 700 cm | no route accepted after the front passes it |
+| Door 1 divert zone | 800 to 880 cm | diverter at 840 cm |
+| Door E divert zone | 1000 to 1080 cm | diverter at 1040 cm |
+| End-of-outbound photoeye | 1300 cm | recycle evidence (section 6) |
+| Outbound end | 1400 cm | enters recycle return at 0 cm |
+| Recycle return, length | 1500 cm | moves on outbound A's fresh VFD feedback |
+| Recycle hold point | 1450 cm | front holds here while the merge gate is closed |
+| Recycle end | 1500 cm | enters outbound A at the 150 cm merge |
+| Door chute path, diverter to top-of-chute photoeye | 20 cm | chute confirmation (section 5) |
+
+The recycle merge (150 cm) is upstream of the outbound tunnel (300 cm) and of
+door 1, so a recycled package is read again (simulation choice 4). Section 3
+checks that these positions leave room, at every supported speed, for the
+camera read, route decision, actuation and confirmation before the recycle
+eye. With the opt-in mode off, the existing three-lane, nine-door behavior is
+unchanged. Replicating the pairing per lane, a coil-selected transfer, a
+separate recycle drive or a larger door layout are later configurations.
 
 Today the range has six VFDs, three induct and three outbound
 (`devices/plant.py:19-20`, `deploy/vfd/induct1.conf` .. `outbnd3.conf`), and
@@ -223,28 +255,47 @@ Two footprints can overlap the same zone only if the gap between them is less
 than `Z`, so under `G >= Z` at most one tracked package occupies a zone at a
 time.
 
-**Illustrative parameters.** All values below are illustrative.
+**Speeds.** The existing operating defaults are kept for compatibility: 200
+rpm primary and 233 rpm outbound (`Sorter.st:787-788`). They are model
+defaults, not measured facility speeds. In source units a belt speed is
+`rpm / 1750 x 10 cells/s x 50 cm` (`devices/plant.py:185-186`, `190`), so 200
+rpm is 57.14 cm/s and 233 rpm is 66.57 cm/s. The opt-in layout declares a
+**supported moving range** of 150 to 300 rpm (42.86 to 85.71 cm/s) for both
+belts. Fresh feedback inside that range is **moving**. Feedback below 150 rpm
+is the stopped-belt state of section 5. Above 300 rpm, the PLC withholds
+fires (section 5). The chute path has its own configured nominal speed,
+illustrative 120 cm/s, with a supported range of 90 to 240 cm/s. The chute
+path has no drive feedback in version 1 (section 5). Host tests run belts at
+and beyond both ends of their range and the chute path slower, faster and
+stopped.
+
+**Illustrative parameters.** Every value below is an illustrative model value.
 
 | Quantity | Illustrative value | Derivation |
 | --- | --- | --- |
 | Package length `L` | 20 to 119 cm | plant-owned per package; the scanner measures it |
 | Minimum clear gap `G` | 100 cm | the plant's default spacing (`devices/plant.py:190`, `870`) |
-| Divert zone `Z` | 80 cm | chosen for the example |
+| Divert zone `Z` | 80 cm | section 1 coordinates |
 | Invariant | 100 cm >= 80 cm | holds |
 | Minimum front-to-front separation | 20 + 100 = 120 cm | shortest leader plus minimum gap |
-| Outbound speed at the default 233 rpm reference (`Sorter.st:788`) | 233 / 1750 x 10 cells/s x 50 cm = 66.57 cm/s | source units |
-| Primary speed at the default 200 rpm reference (`Sorter.st:787`) | 57.14 cm/s | same formula |
-| Travel per 100 ms PLC scan (`Sorter.st:3399`) at 66.57 cm/s | 6.66 cm | |
-| Margin `G - Z` | 20 cm, about 3.0 scans or 0.30 s at 66.57 cm/s | |
-| Time a package occupies the zone, `(L + Z) / v` | 1.50 s (L = 20) to 2.99 s (L = 119) | |
-| Minimum time gap between packages, `G / v` | 1.50 s | |
+| Fastest supported belt speed `v_max` | 85.71 cm/s (300 rpm) | source units |
+| Slowest supported moving belt speed `v_min` | 42.86 cm/s (150 rpm) | source units |
+| Tracking error at `v_max`, one 100 ms PLC scan (`Sorter.st:3399`) plus a 100 ms speed-feedback age bound | 0.2 s x 85.71 = 17.1 cm | |
+| Margin `G - Z` | 20 cm >= 17.1 cm | holds at every supported speed |
+| Read-to-cutoff time, tunnel (300 cm) to cutoff (700 cm) | 4.67 s at `v_max`, 9.33 s at `v_min` | |
+| Source decision latency it must cover | 0.05 s scanner loop (`devices/scanner.py:85`), 0.8 s ASX lookup timeout (`services/xle.py:34`), up to 1.5 s PLC command acknowledgement (`services/xle.py:180`), about 2.4 s in total | 2.4 s < 4.67 s |
+| Minimum time between fires at one door, `(L_min + G) / v_max` | 120 / 85.71 = 1.40 s | |
+| Chute speed needed to keep successive packages apart, `v_max x (L_max + w) / (L_min + G)` with beam width `w` = 2 cm | 85.71 x 121 / 120 = 86.4 cm/s | supported chute minimum 90 cm/s is above it |
+| Door 1 diverter (840 cm) to end-of-outbound eye (1300 cm) at `v_max` | 5.37 s | longer than any chute window (section 5) |
+| Door E diverter (1040 cm) to end-of-outbound eye at `v_max` | 3.03 s | longer than any chute window |
+| Recycle return traversal at 233 rpm | 1500 / 66.57 = 22.5 s | |
 
 The 20 cm margin is the budget for tracking error. A stale speed input eats it
 quickly: the plant loop already caps one integration step at 0.5 s and sleeps
-0.5 s after an error (`devices/plant.py:776`, `860-862`). At 66.57 cm/s,
-0.5 s is 33.3 cm, which exceeds the margin. Attribution therefore fails closed
-(no fire, controlled stop) whenever the PLC's speed feedback is older than the
-configured bound. A handoff from the primary belt at 57.14 cm/s onto the
+0.5 s after an error (`devices/plant.py:776`, `860-862`). At `v_max`, 0.5 s
+is 42.9 cm, twice the margin. Attribution therefore fails closed (no fire,
+controlled stop) whenever the PLC's speed feedback is older than the
+configured bound, illustrative 100 ms. A handoff from the primary belt at 57.14 cm/s onto the
 outbound at 66.57 cm/s widens a 100 cm gap to about 116.5 cm once both
 packages have transferred. The admission gate, not that widening, is what
 enforces `G`. Lengths of 120 cm or more (the scanner's current oversize range,
@@ -255,9 +306,12 @@ invariant must be rechecked before they are admitted.
 
 1. When the PLC fires a door's coil, it binds the fire to the single package
    whose tracked footprint occupies that door's divert zone. It fires only for
-   the package whose accepted command names that door. A coil observed on
-   with no tracked package in the zone is an **unbound fire**: latched alarm
-   and journal.
+   the package whose accepted command names that door, only while fresh belt
+   speed is inside the supported moving range, and only when the door's
+   previous fire window has closed. A fire it cannot make under those
+   conditions is **withheld**. A withheld fire is journaled, and the package
+   continues to the end-of-outbound eye. A coil observed on with no tracked
+   package in the zone is an **unbound fire**: latched alarm and journal.
 2. A chute photoeye pulse whose leading edge falls inside that fire's
    predicted window binds to that package. The window is computed along the
    modeled path from fresh speed feedback (section 5).
@@ -334,15 +388,84 @@ the PLC finalizes success. The physical package may already have left the belt
 while confirmation is pending, and the model must not move it on toward
 recycle.
 
-The fire's pulse window is evaluated along the modeled path from the diverter
-to the photoeye by integrating fresh, quality-valid speed feedback. Variable
-speed changes the predicted interval. Zero speed pauses path progress, but a
-bounded wall-clock limit still prevents an infinite pending result. Stale or
-unavailable feedback makes timing quality unknown and blocks success. Valid
-blocked duration depends on package length, effective beam width and that same
-path speed. Chute path speed, diverter-to-photoeye distance, window tolerance,
-pulse bounds and beam width are unmeasured configuration inputs; fail closed
-if one is unavailable.
+**Windows are derived, never fixed constants.** Each window comes from path
+distance, measured package length and speed:
+
+- **Fire point.** The PLC fires when the commanded package's tracked front
+  reaches `x_div - v x a_nom`, where `x_div` is the diverter coordinate, `v`
+  is fresh belt speed and `a_nom` is the nominal actuator delay. The fire
+  point must lie inside the divert zone at every supported speed. With the
+  diverter 40 cm into an 80 cm zone, `a_nom <= 40 / 85.71 = 0.47 s`.
+- **Chute leading-edge window.** The chute path has no speed feedback, so the
+  window spans the supported chute range rather than a guess:
+  `[t_fire + a_min + d / v_c,max, t_fire + a_max + d / v_c,min]`, widened by
+  tolerance `tau`, with `d` = 20 cm. The leading-edge travel alone is 0.083 s
+  at 240 cm/s, 0.167 s at 120 cm/s and 0.222 s at 90 cm/s. The window must
+  close before the door can fire again, so `a_max + 0.222 s + tau <= 1.40 s`
+  (section 3).
+- **Chute pulse validity.** A bound pulse is valid when its blocked time lies
+  in `[(L + w - eps) / v_c,max, (L + w + eps) / v_c,min]`, with `L` the
+  package's measured length and `w` the beam width.
+- **Belt photoeye windows** (end-of-outbound eye, section 6). These are
+  computed in path distance from integrated fresh belt feedback: the leading
+  edge is expected when the tracked front reaches the eye, `+- delta`. A pulse
+  is valid when the belt travel integrated while blocked is `L + w +- eps`.
+
+**Actuator delay and tolerances are set by tests, not assumed.** `a_min`,
+`a_nom`, `a_max`, `tau`, `delta` and `eps` receive illustrative values only
+after host tests prove two things, for lengths across 20 to 119 cm, belt
+speeds across the supported range and chute speeds across its range:
+
+1. every valid package confirms at its commanded door and is recycled when
+   not diverted; and
+2. no pulse from an adjacent package can bind to the wrong fire or the wrong
+   package, including at minimum spacing and maximum speed.
+
+The constraints above bound those values: `a_nom <= 0.47 s`, a chute window
+that closes within 1.40 s, and `delta` at least the 17.1 cm tracking error
+bound and below half the 120 cm minimum front-to-front separation. Tests also
+cover chute speeds slower and faster than the supported range and a stopped
+chute. There the expected result is withheld fires, unconfirmed or lost
+outcomes, unexpected entries or `chute_blocked`, never a confirmation.
+
+**No guessed confirmation.** A window that depends on belt feedback can
+confirm only on fresh, quality-valid feedback. Stale feedback makes timing
+quality unknown: nothing confirms, recycles or is declared lost until fresh
+feedback resolves the window within a bound. If it does not, the PLC latches
+`speed_feedback_stale` and commands a controlled stop.
+
+**Longest valid pulse and blockage thresholds, illustrative.** The longest
+valid pulse is the longest modeled package plus beam width at the slowest
+supported moving speed. The blockage threshold sits above it:
+
+| Photoeye | Longest valid pulse | Blockage threshold (1.5 x) |
+| --- | --- | --- |
+| Top-of-chute, slowest supported chute speed 90 cm/s | (119 + 2) / 90 = 1.34 s | 2.0 s |
+| End-of-outbound, slowest supported moving belt speed 42.86 cm/s | (119 + 2) / 42.86 = 2.82 s | 4.3 s |
+
+**Stopped-belt state.** A belt whose fresh feedback is below the supported
+moving minimum (150 rpm) is in the stopped-belt state, whether ramping,
+commanded to stop or stopped. The drive ramps at 400 rpm/s
+(`devices/vfd.py:46`), so reaching 150 rpm from rest takes 0.375 s. The state
+is handled deliberately:
+
+- A package resting under a belt photoeye during a commanded stop is **held
+  under beam**. The blockage timer pauses, no fire occurs, and path
+  integration continues on fresh feedback. On restart, the pulse completes and
+  is judged by integrated travel, not elapsed time.
+- A beam that clears while fresh feedback shows the belt stopped is a
+  photoeye quality fault. A resting package cannot leave the beam.
+- If the belt is commanded to run but stays below the moving minimum longer
+  than a bound (illustrative 2.0 s, above the ramp time), the PLC latches
+  `speed_fault` and commands a controlled stop.
+- Loss of fresh feedback, a plant restart or a run identity change during a
+  hold makes every held observation unresolved. It requires reconciliation
+  and never becomes a confirmation or a recycle.
+
+The chute path is not a belt: it keeps moving at its configured speed during a
+sorter stop, so the stopped-belt state does not apply to top-of-chute eyes. A
+stopped chute in a test is a fault condition and must end in a blocked or
+unconfirmed result.
 
 **Unexpected entry.** A pulse outside every open window at its door is an
 unexpected entry; a package entering the wrong door produces exactly this,
@@ -355,8 +478,10 @@ version 1 and recorded here. The stop is a controlled process stop, not an
 emergency-stop circuit. A quality-failed pulse after a pending entry takes the
 same stop, recorded as an unconfirmed physical exit.
 
-**Chute blockage.** A top photoeye blocked past its configured threshold
-latches `chute_blocked` and commands the same controlled whole-sorter stop.
+**Chute blockage.** A top photoeye blocked past its threshold (illustrative
+2.0 s, above) latches `chute_blocked` and commands the same controlled
+whole-sorter stop. An end-of-outbound eye blocked past its threshold while
+the belt is moving latches `eye_blocked` with the same stop.
 Acknowledge marks the alarm seen but cannot clear it or restart motion.
 Recovery requires the beam clear for the configured debounce, healthy
 actuator, photoeye and plant quality, current run identity, reconciliation of
@@ -373,9 +498,10 @@ it, the PLC opens a predicted window from the tracked position and fresh
 speed feedback. A pulse in that window binds to that package under the
 section 3 rules. Only then is the package **recycled**: its outbound
 association and sighting close as `recycled`, and the recycle return opens a
-fresh, unidentified association. Illustratively, at 66.57 cm/s the
-length-driven part of a valid pulse is 0.30 s for 20 cm to 1.79 s for 119 cm,
-plus the unmeasured beam width, and packages are at least 1.50 s apart.
+fresh, unidentified association. The window and pulse rules are the belt
+photoeye rules of section 5. Illustratively, at the default 66.57 cm/s a
+valid pulse lasts (L + 2) / 66.57, from 0.33 s for 20 cm to 1.82 s for
+119 cm, and successive leading edges are at least 120 / 66.57 = 1.80 s apart.
 
 If no matching pulse arrives in the window, the package is **lost**. The PLC
 latches a `package_lost` alarm and journals it with the sighting key and last
@@ -383,42 +509,48 @@ tracked position. A lost package is never counted as recycled and never as a
 chute entry. A pulse at that eye outside every window is an unexpected
 object, journaled and alarmed. Recycle is never inferred from elapsed time.
 
-**Pass budget.** No unroutable package may recycle indefinitely. Because
-cross-belt identity is barcode-only, XLe cannot count passes per physical
-package. It counts per run-scoped group instead:
+**Pass budget, enforced online by XLe.** No unroutable package may recycle
+indefinitely. XLe enforces the bound online, from its durable, run-scoped
+barcode-group history in its journal. Because cross-belt identity is
+barcode-only, XLe counts per group, not per physical package:
 
-- **Label group:** all sightings in the run with a readable barcode `b`
-  (including an ambiguous duplicate group). Budget `N` recycles, illustrative
-  `N = 3`.
-- **Unreadable group:** all sightings with no usable label (no-read,
-  multiple, invalid). Budget `N_U`, illustrative `N_U = 0`: an unreadable
-  outbound sighting goes straight to the exception door.
+- **Label group:** all sightings in the run with a readable barcode `b`,
+  including an ambiguous duplicate group. Budget `N = 3` recycles, an
+  illustrative limit confirmed by the owner.
+- **Unreadable sightings:** no-read, multiple or invalid. These go directly
+  to the exception door and consume no recycle budget. An unreadable package
+  cannot reliably carry a retry count to its next sighting without another
+  identity channel, which this design does not add.
 
 A group's budget is consumed each time one of its sightings closes as
 recycled or lost; a lost sighting counts because it may be recycling unseen.
-The budget is run-scoped and **never resets when a belt-local sighting
-closes**. When a new outbound sighting's group has used its budget, XLe
-commands the exception door. It does so no later than the bound, whether or
-not an ordinary route or duplicate resolution is pending. An exception-door
-entry is confirmed like any other chute entry, counted as an exception, not a
-successful destination load, and journaled. If a sighting commanded to the
-exception door is instead recycled or lost, the PLC latches
-`exception_divert_failed` and commands a controlled stop, so a failing
+The history is durable across an XLe restart and **never resets when a
+belt-local sighting closes**; it resets only with a new run. When a new
+outbound sighting's group has used its budget, XLe commands the exception
+door. It does so no later than the bound, whether or not an ordinary route or
+duplicate resolution is pending. When barcodes are duplicated, the shared
+conservative budget may send a package to exception before its own third
+pass. That costs exception-door capacity, and it avoids claiming that XLe
+knows which duplicate returned.
+
+An exception-door entry is confirmed like any other chute entry, counted as
+an exception rather than a successful destination load, and journaled. **If an
+exception divert goes unconfirmed**, whether the fire was withheld, the
+actuator failed, no bound pulse arrived, or the package was recycled or lost,
+the PLC latches `exception_divert_failed`, raises an alarm and commands a
+controlled stop. It never sends the package around again, so a failing
 exception door cannot become an unbounded loop.
 
-**What this guarantees and what it does not.** Under the version 1 simulation,
-a readable scan returns the package's own plant-owned label. With
-`N_U = 0`, every physical package therefore recycles at most `N` times. The
-budget is shared, so a package in an ambiguous group may reach the exception
-door after fewer than `N` of its own passes. **This scheme cannot guarantee an
-individual physical package's exact pass count.** If a real scanner misreads
-a package as another valid label, that package's passes draw on other groups.
-Its total is then bounded by `N` times the number of distinct labels it is
-read as, and no longer by `N` alone. Setting `N_U > 0` raises the
-per-package bound to `N + N_U`. Barcode-only data cannot do better, and the
-hidden physical ID is not used at runtime to repair it. Offline evidence
-reports each physical package's true pass count and compares it with the
-bound.
+**The limit, stated plainly.** Three passes is a **policy bound for a stable,
+readable barcode group**. It is not a provable per-physical-package limit
+under every sensor failure or barcode misread. Under the version 1
+simulation, a readable scan returns the package's own plant-owned label, so a
+package read consistently recycles at most three times. If a scanner misreads
+a package as another valid label, that package's passes draw on other groups,
+and its total is bounded only by three times the number of distinct labels it
+is read as. The hidden physical ID is used only offline. The plant journal
+can expose these cases by reporting each physical package's true pass count
+against the bound. It must not quietly supply identity to XLe.
 
 ## 7. Counts, doors and register version
 
@@ -438,12 +570,21 @@ failure, recycle, lost and exception diagnostics stay separate from success.
 Physical door number and routing destination are separate: a door inventory
 lists each door's section, position, zone and the destination or exception
 role it serves. The existing nine-door, three-outbound order stays the
-default outside the opt-in mode. The opt-in configuration's destination doors
-and exception door, and a larger illustrative outbound of about 20 doors, need
-a source-wide register and output-address audit before any mapping is
-assigned. Today nine door coils are mapped at `Sorter.st:27-35`, and nine
-success plus nine wrong-destination counters at `Sorter.st:72-89`. Do not
-allocate addresses by assumption.
+default outside the opt-in mode.
+
+The first opt-in configuration has exactly two doors: door 1 serves
+destination 1, and door E is the exception door. It also keeps the current
+global limit of three identified packages. Its test sort plan routes readable
+labels to destination 1. Any other destination has no door on outbound A and
+takes the no-route path within the pass budget. Two outputs and their
+feedback, photoeye and counter words are needed. Today nine door coils are
+mapped at `Sorter.st:27-35` and written only by the legacy outbound block
+(`Sorter.st:2705-3111`), and nine success plus nine wrong-destination
+counters are mapped at `Sorter.st:72-89`. Whether two existing door coils and
+counters can serve the opt-in mode, or new addresses are needed, is decided
+by a source-wide register and output-address audit **before any output is
+added**. Do not allocate addresses by assumption. The larger layout of about
+20 doors is left for a later configuration and its own audit.
 
 Add a `register_map_version` beside the existing PLC program identity
 `prog_hash` (`Sorter.st:99`, `793`) only after that audit. The manifest
@@ -465,8 +606,10 @@ current token, serial and sighting key if identified; last sighting per
 tunnel; duplicate-barcode diagnostic; commanded door; door coil fire and
 binding; actuator feedback and quality; top-photoeye raw and conditioned
 state, quality, pending or completed pulse, and blocked timer; end-of-outbound
-photoeye state and window; per-group recycle budget used; `transfer_fault`,
-`chute_blocked`, unexpected entry, `package_lost`, attribution fault and
+photoeye state and window; per-belt moving, stopped-belt or held-under-beam
+state and feedback age; withheld fires; per-group recycle budget used;
+`transfer_fault`, `chute_blocked`, `eye_blocked`, unexpected entry,
+`package_lost`, attribution fault, `speed_fault`, `speed_feedback_stale` and
 `exception_divert_failed` latches; and confirmed and exception entry counts.
 OPC UA and HMI must not read plant internals or the physical ID.
 
@@ -531,8 +674,9 @@ Today accumulation and merge admission use lane and outbound coordinates
 (`devices/plant.py:98-107`, `586-613`). Version 1 must retest spacing and
 backpressure through the fixed handoff, three identified slots, the admission
 gates and the recycle return. A chute-full hold remains a capacity hold; an
-unexpected chute entry, sustained blockage, transfer fault, attribution fault
-or failed exception divert causes a controlled stop instead of another hold.
+unexpected chute entry, sustained blockage, transfer fault, attribution fault,
+speed fault, stale feedback or unconfirmed exception divert causes a
+controlled stop instead of another hold.
 
 ## Diagrams
 
@@ -545,11 +689,13 @@ flowchart LR
     H -->|bounded wait exceeded| TF([transfer fault: controlled stop])
     FH --> O[outbound A: fresh token and serial]
     O --> OT{{outbound tunnel: sighting}}
-    OT --> DZ[door zones: fire bound to tracked package]
+    OT --> DZ[door 1 zone 800-880 cm: fire bound to tracked package]
     DZ -->|bound fire, actuated, bound valid pulse| CE([confirmed chute entry])
-    DZ -->|budget used or unreadable| EX([exception door])
-    DZ -->|unexpected pulse, blockage, second fire| STOP([controlled whole-sorter stop])
-    DZ --> EOE{{end-of-outbound photoeye}}
+    DZ --> EZ[door E zone 1000-1080 cm: exception]
+    EZ -->|budget used or unreadable: bound fire, actuated, bound valid pulse| EX([exception entry])
+    EZ -->|exception divert unconfirmed| STOP([controlled whole-sorter stop])
+    DZ -->|unexpected pulse, blockage, second fire, speed fault, stale feedback| STOP
+    EZ -->|no route, withheld or unconfirmed fire| EOE{{end-of-outbound photoeye 1300 cm}}
     EOE -->|pulse in predicted window| R[recycle return: outbound A feedback]
     EOE -->|no matching pulse| LOST([package lost: alarm])
     R --> AG[admission gate]
@@ -564,13 +710,15 @@ stateDiagram-v2
     Sighted --> NoRoute: no route, ambiguous duplicate, or incompatible door
     Sighted --> ExceptionRequested: group budget used or unreadable
     Requested --> Fired: coil fired, bound to tracked package in zone
+    Requested --> Unconfirmed: fire withheld
     ExceptionRequested --> ExceptionFired: exception coil fired and bound
+    ExceptionRequested --> Stopped: exception fire withheld
     Fired --> Pending: actuated and bound leading edge
     Fired --> Unconfirmed: actuator failed or no bound pulse
     Pending --> Confirmed: valid completed pulse
     Pending --> Stopped: bad pulse or sustained blockage
     ExceptionFired --> ExceptionEntry: actuated and bound valid pulse
-    ExceptionFired --> Stopped: exception divert failed
+    ExceptionFired --> Stopped: exception divert unconfirmed
     Unconfirmed --> Recycled: end-of-outbound pulse in window
     NoRoute --> Recycled: end-of-outbound pulse in window
     Unconfirmed --> Lost: no pulse in window
@@ -584,50 +732,50 @@ stateDiagram-v2
 
 Unexpected entries, unbound fires and second fires are door-level events, not
 transitions of any sighting; they stop the sorter and are attributed only
-offline. The diagram's recycle arrows require a bound end-of-outbound pulse.
-Recycled and lost sightings each consume one unit of their group's budget.
+offline. Speed faults and stale feedback stop the sorter from any state; a
+held-under-beam observation resumes only on fresh feedback. The diagram's
+recycle arrows require a bound end-of-outbound pulse. Recycled and lost
+sightings each consume one unit of their group's budget; an exception
+sighting never recycles.
 
 ## Bounded four-step plan
 
-1. **Contract and configuration.** This document; section lengths, admission
-   gates, door zones, exception door, photoeye placement, sensor timing and
-   the register audit. Preserve the nine-door baseline outside the opt-in
-   mode and version every new field.
+1. **Contract and configuration.** This document, the section 1 model
+   coordinates and the register and output-address audit for the two opt-in
+   doors. Preserve the nine-door baseline outside the opt-in mode and version
+   every new field.
 2. **Sightings and recycle.** Fresh PLC values per section entry, plant-owned
    labels, sighting-keyed XLe work with barcode links, the fixed handoff and
    transfer fault, the end-of-outbound photoeye, recycle and lost outcomes,
    pass budgets and the exception door, and private physical-ID evidence.
 3. **Diverter feedback and chute photoeye.** Coil-driven actuation, fire and
-   pulse attribution, the spacing invariant, bound three-observation
-   confirmation, unexpected entry, attribution fault, blockage latch and reset
-   interlocks.
+   pulse attribution, the spacing invariant, derived windows, the stopped-belt
+   state, bound three-observation confirmation, unexpected entry, attribution
+   fault, blockage latches and reset interlocks. Host tests across the
+   section 3 and 5 ranges fix the illustrative actuator delay and tolerance
+   values before live use.
 4. **OPC UA, HMI and live evidence.** Section 8 surfaces, both journals and a
    live opt-in run with the offline identity and attribution judgment.
 
-## Open questions
+## Settled rules and remaining work
 
-The simulation choices above are settled for version 1. What remains:
+The owner's decisions settle every rule in this contract. The model values in
+sections 1, 3 and 5 are illustrative and configurable, not measurements, and
+the simulation does not wait for measurements from a real sorter. There is no
+open design question for the first opt-in setup. What remains is
+implementation work, with acceptance criteria already stated:
 
-1. **Geometry.** Primary, outbound and recycle section lengths, the handoff,
-   recycle merge and end-of-outbound photoeye positions, and door positions
-   and divert zone lengths (80 cm is illustrative only).
-2. **Speeds.** Chute path speed, and whether operating references differ from
-   the default 200 and 233 rpm used in the examples.
-3. **Sensor timing.** Diverter-to-top-photoeye distance, beam widths and
-   mounting positions, actuator response time and feedback quality, window
-   tolerances around the tracked position, speed-feedback freshness bound, and
-   maximum observation time at zero speed.
-4. **Thresholds.** Valid pulse bounds at the top-of-chute and end-of-outbound
-   photoeyes, the sustained blockage threshold, beam-clear debounce, the
-   transfer and recycle hold bounds, and the real package-length distribution
-   (20 to 119 cm is illustrative).
-5. **Door inventory.** The opt-in configuration's destination and exception
-   doors, the larger roughly 20-door layout, per-section capacities, and the
-   register and output-address audit behind them.
-6. **Identity guarantee.** Barcode-only cross-belt data cannot guarantee an
-   individual package's exact pass count, attribute a misread to the right
-   package, or resolve which physical package produced a later sighting of a
-   shared barcode. The owner should confirm that the conservative group
-   budget (`N = 3`, `N_U = 0`, both illustrative) and offline-only
-   verification are acceptable, or state a different trade-off between
-   exception-door volume and re-read opportunities.
+1. **Test-derived values.** `a_min`, `a_nom`, `a_max`, `tau`, `delta` and
+   `eps` receive illustrative values only after the section 5 host tests pass
+   within the stated bounds.
+2. **Address audit.** The two opt-in doors' outputs, feedback, photoeye and
+   counter words, the fresh token and serial widths, and
+   `register_map_version`, before any address is assigned (section 7).
+3. **Later configurations.** Per-lane replication, a coil-selected transfer,
+   a separate recycle drive and the larger layout of about 20 doors, each with
+   its own geometry and address audit.
+4. **Accepted identity limit.** The three-pass bound is a policy bound for a
+   stable, readable barcode group, not a provable per-physical-package limit
+   under every sensor failure or misread (section 6). Offline evidence
+   measures how often it is exceeded; nothing supplies identity to XLe at
+   runtime.
