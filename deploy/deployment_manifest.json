@@ -34,7 +34,7 @@
         "scanner@tunnel3.service"
       ],
       "hash_policy": "exact",
-      "sha256": "5f6f2d48b9424327e88b558a67924efe5bfc70fb061c8c13baa76cc18facd402",
+      "sha256": "b9d90dadaa66bf075b055dc381d29213ee61d2cc18fdc2bcf3dcba957251d803",
       "verification_command": "sha256sum /home/kevin/scanner.py"
     },
     {
@@ -216,7 +216,7 @@
       "canonical_destination": "/home/kevin/live_accumulation_monitor.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "6b03ccb2678d76555c54c4e3273ca3528f314a95980209e31dfc2ddbc55df491",
+      "sha256": "38a0039be6bec28a00d09a256eb32571027f595c23e22d0b6defdaf79141fcca",
       "verification_command": "sha256sum /home/kevin/live_accumulation_monitor.py"
     },
     {
@@ -225,7 +225,7 @@
       "canonical_destination": "/home/kevin/sorter-services/live_accumulation_detached.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "5c0bfd8b4b526555ad5738b6f59d1e8a3fe1cf23c3786abe6145c867b2cce826",
+      "sha256": "4c71d0a8df733944acf7a909ce080e17dc492a95f6ef9eeb1049067e80572522",
       "verification_command": "sha256sum /home/kevin/sorter-services/live_accumulation_detached.py"
     },
     {
@@ -234,7 +234,7 @@
       "canonical_destination": "/home/kevin/live_accumulation_detached.py",
       "associated_service": [],
       "hash_policy": "exact",
-      "sha256": "5c0bfd8b4b526555ad5738b6f59d1e8a3fe1cf23c3786abe6145c867b2cce826",
+      "sha256": "4c71d0a8df733944acf7a909ce080e17dc492a95f6ef9eeb1049067e80572522",
       "verification_command": "sha256sum /home/kevin/live_accumulation_detached.py"
     },
     {
