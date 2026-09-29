@@ -221,6 +221,101 @@ class OutcomeJournal:
         self.db.close()
 
 
+class PassLedger:
+    """Durable, run-scoped recycle budget per barcode group.
+
+    SIGHTING_CONTRACT.md section 6. XLe enforces the bound online from this
+    history. It counts sightings of a readable barcode, not physical packages:
+    a shared budget can send a duplicate-label package to the exception door
+    before its own third pass, and a misread package draws on another group.
+    Unreadable sightings go straight to the exception door and never join a
+    group. Nothing here knows or asks for a plant physical ID.
+    """
+
+    ROUTE, NO_ROUTE, EXCEPTION = "route", "no_route", "exception"
+    OUTCOMES = ("recycled", "lost", "confirmed", "exception_entry", "stopped")
+    SPENT = ("recycled", "lost")
+
+    def __init__(self, path, limit=3):
+        if type(limit) is not int or limit < 0:
+            raise ValueError("pass limit must be a non-negative integer")
+        self.limit = limit
+        self.db = sqlite3.connect(path)
+        self.db.execute("PRAGMA synchronous=FULL")
+        self.db.execute("CREATE TABLE IF NOT EXISTS sightings "
+                        "(run_epoch INTEGER NOT NULL, sighting TEXT NOT NULL, "
+                        "barcode INTEGER, decision TEXT NOT NULL, "
+                        "ambiguous INTEGER NOT NULL DEFAULT 0, outcome TEXT, "
+                        "PRIMARY KEY (run_epoch, sighting))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS groups "
+                        "(run_epoch INTEGER NOT NULL, barcode INTEGER NOT NULL, "
+                        "used INTEGER NOT NULL, PRIMARY KEY (run_epoch, barcode))")
+        self.db.commit()
+
+    def used(self, run_epoch, barcode):
+        row = self.db.execute("SELECT used FROM groups WHERE run_epoch=? AND barcode=?",
+                              (run_epoch, barcode)).fetchone()
+        return row[0] if row else 0
+
+    def open(self, run_epoch, sighting, barcode, readable):
+        """Decide an outbound sighting. Replaying a known sighting returns its
+        stored decision, so an XLe restart cannot re-spend or re-decide it."""
+        row = self.db.execute("SELECT decision, ambiguous FROM sightings "
+                              "WHERE run_epoch=? AND sighting=?",
+                              (run_epoch, sighting)).fetchone()
+        if row:
+            return {"decision": row[0], "ambiguous": bool(row[1]), "replayed": True}
+        group = barcode if readable and barcode else None
+        ambiguous = False
+        if group is None or self.used(run_epoch, group) >= self.limit:
+            decision = self.EXCEPTION
+        else:
+            others = self.db.execute("SELECT sighting FROM sightings WHERE run_epoch=? "
+                                     "AND barcode=? AND outcome IS NULL",
+                                     (run_epoch, group)).fetchall()
+            if others:
+                # Concurrent sightings of one label: keep any accepted route,
+                # route neither new nor old again, never guess who returned.
+                ambiguous = True
+                self.db.execute("UPDATE sightings SET ambiguous=1 WHERE run_epoch=? "
+                                "AND barcode=? AND outcome IS NULL", (run_epoch, group))
+                decision = self.NO_ROUTE
+            else:
+                decision = self.ROUTE
+        self.db.execute("INSERT INTO sightings (run_epoch, sighting, barcode, decision, "
+                        "ambiguous) VALUES (?, ?, ?, ?, ?)",
+                        (run_epoch, sighting, group, decision, int(ambiguous)))
+        self.db.commit()
+        return {"decision": decision, "ambiguous": ambiguous, "replayed": False}
+
+    def close(self, run_epoch, sighting, outcome):
+        """Record a sighting's single outcome. Recycled and lost spend one unit
+        of the group budget; nothing refunds it within the run."""
+        if outcome not in self.OUTCOMES:
+            raise ValueError(f"unknown sighting outcome {outcome!r}")
+        row = self.db.execute("SELECT barcode, decision FROM sightings "
+                              "WHERE run_epoch=? AND sighting=?",
+                              (run_epoch, sighting)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown sighting {sighting!r}")
+        barcode, decision = row
+        result = self.db.execute("UPDATE sightings SET outcome=? WHERE run_epoch=? "
+                                 "AND sighting=? AND outcome IS NULL",
+                                 (outcome, run_epoch, sighting))
+        recorded = result.rowcount == 1
+        if recorded and outcome in self.SPENT and barcode is not None:
+            self.db.execute("INSERT INTO groups VALUES (?, ?, 1) ON CONFLICT"
+                            "(run_epoch, barcode) DO UPDATE SET used = used + 1",
+                            (run_epoch, barcode))
+        self.db.commit()
+        return {"recorded": recorded,
+                "exception_failed": recorded and decision == self.EXCEPTION and
+                outcome in self.SPENT}
+
+    def close_db(self):
+        self.db.close()
+
+
 def package_request(epoch, nonce, row, lane=1):
     token, serial, seq, barcode = row[:4]
     if lane not in (1, 2, 3):

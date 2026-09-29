@@ -524,6 +524,11 @@ barcode-only, XLe counts per group, not per physical package:
 
 A group's budget is consumed each time one of its sightings closes as
 recycled or lost; a lost sighting counts because it may be recycling unseen.
+The bound applies when a sighting opens. A group's spent count can therefore
+exceed `N` when concurrent sightings that opened within budget recycle later.
+A consistently read package still recycles at most `N` times: each of its
+successive sightings opens at a strictly higher spent count, because its own
+recycle adds one.
 The history is durable across an XLe restart and **never resets when a
 belt-local sighting closes**; it resets only with a new run. When a new
 outbound sighting's group has used its budget, XLe commands the exception

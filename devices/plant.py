@@ -677,6 +677,307 @@ class PlantModel:
         return sum(1 << index for index, blocked in enumerate(natural) if blocked)
 
 
+# Opt-in sighting layout, SIGHTING_CONTRACT.md version 1. This is a host model
+# only: run() does not use it yet and no PLC register carries it. Coordinates
+# are illustrative centimetres along each section, measured to a package front.
+RATED_CM_PER_S = 500.0      # 10 cells/s x 50 cm per cell at 1750 rpm
+
+
+def belt_speed(rpm):
+    """Belt speed in cm/s from drive feedback; reverse or stopped is zero."""
+    return max(0.0, rpm) / 1750.0 * RATED_CM_PER_S
+
+
+@dataclass(frozen=True)
+class DoorGeometry:
+    name: str
+    zone_start: float
+    zone_end: float
+    diverter: float
+
+
+@dataclass(frozen=True)
+class SightingLayout:
+    primary_length: float = 1000.0
+    primary_tunnel: float = 400.0
+    primary_hold: float = 950.0
+    outbound_length: float = 1400.0
+    recycle_merge: float = 150.0
+    outbound_tunnel: float = 300.0
+    route_cutoff: float = 700.0
+    doors: tuple = (DoorGeometry("1", 800.0, 880.0, 840.0),
+                    DoorGeometry("E", 1000.0, 1080.0, 1040.0))
+    end_eye: float = 1300.0
+    recycle_length: float = 1500.0
+    recycle_hold: float = 1450.0
+    chute_eye: float = 20.0
+    chute_speed: float = 120.0
+    gap: float = 100.0
+    min_length: float = 20.0
+    max_length: float = 119.0
+
+    def validate(self):
+        values = [v for v in vars(self).values() if not isinstance(v, tuple)]
+        values += [x for d in self.doors for x in (d.zone_start, d.zone_end, d.diverter)]
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError("layout values must be finite")
+        if not 0 < self.primary_tunnel < self.primary_hold < self.primary_length:
+            raise ValueError("primary tunnel must precede the hold point and belt end")
+        if not self.doors or not (self.max_length <= self.recycle_merge <
+                                  self.outbound_tunnel < self.route_cutoff <
+                                  self.doors[0].zone_start):
+            raise ValueError("merge, tunnel and route cutoff must precede the first door")
+        names = [d.name for d in self.doors]
+        if len(set(names)) != len(names) or "E" not in names:
+            raise ValueError("door names must be unique and include exception door E")
+        previous_end = self.route_cutoff
+        for door in self.doors:
+            if not previous_end <= door.zone_start < door.diverter < door.zone_end:
+                raise ValueError(f"door {door.name} zone is out of order")
+            if door.zone_end - door.zone_start > self.gap:
+                raise ValueError(f"door {door.name} zone exceeds the minimum clear gap")
+            previous_end = door.zone_end
+        if not previous_end < self.end_eye < self.outbound_length:
+            raise ValueError("end-of-outbound eye must follow every door")
+        if not 0 < self.recycle_hold < self.recycle_length:
+            raise ValueError("recycle hold must precede the recycle end")
+        if not (0 < self.min_length <= self.max_length and self.gap > 0 and
+                self.chute_eye > 0 and self.chute_speed >= 0):
+            raise ValueError("lengths, gap, chute eye and chute speed out of range")
+        return self
+
+
+@dataclass
+class SightedPackage:
+    """Plant truth for one parcel. Nothing in it leaves the plant."""
+    physical_id: int
+    label: int
+    length: float
+    section: str = "queued"
+    front: float = 0.0
+
+
+@dataclass(frozen=True)
+class BeamEdge:
+    """The only public output of the sighting plant: a raw beam transition."""
+    seq: int
+    beam: str
+    rising: bool
+    time: float
+
+
+class SightingPlant:
+    """Primary belt, outbound A, recycle return and door chutes.
+
+    The route lives here. Public outputs are raw beam edges; labels, lengths
+    and the physical ID stay in the plant, reach the scanner only through
+    tunnel_view(), and are journaled privately for offline evidence. The PLC
+    attributes edges from its own tracked positions, and the plant diverts a
+    parcel only when that door's coil is on, never from a slot table.
+    """
+
+    def __init__(self, layout=None):
+        self.layout = (layout or SightingLayout()).validate()
+        doors = self.layout.doors
+        self.beam_names = ("primary_entry", "primary_tunnel", "outbound_entry",
+                           "merge_entry", "outbound_tunnel", "end_eye",
+                           "recycle_gate") + tuple(
+                               f"chute_{d.name}" for d in doors)
+        self.beam_state = dict.fromkeys(self.beam_names, False)
+        self.clock = 0.0
+        self.queue = deque()
+        self.packages = []
+        self.delivered = []
+        self.removed = []
+        self.journal = []
+        self.edge_seq = 0
+        self.next_id = 1
+        self._last_under = {}
+
+    def induct(self, label, length):
+        """Queue a parcel at the induction gate. The returned physical ID is
+        plant-side evidence for the harness, never a control value."""
+        if type(label) is not int or not 1 <= label <= 32767:
+            raise ValueError("label must be a 16-bit positive integer")
+        if not self.layout.min_length <= length <= self.layout.max_length:
+            raise ValueError("package length outside the modeled range")
+        package = SightedPackage(self.next_id, label, float(length))
+        self.next_id += 1
+        self.queue.append(package)
+        self._record("queued", package)
+        return package.physical_id
+
+    def remove(self, physical_id, reason):
+        """Journaled operator removal; the only way off a belt besides a chute."""
+        for package in self.packages:
+            if package.physical_id == physical_id:
+                self.packages.remove(package)
+                self.removed.append(package)
+                self._record("removed", package, reason=reason)
+                return True
+        return False
+
+    def tunnel_view(self, section):
+        """Private scanner channel: label and length under a tunnel beam."""
+        x = (self.layout.primary_tunnel if section == "primary" else
+             self.layout.outbound_tunnel if section == "outbound" else None)
+        if x is None:
+            raise ValueError("only primary and outbound sections have tunnels")
+        under = [p for p in self._members(section) if self._covers(p, x)]
+        return (under[0].label, under[0].length) if len(under) == 1 else None
+
+    def step(self, seconds, primary_rpm, outbound_rpm, coils=None, permits=None):
+        """Advance motion by drive feedback and return the new raw beam edges.
+
+        coils maps door name to the PLC output state. permits holds the PLC's
+        induction, handoff and merge gate outputs; a gate also needs the
+        physical clear gap, which the plant enforces itself."""
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("step length must be finite and non-negative")
+        coils = coils or {}
+        gates = {"induction": True, "handoff": True, "merge": True, **(permits or {})}
+        self.clock += seconds
+        outbound = belt_speed(outbound_rpm) * seconds
+        self._move_chutes(seconds)
+        self._move_outbound(outbound, coils)
+        self._move_recycle(outbound, gates["merge"])
+        self._move_primary(belt_speed(primary_rpm) * seconds, gates["handoff"])
+        self._admit(gates["induction"])
+        return self._edges()
+
+    def _record(self, kind, package, **fields):
+        self.journal.append({"kind": kind, "time": self.clock,
+                             "physical_id": package.physical_id,
+                             "section": package.section, **fields})
+
+    def _members(self, section):
+        return sorted((p for p in self.packages if p.section == section),
+                      key=lambda p: -p.front)
+
+    @staticmethod
+    def _covers(package, x):
+        return package.front - package.length <= x <= package.front
+
+    def _room(self, section, front, length):
+        """True when a parcel placed with this front keeps the clear gap."""
+        gap = self.layout.gap
+        for other in self._members(section):
+            if other.front >= front:
+                if other.front - other.length - front < gap:
+                    return False
+            elif front - length - other.front < gap:
+                return False
+        return True
+
+    def _advance(self, section, distance, hold, end, gate, transfer):
+        """Move one section front first; followers keep the clear gap. A parcel
+        passes the hold point only while its exit gate is open, and waits at
+        the end while it is closed."""
+        leader = None
+        for p in self._members(section):
+            target = p.front + distance
+            if leader is not None:
+                target = min(target, leader.front - leader.length - self.layout.gap)
+            if hold is not None and p.front <= hold < target and not gate(p):
+                target = hold
+            if target >= end:
+                if gate(p):
+                    transfer(p)
+                    continue
+                target = end
+            p.front = max(p.front, target)
+            leader = p
+            yield p
+
+    def _move_chutes(self, seconds):
+        for door in self.layout.doors:
+            for p in self._members(f"chute_{door.name}"):
+                p.front += self.layout.chute_speed * seconds
+                if p.front - p.length > self.layout.chute_eye:
+                    self.packages.remove(p)
+                    self.delivered.append(p)
+                    self._record("delivered", p, door=door.name)
+
+    def _move_outbound(self, distance, coils):
+        layout = self.layout
+
+        def to_recycle(p):
+            p.section, p.front = "recycle", 0.0
+            self._record("entered", p)
+
+        for p in self._advance("outbound", distance, None, layout.outbound_length,
+                               lambda p: self._room("recycle", 0.0, p.length),
+                               to_recycle):
+            for door in layout.doors:
+                if coils.get(door.name) and self._covers(p, door.diverter):
+                    p.section, p.front = f"chute_{door.name}", 0.0
+                    self._record("diverted", p, door=door.name)
+                    break
+
+    def _move_recycle(self, distance, permitted):
+        layout = self.layout
+
+        def gate(p):
+            return permitted and self._room("outbound", layout.recycle_merge, p.length)
+
+        def merge(p):
+            p.section, p.front = "outbound", layout.recycle_merge
+            self._record("entered", p)
+
+        list(self._advance("recycle", distance, layout.recycle_hold,
+                           layout.recycle_length, gate, merge))
+
+    def _move_primary(self, distance, permitted):
+        layout = self.layout
+
+        def gate(p):
+            return permitted and self._room("outbound", 0.0, p.length)
+
+        def handoff(p):
+            p.section, p.front = "outbound", 0.0
+            self._record("entered", p)
+
+        list(self._advance("primary", distance, layout.primary_hold,
+                           layout.primary_length, gate, handoff))
+
+    def _admit(self, permitted):
+        if self.queue and permitted and self._room("primary", 0.0, self.queue[0].length):
+            p = self.queue.popleft()
+            p.section, p.front = "primary", 0.0
+            self.packages.append(p)
+            self._record("entered", p)
+
+    def _beam_positions(self):
+        layout = self.layout
+        yield "primary_entry", "primary", 0.0
+        yield "primary_tunnel", "primary", layout.primary_tunnel
+        yield "outbound_entry", "outbound", 0.0
+        yield "merge_entry", "outbound", layout.recycle_merge
+        yield "outbound_tunnel", "outbound", layout.outbound_tunnel
+        yield "end_eye", "outbound", layout.end_eye
+        yield "recycle_gate", "recycle", layout.recycle_hold
+        for door in layout.doors:
+            yield f"chute_{door.name}", f"chute_{door.name}", layout.chute_eye
+
+    def _edges(self):
+        edges = []
+        for beam, section, x in self._beam_positions():
+            under = [p for p in self._members(section) if self._covers(p, x)]
+            blocked = bool(under)
+            if blocked != self.beam_state[beam]:
+                self.beam_state[beam] = blocked
+                self.edge_seq += 1
+                edges.append(BeamEdge(self.edge_seq, beam, blocked, self.clock))
+                self.journal.append({"kind": "edge", "time": self.clock,
+                                     "seq": self.edge_seq, "beam": beam,
+                                     "rising": blocked, "physical_ids":
+                                     [p.physical_id for p in under] if blocked else
+                                     self._last_under.get(beam, [])})
+            if blocked:
+                self._last_under[beam] = [p.physical_id for p in under]
+        return edges
+
+
 def read(client, address, count=1):
     result = client.read_holding_registers(address, count, slave=1)
     if result.isError():
