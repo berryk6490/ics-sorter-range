@@ -19,12 +19,12 @@ from xle import PassLedger  # noqa: E402
 
 class Loop:
     def __init__(self, path, plan=None, unreadable=(), layout=None, failing_doors=(),
-                 run_epoch=7):
+                 run_identity=(7, 1)):
         self.plant = SightingPlant(layout)
         self.ledger = PassLedger(path)
         self.unreadable = set(unreadable)
         self.failing = set(failing_doors)
-        self.tracker = ReferenceTracker(self.plant.layout, self.ledger, run_epoch,
+        self.tracker = ReferenceTracker(self.plant.layout, self.ledger, run_identity,
                                         plan or {}, self.scan)
 
     def scan(self, section):
@@ -82,7 +82,7 @@ class SightingLoopTest(unittest.TestCase):
         loop.run(primary=150, outbound=150)
         decisions = [e["decision"] for e in loop.kinds("sighting") if "decision" in e]
         self.assertEqual(decisions, ["route", "route", "route", "exception"])
-        self.assertEqual(loop.ledger.used(7, 2222), 3)
+        self.assertEqual(loop.ledger.used((7, 1), 2222), 3)
         self.assertEqual(loop.passes(pid), 3)
         self.assertEqual(len(loop.kinds("exception_entry")), 1)
         [delivery] = [j for j in loop.plant.journal if j["kind"] == "delivered"]
@@ -94,14 +94,14 @@ class SightingLoopTest(unittest.TestCase):
         loop.run(primary=300, outbound=300)
         self.assertEqual(loop.passes(pid), 0)
         self.assertEqual([e["door"] for e in loop.kinds("exception_entry")], ["E"])
-        self.assertEqual(loop.ledger.used(7, 3333), 0)
+        self.assertEqual(loop.ledger.used((7, 1), 3333), 0)
 
     def test_concurrent_duplicates_share_one_budget_and_never_exceed_the_bound(self):
         loop = self.loop()
         pids = [loop.plant.induct(5555, 80), loop.plant.induct(5555, 40)]
         loop.run()
-        self.assertTrue(any(e.get("ambiguous") for e in loop.kinds("sighting")))
-        self.assertGreaterEqual(loop.ledger.used(7, 5555), 3)
+        self.assertTrue(any(e.get("duplicate_barcode") for e in loop.kinds("sighting")))
+        self.assertGreaterEqual(loop.ledger.used((7, 1), 5555), 3)
         self.assertEqual(sorted(p.physical_id for p in loop.plant.delivered), pids)
         # Offline evidence: each physical parcel's own passes stay within the
         # bound. The group count may exceed it, because sightings that were
@@ -109,15 +109,15 @@ class SightingLoopTest(unittest.TestCase):
         self.assertTrue(all(loop.passes(pid) <= 3 for pid in pids))
         self.assertEqual(len(loop.kinds("exception_entry")), 2)
 
-    def test_duplicate_behind_a_routed_label_is_not_rerouted_while_concurrent(self):
+    def test_duplicate_behind_a_routed_label_is_independently_routed(self):
         loop = self.loop(plan={1111: "1"})
         first, second = loop.plant.induct(1111, 60), loop.plant.induct(1111, 60)
         loop.run()
         outbound = [e for e in loop.kinds("sighting") if e["section"] == "outbound"]
         self.assertEqual((outbound[0]["decision"], outbound[1]["decision"]),
-                         ("route", "no_route"))
+                         ("route", "route"))
         self.assertEqual(loop.passes(first), 0)
-        self.assertEqual(loop.passes(second), 1)
+        self.assertEqual(loop.passes(second), 0)
         self.assertEqual(len(loop.kinds("confirmed")), 2)
 
     def test_missing_end_eye_pulse_is_lost_never_recycled(self):
@@ -135,7 +135,7 @@ class SightingLoopTest(unittest.TestCase):
             loop.tracker.update(.1, 200, 233, loop.plant.step(.1, 200, 233, coils, permits))
         self.assertEqual([a["kind"] for a in loop.tracker.alarms], ["package_lost"])
         self.assertFalse(loop.kinds("recycled"))
-        self.assertEqual(loop.ledger.used(7, 4444), 1)
+        self.assertEqual(loop.ledger.used((7, 1), 4444), 1)
 
     def test_unconfirmed_exception_divert_stops_instead_of_looping(self):
         loop = self.loop(unreadable={6666}, failing_doors={"E"})

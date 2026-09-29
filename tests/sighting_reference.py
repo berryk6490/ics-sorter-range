@@ -12,6 +12,7 @@ leaving outbound A, so tests stay within recycle capacity.
 """
 from dataclasses import dataclass
 import itertools
+import math
 from pathlib import Path
 import sys
 
@@ -36,11 +37,12 @@ class Tracked:
 
 
 class ReferenceTracker:
-    def __init__(self, layout, ledger, run_epoch, sort_plan, scanner,
-                 slot_limit=3, tolerance=20.0, chute_speed_min=90.0, step=0.1):
+    def __init__(self, layout, ledger, run_identity, sort_plan, scanner,
+                 slot_limit=3, tolerance=20.0, chute_speed_min=90.0, step=0.1,
+                 max_feedback_age=0.25):
         self.layout = layout
         self.ledger = ledger
-        self.run = run_epoch
+        self.run = ledger._run(run_identity)
         self.plan = sort_plan
         self.scanner = scanner
         self.slot_limit = slot_limit
@@ -60,26 +62,102 @@ class ReferenceTracker:
         self.permits = {"induction": True, "handoff": True, "merge": True}
         self.coils = {door.name: False for door in layout.doors}
         self.max_reserved = 0
+        self.max_feedback_age = max_feedback_age
+        self._merge_expected = {}
+        self._merge_seen = set()
+        self._last_edge_seq = 0
 
     # Outputs the PLC would write before the next plant step.
     def outputs(self):
         return dict(self.coils), dict(self.permits)
 
-    def update(self, seconds, primary_rpm, outbound_rpm, edges):
+    def update(self, seconds, primary_rpm, outbound_rpm, edges,
+               outbound_feedback_age=0.0):
         if self.stopped:
             return
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError("tracker step must be positive and finite")
+        fresh = (outbound_rpm is not None and math.isfinite(outbound_rpm) and
+                 math.isfinite(outbound_feedback_age) and
+                 0 <= outbound_feedback_age <= self.max_feedback_age)
+        if not fresh:
+            if any(edge.beam == "merge_entry" and edge.rising for edge in edges) or \
+                    self._merge_expected:
+                return self._stop("merge_visibility_fault", reason="stale_speed")
+            return self._stop("speed_feedback_stale")
+        before = {id(t): t.front for t in self.tracked}
+        start = self.clock
         self.clock += seconds
-        outbound = belt_speed(outbound_rpm) * seconds
+        outbound_speed = belt_speed(outbound_rpm)
+        self._merge_speed = outbound_speed
+        self._refresh_merge(start, outbound_speed, seconds)
+        outbound = outbound_speed * seconds
         self._advance("outbound", outbound, None, self.layout.outbound_length, None)
         self._advance("recycle", outbound, self.layout.recycle_hold,
                       self.layout.recycle_length, None)
         self._advance("primary", belt_speed(primary_rpm) * seconds,
                       self.layout.primary_hold, self.layout.primary_length, None)
+        self._predict_merge(before, start, outbound_speed, seconds)
         for edge in edges:
+            if edge.seq <= self._last_edge_seq:
+                return self._stop("merge_visibility_fault", reason="stale_edge_sequence",
+                                  seq=edge.seq)
+            self._last_edge_seq = edge.seq
             if edge.rising:
                 self._rising(edge)
+            if self.stopped:
+                return
+        for key, predicted in self._merge_expected.items():
+            if self.clock > predicted["deadline"]:
+                return self._stop("merge_visibility_fault", reason="missing_edge",
+                                  section=key[0], token=key[1], serial=key[2],
+                                  expected=predicted["time"])
         self._expire()
         self._set_outputs()
+
+    @staticmethod
+    def _merge_key(t):
+        return (t.section, t.token, t.serial)
+
+    def _refresh_merge(self, start, speed, seconds):
+        for key, item in self._merge_expected.items():
+            t, boundary = item["tracked"], item["boundary"]
+            if t.front >= boundary:
+                continue  # A missed crossing still expires if motion later stops.
+            if speed == 0 or (key[0] == "recycle" and not self.permits["merge"]):
+                for field in ("time", "early", "deadline"):
+                    item[field] += seconds
+                continue
+            expected = start + (boundary - t.front) / speed
+            window = seconds + self.tolerance / speed
+            item.update(time=expected, early=expected - window,
+                        deadline=expected + window)
+
+    def _predict_merge(self, before, start, speed, seconds):
+        if speed <= 0:
+            return
+        for t in self.tracked:
+            key = self._merge_key(t)
+            if key in self._merge_seen or key in self._merge_expected:
+                continue
+            prior = before.get(id(t), t.front)
+            if t.section == "outbound":
+                boundary = self.layout.recycle_merge
+                crossing = prior < boundary and t.front >= boundary - self.tolerance
+            elif t.section == "recycle":
+                boundary = self.layout.recycle_length
+                crossing = (self.permits["merge"] and
+                            prior <= boundary and
+                            t.front >= boundary - self.tolerance)
+            else:
+                continue
+            if crossing:
+                expected = start + max(0.0, boundary - prior) / speed
+                window = seconds + self.tolerance / speed
+                self._merge_expected[key] = {
+                    "tracked": t, "boundary": boundary, "time": expected,
+                    "early": expected - window, "deadline": expected + window,
+                }
 
     def _alarm(self, kind, **fields):
         self.alarms.append({"kind": kind, "time": self.clock, **fields})
@@ -168,15 +246,7 @@ class ReferenceTracker:
         elif edge.beam.startswith("chute_"):
             self._chute(edge.beam[len("chute_"):], edge)
         elif edge.beam == "merge_entry":
-            # Through traffic is already tracked at the merge point; the gap
-            # invariant leaves no tracked parcel near it when a merge occurs.
-            if self._nearest("outbound", layout.recycle_merge) is not None:
-                return
-            head = self._head("recycle")
-            if head is None:
-                return self._alarm("unexpected_object", beam=edge.beam, seq=edge.seq)
-            self.tracked.remove(head)
-            self._open("outbound", layout.recycle_merge)
+            self._merge_edge(edge)
         elif edge.beam == "recycle_gate":
             # Re-anchor the parcel that just reached the hold point.
             near = [t for t in self.tracked if t.section == "recycle" and
@@ -186,9 +256,40 @@ class ReferenceTracker:
             t = max(near, key=lambda t: t.front)
             t.front = max(t.front, layout.recycle_hold)
 
+    def _merge_edge(self, edge):
+        if self._merge_speed <= 0:
+            return self._stop("unexpected_merge_entry", reason="edge_while_stopped",
+                              seq=edge.seq)
+        if abs(edge.time - self.clock) > self.max_feedback_age:
+            return self._stop("merge_visibility_fault", reason="stale_edge_time",
+                              seq=edge.seq)
+        candidates = [(key, item) for key, item in self._merge_expected.items()
+                      if item["early"] <= edge.time <= item["deadline"]]
+        if len(candidates) != 1:
+            late = any(edge.time > item["deadline"]
+                       for item in self._merge_expected.values())
+            return self._stop("merge_visibility_fault" if late else
+                              "unexpected_merge_entry",
+                              reason="late_edge" if late else
+                              "ambiguous_or_unexpected_edge", seq=edge.seq,
+                              candidates=[key for key, _ in candidates])
+        key, item = candidates[0]
+        t = item["tracked"]
+        self._merge_expected.pop(key)
+        self._merge_seen.add(key)
+        if key[0] == "outbound":
+            self.events.append({"kind": "merge_pass_by", "token": t.token,
+                                "serial": t.serial, "seq": edge.seq})
+            return
+        self.tracked.remove(t)
+        new = self._open("outbound", self.layout.recycle_merge)
+        self.events.append({"kind": "merge_admitted", "token": new.token,
+                            "serial": new.serial, "seq": edge.seq})
+
     def _sight(self, t, section, edge):
         readable, barcode, length = self.scanner(section)
-        t.sighting = f"{self.run}:{section}:{t.token}:{t.serial}:{edge.seq}"
+        epoch, nonce = self.run
+        t.sighting = f"{epoch}:{nonce}:{section}:{t.token}:{t.serial}:{edge.seq}"
         t.barcode = barcode if readable else 0
         if readable and length:
             t.length = length
