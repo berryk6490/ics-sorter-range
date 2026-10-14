@@ -2,9 +2,8 @@
 
 This page maps the original Milestone 1 proposal to the implemented sorter range.
 The build and recorded checks below cover the technical range. The final network
-diagram is complete and the clean-sort video is deferred; **the complete
-Milestone 1 submission is not yet assembled**. This page does not claim a new
-live test or a physical parcel system.
+diagram and the October 14 sorter demonstration video are included below.
+The sorter is a simulation of a package sortation system.
 
 ## Proposal-to-implementation checklist
 
@@ -16,7 +15,16 @@ live test or a physical parcel system.
 | Register maps | [Drive and scanner maps](deploy/README.md), [PLC package-slot and plant map](THREE_SLOT_PLANT.md), [stateful photoeye map](STATEFUL_PHOTOEYES.md), and [accumulation map](ACCUMULATION_BACKPRESSURE.md). | Documented across linked files |
 | Isolation proof | The recorded [flow sweep](tests/evidence/network_reachability_2026-09-23.json) matched 36/36 expectations (30 permitted, 6 denied). [Network baseline](NETWORK_BASELINE.md) includes a firewall allow-counter and drop-counter probe. | Evidence exists for the **declared Case A policy** |
 | Network diagram | [Detailed lab topology, VM interfaces, service paths, and Case A policy](NETWORK_DIAGRAM.md). | Complete; based on the recorded 2026-09-23 baseline |
-| Video of a clean sort | Record one live run showing package motion, scanner trigger, correct divert, and confirmation-only trailer increment. Earlier [three-lane live evidence](tests/evidence/network_live_2026-09-23.json) records trailers 2, 5, and 8. | Deferred at operator request |
+| Video of a clean sort | [October 14 sorter demonstration](docs/videos/Milestone_1_Sorter_Demonstration.webm) shows package movement, operator controls, and the loaded counter increasing with no missorts, collisions, or jams. A scanner no-read and recirculation also appear. Earlier [three-lane live evidence](tests/evidence/network_live_2026-09-23.json) records trailers 2, 5, and 8. | Recording included |
+
+## Milestone 1 demonstration video
+
+[View or download the sorter demonstration](docs/videos/Milestone_1_Sorter_Demonstration.webm)
+
+I recorded this 36-second HMI demonstration on October 14, 2026. It shows
+package movement and the induction and master controls at `10.10.2.10:8000`.
+The loaded counter increases from 9 to 14, while missorts, collisions, and
+jams remain at zero. One scanner no-read and one recirculation are also visible.
 
 ## What the simulation demonstrates
 
@@ -74,7 +82,7 @@ baseline used five guests (`plc`, `drives`, `fw`, `scada`, `analyst`) totaling
 of a new run. Record commit, date, exact command results, VM states, and any
 failure separately. No live commands were executed to create this page.
 
-**Ready for final Milestone 1 packaging when:** the video is captured, its
-package results match the current checkout, and a fresh validation record is
-attached. The sorter simulation
+**Ready for final Milestone 1 packaging when:** the included video's
+package results are tied to the deployed checkout and a fresh validation record
+is attached. The sorter simulation
 itself does not require additional plant features to meet this milestone.
