@@ -21,7 +21,9 @@ import threading
 import time
 
 from asyncua import Client, ua
-from flask import Flask, jsonify, render_template_string
+from pathlib import Path
+
+from flask import Flask, jsonify, render_template_string, send_from_directory
 
 ENDPOINT = "opc.tcp://10.10.2.10:4840/sorter/"
 URI = "urn:sorter:level2"
@@ -927,6 +929,18 @@ async function tick(){
 }
 build(); setInterval(tick,100); tick();
 </script></body></html>"""
+
+
+@app.route("/hmi-next")
+@app.route("/hmi-next/")
+def control_room():
+    """Standalone browser HMI; both screens share the same PLC-backed API."""
+    return send_from_directory(Path(__file__).with_name("hmi_next"), "index.html")
+
+
+@app.route("/hmi-next/<path:asset>")
+def control_room_asset(asset):
+    return send_from_directory(Path(__file__).with_name("hmi_next"), asset)
 
 
 @app.route("/")
