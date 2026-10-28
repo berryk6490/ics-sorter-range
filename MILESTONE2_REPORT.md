@@ -1,8 +1,11 @@
-# Milestone 2 baseline report — evidence-backed draft
+# Milestone 2 revised-scope baseline report
 
-October27,2026. **INCOMPLETE. All six operating scenarios NOT RUN.**
-This draft separates historical diagnostic evidence and partial startup proofs
-from the healthy operating baseline still required. It is not a completion claim.
+October 28, 2026. The operator revised Milestone 2 closure to the healthy-idle
+host-tap baseline and written analysis: 24 bounded 150-second segments on
+`fw-l2` and `plc-l1`, with all 24 verified COMPLETE. The other five operating
+scenarios and guest-local conduits move to Milestone 3. This is acceptance of
+the capture and analysis deliverable, not a functional, postflight, or
+restoration PASS for any scenario.
 
 ## Selected configuration and relation to Milestone 1
 
@@ -20,15 +23,16 @@ slots and identity24115. SCADA10.10.2.10 hosts UA/HMI; selected scanners are
 measurement. Broad CaseA exposure is a documented selected configuration,
 not a hardening change performed for this report.
 
-The latest startup's retained evidence verified43/43 destination hashes and
-live24115, but that is an October27 observation, not permanent equality. The
-manifest does not cover scanner environment files, actual aliases/interfaces
+The historical October27 startup's retained evidence verified43/43 destination
+hashes and live24115, but that is an October27 observation, not permanent
+equality. The manifest does not cover scanner environment files, actual aliases/interfaces
 or loaded firewall policy. The retained October27 refresh separately read the
 nine scanner/VFD environment files, aliases21–29 and worker ownership then;
-October22 also recorded local routes to aliases21–29. Current route/interface/
-tools/capture-open and export remain pending.
-Host tooling edits are undeployed and separately
-hashed; no guest update or manifest change is implied.
+October22 also recorded local routes to aliases21–29. The October28 host-tap
+pairings in the healthy-idle report are observations at that time, not
+permanent route/interface or guest-local capture proof. Host tooling edits
+are undeployed and separately hashed; no guest update or manifest change is
+implied.
 
 ## Available evidence and limits
 
@@ -48,63 +52,99 @@ INCOMPLETE/SPENT; conditional abort is independently PASS/CORE_STOPPED with
 complete core-log export. One XLe sample is not stability; UA/HMI and final
 acceptance were NOT RUN. It is not a healthy-idle operating result.
 
-IMPLEMENT-001 is preparation only: healthy-idle observations must span10 seconds
-between successful samples; guest capture/export reuses the existing collector
-under pinned explicit contexts; selected SCADA/scanner/VFD file sinks replace
-the incorrect all-journal assumption. Synthetic lifecycle/export/log fixtures
-are not operating evidence. The guest runtime is unreviewed, undeployed and
-unexecuted. Application attribution is a separate result; empty/truncated or
+The reviewed host preparation requires healthy-idle observations to span
+10 seconds between successful samples. Guest capture/export reuses the
+existing collector under pinned contexts and selected SCADA/scanner/VFD
+file sinks. Synthetic lifecycle/export/log fixtures are not operating
+evidence. Guest-local capture remains unprovisioned and unexecuted.
+Application attribution is a separate result; empty, truncated or
 unavailable logs cannot establish it.
+
+The revised-scope evidence is the 24-segment host capture under
+`/home/kevin/vm/sorter-evidence/m2-healthy-idle-1h-20261028/`, its readable
+copy under `/home/kevin/vm/m2-analysis-copy/`, and the analysis in
+[MILESTONE2_BASELINE_HEALTHY_IDLE.md](MILESTONE2_BASELINE_HEALTHY_IDLE.md).
+Each copied PCAP's SHA-256 was checked against its segment manifest and
+readable collector result: 48/48 digest matches. The canonical verifier
+returned COMPLETE for 24/24 copied segments. The original root-owned PCAP
+payloads were not directly reread for this analysis; these checks establish
+the readable copy's agreement with the retained digests and result records.
+The report records the per-segment UTC windows, packet counts, filter limits,
+Modbus function/address profiles and request cadences. Segment gaps, lack of
+inter-VM clock-offset measurements, and process attribution limits remain.
+
+The operator supplied
+`/home/kevin/vm/sorter-evidence/m2-healthy-idle-1h-20261028-operator-startup.md`
+as startup/preflight evidence. It was **NOT FOUND at that exact path** during
+the coordinator's check, so it has not been read or independently verified.
+The operator's assertion of startup, `master` off, no packages and a passing
+handshake is distinct from the captured network observations. The packet
+analysis alone does not prove those state claims.
 
 ## Communication map
 
-| Expected selected edge (source supported) | Capture/attribution evidence still required |
+| Selected edge | Revised-scope observation and attribution limit |
 | --- | --- |
-| PLC→VFD21–26 and scanner27–29, TCP502, same L1 | plc-l1 payloads, initiating tuples, unit/socket identity; drives bindings fresh |
-| plant→PLC502, same L1 | plc-l1; distinguish plant worker using process/socket records and logs |
-| SCADA UA poller and dedicated XLe→PLC502, routed L2/L1 | fw-l2; service/PID/log attribution, do not infer from IP alone |
-| SCADA UA poller→VFD aliases21–26 TCP502, routed L2/L1 | fw-l2; distinguish from PLC device polling at the L1 tap |
-| XLe→ASX127.0.0.1:8089 | XLe local capture plus ASX/XLe identities/journal |
-| HMI→UA10.10.2.10:4840, local SCADA | SCADA local capture plus current PID/socket and UA freshness |
-| plant→local VFD aliases502 | drives route/interface/ownership proof and local capture |
+| PLC→VFD21–26 and scanner27–29, TCP502, same L1 | `plc-l1` has parsed FC16/FC3 request profiles and rates; current per-process/socket bindings are not proved by packets |
+| Plant-profile source→PLC502, same L1 | `plc-l1` shows source `10.10.1.21` and FC16/FC1/FC3 profile; IP/address profile alone cannot identify `plant.py`; service logs/socket ownership remain needed |
+| SCADA and dedicated XLe→PLC502, routed L2/L1 | Host taps show source endpoints and request profiles; application attribution requires current process/log evidence |
+| SCADA→VFD aliases21–26 TCP502, routed L2/L1 | `fw-l2` shows direct FC3 reads; do not add duplicate `plc-l1` traffic as independent communication |
+| XLe→ASX127.0.0.1:8089 | Unmeasured: both host-tap BPFs exclude 8089; XLe loopback is outside their vantage |
+| HMI→UA10.10.2.10:4840, local SCADA | Unmeasured locally; zero 4840 at `fw-l2` alone says nothing about SCADA loopback |
+| Plant→local VFD aliases502 | Drives-local capture blocked/not run; no local traffic inference |
 
-This is an **expected map**, not the required final observed application map.
-Only SYN/refusal edges from the diagnostic packet are currently observed.
-Observed endpoints/initiators, Modbus function/address profiles, request rates,
-polling intervals, exceptions, retransmissions and resets under healthy operation:
-**NOT RUN**. Unsupported or ambiguous parser measurements must be UNAVAILABLE.
+This is a host-tap communication map. It does not establish process identities
+where several services share an address or measure local loops. The analyzer
+reports separate aggregate Modbus request/response counts; it does not match
+transaction IDs or measure request-to-response latency. The segment-21 FC16
+one-count aggregate difference is unexplained, possibly at a capture
+boundary. It does not prove loss or rule it out. No TCP resets or Modbus
+exceptions were reported within the filtered captures; excluded traffic and
+short inter-segment gaps remain outside that claim. OPC UA/HMI payload
+freshness, guest-local paths and application latency are UNAVAILABLE.
 
 ## Operating results
 
-| Scenario | Functional | Capture | Service restoration | PLC recovery | Typed postflight | Orphan checks |
-| --- | --- | --- | --- | --- | --- | --- |
-| Healthy idle | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| Normal sorting | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| Recirculation | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| Outbound-drive backpressure | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| Drive stop/resume | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| Documented stopped recovery | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| Scenario | M2 scope | Functional | Capture | Service restoration | PLC recovery | Typed postflight | Orphan checks |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Healthy idle | HOST CAPTURE + ANALYSIS ACCEPTED | NOT RUN | NOT RUN (scenario axis) | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| Normal sorting | MOVED TO M3 / NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| Recirculation | MOVED TO M3 / NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| Outbound-drive backpressure | MOVED TO M3 / NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| Drive stop/resume | MOVED TO M3 / NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| Documented stopped recovery | MOVED TO M3 / NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 
-Each future row needs selected/observed identity, approval and scenario ID,
-time/uncertainty, source/PCAP/service/journal hashes, expected and actual result,
-independent restoration and incomplete-evidence notes. Plan restoration and application attribution also
-remain NOT RUN. Fixture PASS is not an operating result.
+The previously documented six-case criteria are superseded for M2 closure
+only; they were not retroactively executed. The standalone healthy-idle
+capture/analysis acceptance does not fill the scenario's functional,
+postflight, restoration, orphan, or plan axes. The results JSON retains
+those independent axes as NOT RUN and a separate host-capture result.
 
-## Written baseline analysis to complete
+## Written baseline analysis and remaining limits
 
 The diagnostic refused connections are consistent with the separately observed
-stopped core; they do not characterize normal polling/function usage. The latest
-partial handshake supports feasibility of the selected journal-backed protocol
+stopped core; they do not characterize normal polling/function usage. The
+historical October27 partial handshake supports feasibility of the selected
+journal-backed protocol
 under the stopped policy, not an accepted operational baseline. The transport
 timeline explains the failed verification without inventing an XLe restart.
 
-After measurement, add per-scenario endpoint/function/range/rate/interval tables,
-protocol/TCP error rates with denominators and capture-loss limits, attribution
-confidence, expected-vs-observed edges, operating/restoration outcomes, local-path
-coverage, clock ambiguity and selected-vs-paper configuration differences. Until
-then these analyses and final completion determination remain **NOT RUN**.
+The measured endpoint/function/range/rate/interval tables and segment-level
+notes are in the healthy-idle analysis above. The five deferred cases have
+no operating or restoration results. Neither the startup assertion nor the
+host capture supplies missing typed-state, package, or service-restoration
+evidence. Local OPC UA/HMI and XLe↔ASX paths remain for M3.
 
-Execution/checklist: [MILESTONE2_COMPLETION.md](MILESTONE2_COMPLETION.md).
+StageA017's approved one-use backup attempt failed INCOMPLETE; its authority
+is spent and no backup was accepted. The operator closed StageA017 and
+Read018. Neither historical action becomes PASS. The operator reports resolving the drives
+disk-full condition by offline export/truncate and supplied
+`/home/kevin/vm/sorter-evidence/m2-drives-vfd-logs-export-20261028T164317Z`
+with six gzipped logs and matching SHA256SUMS. Matching export hashes alone
+do not verify that truncation occurred or prove current drives capacity.
+
+The original planning checklist remains historical to the six-case plan;
+the operator's revised closure scope governs this report.
 Historical source evidence: `m2-smoke-final-verification-20261022T022904Z`,
 `m2-startup-20261027T162715081114Z` and its preserved authorization packet under
 `/home/kevin/vm/sorter-evidence/`. Original packets and spent authorities are

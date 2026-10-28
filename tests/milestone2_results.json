@@ -1,16 +1,62 @@
 {
   "schema_version": 1,
-  "record_type": "UNEXECUTED_TEMPLATE",
-  "evidence_kind": "NOT COLLECTED",
+  "record_type": "REVISED_SCOPE_RESULT_RECORD",
+  "evidence_kind": "HOST_CAPTURE_ANALYSIS_ACCEPTED; OPERATING_AXES_NOT_RUN",
   "configuration_id": null,
   "selected_source_commit": "f587cd6d6e5d425834d1ae35b43fd1fa1a8e69e9",
   "guest_equality": "UNVERIFIED",
   "records": [
-    {"scenario": "healthy_idle", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
-    {"scenario": "normal_sorting", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
-    {"scenario": "recirculation", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
-    {"scenario": "backpressure", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
-    {"scenario": "drive_stop_resume", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
-    {"scenario": "documented_recovery", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []}
-  ]
+    {"scenario": "healthy_idle", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": [], "milestone2_scope": "HOST_CAPTURE_ANALYSIS_ONLY; SCENARIO_AXES_NOT_EVALUATED"},
+    {"scenario": "normal_sorting", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": [], "milestone2_scope": "MOVED TO M3 / NOT RUN"},
+    {"scenario": "recirculation", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": [], "milestone2_scope": "MOVED TO M3 / NOT RUN"},
+    {"scenario": "backpressure", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": [], "milestone2_scope": "MOVED TO M3 / NOT RUN"},
+    {"scenario": "drive_stop_resume", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": [], "milestone2_scope": "MOVED TO M3 / NOT RUN"},
+    {"scenario": "documented_recovery", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": [], "milestone2_scope": "MOVED TO M3 / NOT RUN"}
+  ],
+  "revised_scope": {
+    "decision_date": "2026-10-28",
+    "milestone2_deliverable": "healthy_idle host-tap capture and written baseline analysis only",
+    "milestone3_deferred": [
+      "normal_sorting",
+      "recirculation",
+      "backpressure",
+      "drive_stop_resume",
+      "documented_recovery",
+      "scada-local",
+      "xle-local",
+      "drives-local"
+    ],
+    "drives_local_status": "BLOCKED_NOT_ATTEMPTED",
+    "historical_six_case_criteria": "SUPERSEDED_FOR_M2_CLOSURE_ONLY; NOT RETROACTIVELY_EXECUTED"
+  },
+  "host_capture_analysis": {
+    "status": "ACCEPTED_FOR_REVISED_M2_SCOPE",
+    "scenario": "healthy_idle",
+    "scenario_id": "healthy-idle",
+    "scope": "fw-l2 and plc-l1 host taps; 24 bounded 150-second segments",
+    "segments_verified_complete": 24,
+    "segments_planned": 24,
+    "copied_pcap_sha256_matches": 48,
+    "copied_pcaps_expected": 48,
+    "basis": "Readable copy PCAP digests match segment SHA256SUMS and readable collector result records; canonical verify returns COMPLETE for all 24 copied segments",
+    "readable_copy": "/home/kevin/vm/m2-analysis-copy",
+    "sealed_original": "/home/kevin/vm/sorter-evidence/m2-healthy-idle-1h-20261028",
+    "original_root_owned_payloads_directly_reread": false,
+    "analysis": "MILESTONE2_BASELINE_HEALTHY_IDLE.md",
+    "limits": [
+      "Both BPFs exclude 8089 and local XLe loopback",
+      "Zero 4840/8000 only at fw-l2 vantage",
+      "Analyzer counts requests/responses separately without transaction-ID pairing",
+      "Segment-21 FC16 one-count difference unexplained",
+      "Short gaps between segments and inter-VM clock offsets unmeasured",
+      "IP and Modbus profile alone do not identify a process",
+      "Startup/master-off/no-package assertion lacks readable supplied record at exact reported path"
+    ],
+    "functional_outcome": "NOT EVALUATED",
+    "typed_postflight": "NOT RUN",
+    "service_restoration": "NOT RUN",
+    "plc_recovery": "NOT RUN",
+    "orphan_checks": "NOT RUN",
+    "plan_restoration": "NOT RUN"
+  }
 }
