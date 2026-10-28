@@ -1,8 +1,8 @@
 # Sorter network baseline — 2026-09-23
 
 > Historical Case A inventory. The dedicated XLe VM changes the live asset and
-> flow inventory. Use [XLE_VM_MIGRATION.md](XLE_VM_MIGRATION.md) and
-> [tests/network_flows.json](tests/network_flows.json) for the current 48-flow
+> flow inventory. Use [XLE_VM_MIGRATION.md](../../docs/design/XLE_VM_MIGRATION.md) and
+> [tests/network_flows.json](../../tests/network_flows.json) for the current 48-flow
 > contract; the 36-flow descriptions below record the pre-migration baseline.
 
 Current range path after migration:
@@ -22,13 +22,13 @@ flowchart LR
 The default-deny firewall allows only the source-bound XLe→PLC process path;
 XLe→scanner/VFD and SCADA↔XLe application paths remain denied. SCADA does
 not run XLe or ASX. The 48-flow current contract is in
-[tests/network_flows.json](tests/network_flows.json).
+[tests/network_flows.json](../../tests/network_flows.json).
 
 This is the **observed Case A** conduit on the connected workstation. It is a
 baseline for later attack, hardening, and detection work. No bridge address,
 route, firewall rule, or service configuration was changed for this test.
 The complete per-endpoint, per-port, directional allow/deny matrix is
-[`tests/network_flows.json`](tests/network_flows.json); its `purpose` and
+[`tests/network_flows.json`](../../tests/network_flows.json); its `purpose` and
 `expected` fields are part of the test contract. `tests/network_reachability.py`
 binds each probe to the declared guest source address and requires a TCP
 connection for `allow` or a timeout for `deny`. A refusal, missing local source
@@ -112,7 +112,7 @@ The live runner and plan hashes on SCADA matched the repository (`9de07944…`
 and `b8ce42bb…`). The reachability sweep returned **36/36 matches: 30 allow,
 6 deny**. All denied probes timed out at about 1201 ms; no refused socket was
 counted as a firewall denial. Exact per-probe observations are bounded to
-[`tests/evidence/network_reachability_2026-09-23.json`](tests/evidence/network_reachability_2026-09-23.json)
+[`tests/evidence/network_reachability_2026-09-23.json`](../../tests/evidence/network_reachability_2026-09-23.json)
 (4.8 KiB). Python regression: **40 tests passed**. PLC harness: exit 0,
 including legacy lanes, plant lanes, three-slot reuse, and wrong-lane fault.
 
@@ -132,7 +132,7 @@ all three lanes appeared in HMI telemetry, and the XLe outcome journal had
 three matching identities. The SCADA HMI API reported `connected: true` to
 its OPC UA server after the run, and analyst-to-HMI HTTP returned 200. Bounded
 live rows, sensor events, and journal entries are in
-[`tests/evidence/network_live_2026-09-23.json`](tests/evidence/network_live_2026-09-23.json)
+[`tests/evidence/network_live_2026-09-23.json`](../../tests/evidence/network_live_2026-09-23.json)
 (4.3 KiB). The test also checked the ASX loopback listener and XLe/ASX event
 correlation. The Modbus run and HMI check exercise real VM interfaces; package
 motion, drives, scanners, decisions, and trailers remain simulations.

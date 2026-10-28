@@ -1,7 +1,7 @@
 # Durable identity for lane 1 multi-package mode
 
 For the later XLe heartbeat and operator recovery protocol, see
-[XLE_LIVENESS.md](XLE_LIVENESS.md).
+[XLE_LIVENESS.md](../operations/XLE_LIVENESS.md).
 
 ## Risk reproduced from fd2e9d8
 
@@ -106,7 +106,7 @@ repeat fixture. Its service source was left untouched. Only
 a separate test path with `SORTER_REPEAT_BARCODE=1`. It was stopped and the
 original service restarted afterward. The SCADA command was
 `~/opcua/bin/python ~/sorter-services/live_xle_epoch.py batch`, using the
-editable [test plan](tests/epoch_batch_plan.json). The scanner log reported
+editable [test plan](../../tests/epoch_batch_plan.json). The scanner log reported
 sequences and serials 1–10, all barcode 6001 (status 4 for 2–10). ASX plan
 overrides routed by barcode **and serial**, with a 1200 ms delay on serial 6.
 The plan's answer arrived too late for XLe's 800 ms timeout.

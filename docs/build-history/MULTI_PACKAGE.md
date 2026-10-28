@@ -1,7 +1,7 @@
 # Lane 1 multi-package external sorting
 
 Process-restart recovery and the live three-package slot-reuse run are recorded
-in [XLE_RECOVERY.md](XLE_RECOVERY.md).
+in [XLE_RECOVERY.md](../operations/XLE_RECOVERY.md).
 
 ## Placement, identity, and capacity
 
@@ -22,13 +22,13 @@ released slot can be reused without resetting the run; the PLC gives the next
 package a new token. `xle.py --packages 2` runs a finite verification batch;
 `--packages 0` keeps serving packages through the same two bounded slots.
 The later finite three-package live batch is recorded in
-[XLE_RECOVERY.md](XLE_RECOVERY.md); continuous mode remains untested live.
+[XLE_RECOVERY.md](../operations/XLE_RECOVERY.md); continuous mode remains untested live.
 
 The original stable package identity was `(scanner_run_nonce, slot_token,
 package_serial, scanner_sequence)`. XLe's `package_id` is
 `l1-NONCE-TOKEN-SERIAL` and its ASX request has a separate UUID `request_id`.
 The current protocol prefixes a journal-backed run epoch; see
-[RUN_IDENTITY.md](RUN_IDENTITY.md). The live values below predate that change.
+[RUN_IDENTITY.md](../design/RUN_IDENTITY.md). The live values below predate that change.
 The barcode is data, never the sole identity. PLC lane 1 cells and all three
 outbound belts carry the token alongside barcode and route. At each scanner
 read, divert, collision, door, no-home, or recirculation event, the token

@@ -194,9 +194,9 @@ live HMI rows and eight ordered plant photoeye events:
 The trailer counter vector was `[0,1,0,0,1,0,0,0,0]`, and maximum occupied
 slots was 2. The browser test observed each identity at increasing induction
 and outbound positions, with tunnel, divert, and trailer sensor labels. Its
-rendered screenshots show [both on induction](tests/artifacts/plant-two-induct.png),
-[different outbound belts](tests/artifacts/plant-two-outbound.png), and
-[trailer arrival](tests/artifacts/plant-two-trailer.png).
+rendered screenshots show [both on induction](../../tests/artifacts/plant-two-induct.png),
+[different outbound belts](../../tests/artifacts/plant-two-outbound.png), and
+[trailer arrival](../../tests/artifacts/plant-two-trailer.png).
 
 The final injected failure used the same PLC/SCADA interfaces. Package
 `l1-1-4-1-1` (barcode 6001) had scan/accept/divert scans 170/172/226;
@@ -205,14 +205,14 @@ PLC state 7/reason 4 had actual trailer 0; all nine trailer counters were zero.
 Firefox showed “NO-HOME” and “LANE 1 FAILED CONFIRMATION,” connected to OPC UA,
 with the package still displayed at outbound position 15.0 and sensor label
 “FAILED CONFIRM”; see
-[`tests/artifacts/plant-failed-confirmation.png`](tests/artifacts/plant-failed-confirmation.png).
+[`tests/artifacts/plant-failed-confirmation.png`](../../tests/artifacts/plant-failed-confirmation.png).
 The focused rendered stale/unavailable check injected a PLC-shaped row into
 the HMI renderer, changed its status to stale at age 16, then unavailable.
 Both states preserved `translateX(369.2px)` and set `transition: none`; the
 display said “STALE” then “PLANT TELEMETRY UNAVAILABLE.” This is a browser
 renderer check; the PLC's 15-scan stale threshold was exercised in the host
 PLC suite, not by stopping the guest plant a second time. See
-[`tests/artifacts/plant-stale-unavailable.png`](tests/artifacts/plant-stale-unavailable.png).
+[`tests/artifacts/plant-stale-unavailable.png`](../../tests/artifacts/plant-stale-unavailable.png).
 The rendered checks ran with `geckodriver --port 4445`,
 `python3 tests/serial_hmi_proxy.py`, and `python3 tests/browser_plant.py
 {two,failure,stale}`. The serial proxy binds only to host loopback and speaks

@@ -85,17 +85,17 @@ occupied slots while induction was due. All three first packages used outbound
 **32 tenths of a cell**. Counters were `[0,0,0,0,0,0,0,0,0]` after divert and
 before any trailer confirmation, then `[2,1,1,0,0,0,0,0,0]`. The journal held
 four distinct matching outcomes. Rendered Firefox evidence:
-[three concurrent](tests/artifacts/plant-three-concurrent.png),
-[merge wait](tests/artifacts/plant-three-shared-wait.png),
-[shared outbound](tests/artifacts/plant-three-shared-outbound.png), and
-[fourth token](tests/artifacts/plant-three-fourth-token.png).
+[three concurrent](../../tests/artifacts/plant-three-concurrent.png),
+[merge wait](../../tests/artifacts/plant-three-shared-wait.png),
+[shared outbound](../../tests/artifacts/plant-three-shared-outbound.png), and
+[fourth token](../../tests/artifacts/plant-three-fourth-token.png).
 
 | Additional live case | Exact result |
 | --- | --- |
 | Late ASX, nonce 5 | `l3-1-5-3-3`, barcode 3003, 1.2 s delayed response past XLe's 0.8 s timeout: no PLC command, acceptance tick 0, divert tick 228, state 6/reason 1 recirculated. `l1-1-5-1-1` and `l2-1-5-2-2` loaded at trailers 1/2; counters `[1,1,0,0,0,0,0,0,0]`. Three slots occupied and pre-confirmation counters all zero. |
 | Failed confirmation, nonce 9 | `l3-1-9-3-3`: destination 3, actual 0, state 7/reason 4, failed lane QW646 = 3; trailer 3 stayed zero. `l1-1-9-1-1` and `l2-1-9-2-2` loaded at trailers 1/2; counters `[1,1,0,0,0,0,0,0,0]`. Plant service's sensor log recorded token 3 events 1, 2, 3, 6. Three slots occupied and pre-confirmation counters all zero. |
 | Wrong-lane event, nonce 6 | With tokens 1/2/3 in rows 0/1/2, injected a tunnel event for token 3 with lane 2. PLC ACKed sequence 59, set plant fault 3, stopped run, left all rows at state 1 and all trailer counters zero. Reset cleared the deliberate fault. |
-| Plant service interruption, nonce 14 | IDs `l1-1-14-1-1`, `l2-1-14-2-2`, `l3-1-14-3-3` occupied three rows. Before stop: row states 3/2/2, run true, fault 0, inducted 3, request token 3, all trailers zero. After heartbeat timeout: states 4/3/4 (already queued divert events), fault 1, run false, inducted/request unchanged, all trailers zero, no XLe outcome. All three validated telemetry rows became stale with frozen positions. Restart during the active run yielded identity fault 2, run false and zero trailers; stop/reset/restart restored fault 0. [Rendered stale HMI](tests/artifacts/plant-three-service-stopped.png). |
+| Plant service interruption, nonce 14 | IDs `l1-1-14-1-1`, `l2-1-14-2-2`, `l3-1-14-3-3` occupied three rows. Before stop: row states 3/2/2, run true, fault 0, inducted 3, request token 3, all trailers zero. After heartbeat timeout: states 4/3/4 (already queued divert events), fault 1, run false, inducted/request unchanged, all trailers zero, no XLe outcome. All three validated telemetry rows became stale with frozen positions. Restart during the active run yielded identity fault 2, run false and zero trailers; stop/reset/restart restored fault 0. [Rendered stale HMI](../../tests/artifacts/plant-three-service-stopped.png). |
 | Repeated barcode and XLe restart, nonce 18 | Tokens 1 and 4 had barcode 6001 but IDs `l1-1-18-1-1` and `l1-1-18-4-4`; both loaded trailer 1. `l2-1-18-2-2` and `l3-1-18-3-3` loaded 2/3. XLe restarted with three occupied rows and an already journaled terminal outcome. Events: 4 `plc_command`, 4 `plc_outcome`, 3 `plc_recovered`, 1 `plc_outcome_already_recorded`, 4 releases. SQLite journal had exactly four unique rows; counters `[2,1,1,0,0,0,0,0,0]`. |
 | Prior lane 3 `all` live regression | Rows `(lane, token, destination, actual)` were `(1,1,2,2)`, `(2,2,5,5)`, `(3,3,8,8)`; maximum occupied 3; counters `[0,1,0,0,1,0,0,1,0]`. |
 
