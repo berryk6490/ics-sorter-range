@@ -9,17 +9,17 @@ The sorter is a simulation of a package sortation system.
 
 | Proposed item | Implementation and primary evidence | Status |
 | --- | --- | --- |
-| Three isolated network segments with a firewall VM as the conduit | Level 1 (`plc`, `drives`), Level 2 (`scada`), Level 3 (`analyst`), and `fw` on all three bridges. [Network inventory, firewall policy, and 36-flow results](NETWORK_BASELINE.md); [machine-readable expectations](tests/network_flows.json); [recorded observations](tests/evidence/network_reachability_2026-09-23.json). | Built and measured in Case A |
-| Install OpenPLC and write conveyor/divert Structured Text | Current source [`Sorter.st`](Sorter.st); [first-package PLC behavior and host/live checks](FIRST_SLICE.md); [three global slots, shared outbound, and trailer-confirmation evidence](THREE_SLOT_PLANT.md). | Built and tested |
-| Build two Python VFD emulators | Six instances of [`devices/vfd.py`](devices/vfd.py), three induction and three outbound, exceed the proposed two. [Service list and holding-register contract](deploy/README.md). [Independent plant behavior](ACCUMULATION_BACKPRESSURE.md) uses VFD feedback for movement. | Built and tested |
-| Register maps | [Drive and scanner maps](deploy/README.md), [PLC package-slot and plant map](THREE_SLOT_PLANT.md), [stateful photoeye map](STATEFUL_PHOTOEYES.md), and [accumulation map](ACCUMULATION_BACKPRESSURE.md). | Documented across linked files |
-| Isolation proof | The recorded [flow sweep](tests/evidence/network_reachability_2026-09-23.json) matched 36/36 expectations (30 permitted, 6 denied). [Network baseline](NETWORK_BASELINE.md) includes a firewall allow-counter and drop-counter probe. | Evidence exists for the **declared Case A policy** |
+| Three isolated network segments with a firewall VM as the conduit | Level 1 (`plc`, `drives`), Level 2 (`scada`), Level 3 (`analyst`), and `fw` on all three bridges. [Network inventory, firewall policy, and 36-flow results](../../NETWORK_BASELINE.md); [machine-readable expectations](../../tests/network_flows.json); [recorded observations](../../tests/evidence/network_reachability_2026-09-23.json). | Built and measured in Case A |
+| Install OpenPLC and write conveyor/divert Structured Text | Current source [`Sorter.st`](../../Sorter.st); [first-package PLC behavior and host/live checks](../../FIRST_SLICE.md); [three global slots, shared outbound, and trailer-confirmation evidence](../../THREE_SLOT_PLANT.md). | Built and tested |
+| Build two Python VFD emulators | Six instances of [`devices/vfd.py`](../../devices/vfd.py), three induction and three outbound, exceed the proposed two. [Service list and holding-register contract](../../deploy/README.md). [Independent plant behavior](../../ACCUMULATION_BACKPRESSURE.md) uses VFD feedback for movement. | Built and tested |
+| Register maps | [Drive and scanner maps](../../deploy/README.md), [PLC package-slot and plant map](../../THREE_SLOT_PLANT.md), [stateful photoeye map](../../STATEFUL_PHOTOEYES.md), and [accumulation map](../../ACCUMULATION_BACKPRESSURE.md). | Documented across linked files |
+| Isolation proof | The recorded [flow sweep](../../tests/evidence/network_reachability_2026-09-23.json) matched 36/36 expectations (30 permitted, 6 denied). [Network baseline](../../NETWORK_BASELINE.md) includes a firewall allow-counter and drop-counter probe. | Evidence exists for the **declared Case A policy** |
 | Network diagram | [Detailed lab topology, VM interfaces, service paths, and Case A policy](NETWORK_DIAGRAM.md). | Complete; based on the recorded 2026-09-23 baseline |
-| Video of a clean sort | [October 14 sorter demonstration](docs/videos/Milestone_1_Sorter_Demonstration.webm) shows package movement, operator controls, and the loaded counter increasing with no missorts, collisions, or jams. A scanner no-read and recirculation also appear. Earlier [three-lane live evidence](tests/evidence/network_live_2026-09-23.json) records trailers 2, 5, and 8. | Recording included |
+| Video of a clean sort | [October 14 sorter demonstration](../../docs/videos/Milestone_1_Sorter_Demonstration.webm) shows package movement, operator controls, and the loaded counter increasing with no missorts, collisions, or jams. A scanner no-read and recirculation also appear. Earlier [three-lane live evidence](../../tests/evidence/network_live_2026-09-23.json) records trailers 2, 5, and 8. | Recording included |
 
 ## Milestone 1 demonstration video
 
-[View or download the sorter demonstration](docs/videos/Milestone_1_Sorter_Demonstration.webm)
+[View or download the sorter demonstration](../../docs/videos/Milestone_1_Sorter_Demonstration.webm)
 
 I recorded this 36-second HMI demonstration on October 14, 2026. It shows
 package movement and the induction and master controls at `10.10.2.10:8000`.
@@ -28,20 +28,20 @@ jams remain at zero. One scanner no-read and one recirculation are also visible.
 
 ## What the simulation demonstrates
 
-[Independent plant mode](THREE_SLOT_PLANT.md) computes package movement from
+[Independent plant mode](../../THREE_SLOT_PLANT.md) computes package movement from
 simulated VFD speed feedback, emits sensor events, and waits for PLC event ACKs.
 The PLC owns three package slots globally, scanner triggers, route acceptance,
 terminal outcomes, and nine trailer counters. In
-[stateful photoeye mode](STATEFUL_PHOTOEYES.md), package length and movement
+[stateful photoeye mode](../../STATEFUL_PHOTOEYES.md), package length and movement
 produce leading and trailing beam transitions; the PLC validates them.
-[Finite accumulation](ACCUMULATION_BACKPRESSURE.md) supplies lane and merge
+[Finite accumulation](../../ACCUMULATION_BACKPRESSURE.md) supplies lane and merge
 backpressure, holds, and a fourth package waiting for a released slot.
 
 The recorded three-lane run correlated scanner identities, routing decisions,
 PLC outcomes, journal rows, and HMI telemetry. It left trailer counters at
 zero before confirmations and ended with one confirmed package each at trailers
-2, 5, and 8. See [the bounded run evidence](tests/evidence/network_live_2026-09-23.json)
-and [the network baseline narrative](NETWORK_BASELINE.md).
+2, 5, and 8. See [the bounded run evidence](../../tests/evidence/network_live_2026-09-23.json)
+and [the network baseline narrative](../../NETWORK_BASELINE.md).
 
 The PLC also has a legacy internal belt-cell mode; opt-in independent plant
 mode is the source of the physical-motion evidence here. Scanners, photoeyes,

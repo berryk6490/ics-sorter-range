@@ -2,13 +2,19 @@
 
 ## Host unit tests
 
-Run from the repository root with Python 3.11:
+From the repository root, create a Python 3.11 virtual environment before
+installing dependencies so `pip` does not write to the system Python:
 
-    pip install -r requirements-dev.txt
-    python3 -m unittest discover -s tests -p 'test_*.py'
+```sh
+python3.11 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m unittest discover -s tests -p 'test_*.py' -v
+```
 
-CI runs the same command on every push and pull request
-(.github/workflows/host-tests.yml).
+The dependency file is [requirements-dev.txt](requirements-dev.txt). CI uses
+Python 3.11 and runs the same install and test commands on pushes and pull
+requests; see [.github/workflows/host-tests.yml](.github/workflows/host-tests.yml).
 
 ## Not covered by CI
 
@@ -21,3 +27,6 @@ A passing host run means the host-side logic passed. It does not mean the range 
 
 Record commit, date, exact command results, and VM states for any live run separately.
 Do not reuse old check counts as results of a new run.
+
+Return to the [repository overview](README.md) or the
+[documentation guide](docs/README.md).
