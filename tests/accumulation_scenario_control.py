@@ -1,5 +1,6 @@
 """Host control of detached SCADA validation, over the existing serial shell."""
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -74,11 +75,23 @@ def prepared_directory(path, record, case, baseline, preflight, *, approved):
     return path
 
 
-def write_run_gate(local, run_id, scenario, status, **details):
+@contextmanager
+def serialized_operation():
+    """Hold one stable kernel lock across gate check, operation and sealing."""
+    path=RESTORATION_GATE.with_suffix('.operation.lock')
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('a') as stream:
+        try:fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError as exc:raise ValueError('another canonical scenario operation is active') from exc
+        yield
+
+
+def write_run_gate(local, run_id, scenario, status, *, seal=None, **details):
     record = {"run_id": run_id, "scenario": scenario, "status": status,
               "recorded_utc": datetime.now(timezone.utc).isoformat(), **details}
     if status == "PASS":
         atomic_control(local / "restoration-gate.json", record)
+        if seal is not None:seal()
         atomic_control(RESTORATION_GATE, record)
     else:
         atomic_control(RESTORATION_GATE, record)

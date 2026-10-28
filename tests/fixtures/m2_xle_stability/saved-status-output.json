@@ -1,0 +1,22 @@
+{
+  "scope": "Preserved historical service-output shape; transport completion nonces are evidence, not service state. Only four service fields were recorded. No richer incarnation fields are invented.",
+  "attempt": "m2-startup-20261027T042934779982Z",
+  "source_sha256": {
+    "/home/kevin/vm/sorter-evidence/m2-startup-20261027T042934779982Z/xle-stable-first.json": "581ea97dbf484912bdb242a8f5d0448d6835da0f0ea5d2e4c0c1ece8157c502e",
+    "/home/kevin/vm/sorter-evidence/m2-startup-20261027T042934779982Z/xle-stable-second.json": "296c6ba836bb6309537e5e4814a00cf7cd442c8ab5103ade46c4dd62050312f6"
+  },
+  "samples": {
+    "xle-stable-first": {
+      "command": "env SYSTEMD_PAGER=cat SYSTEMD_COLORS=0 /usr/bin/systemctl --no-pager show sorter-xle.service -p ActiveState -p SubState -p MainPID -p NRestarts",
+      "completed_utc": "2026-10-27T14:13:28.001614+00:00",
+      "output": "env SYSTEMD_PAGER=cat SYSTEMD_COLORS=0 /usr/bin/systemctl --no-pager show sorter-xle.service -p ActiveState -p SubState -p MainPID -p NRestarts; printf '__SORTER_RC_c6e0bcdc78664d2b59255a161e487496__%s\\n' \"$?\"\nMainPID=34302\nNRestarts=32263\nActiveState=active\nSubState=running",
+      "vm": "xle"
+    },
+    "xle-stable-second": {
+      "command": "env SYSTEMD_PAGER=cat SYSTEMD_COLORS=0 /usr/bin/systemctl --no-pager show sorter-xle.service -p ActiveState -p SubState -p MainPID -p NRestarts",
+      "completed_utc": "2026-10-27T14:13:32.328866+00:00",
+      "output": "env SYSTEMD_PAGER=cat SYSTEMD_COLORS=0 /usr/bin/systemctl --no-pager show sorter-xle.service -p ActiveState -p SubState -p MainPID -p NRestarts; printf '__SORTER_RC_b66a76b46866dc683b7b75a8ff9566f3__%s\\n' \"$?\"\nMainPID=34302\nNRestarts=32263\nActiveState=active\nSubState=running",
+      "vm": "xle"
+    }
+  }
+}

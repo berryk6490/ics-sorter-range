@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "selected_source_commit": "f587cd6d6e5d425834d1ae35b43fd1fa1a8e69e9",
+  "measurement_source_worktree": "/home/kevin/vm/sorter-m2-measurement-source",
+  "selected_manifest_sha256": "9a6b3b9c84fc1552fa73f7eb9835d30b4ab781fa52604a55dea23bd1362665ab",
+  "handoff": {
+    "path": "/home/kevin/vm/sorter-evidence/milestone2-inventory-20261021T235743Z/HANDOFF.md",
+    "sha256": "c31297e8ebf9d836b8afb915e00b8eb3ae75c56af6a6d41d774c9eef76cdcbfe",
+    "observation_window": "2026-10-21/22 UTC; historical inventory, not current clearance"
+  },
+  "paper": {
+    "path": "/home/kevin/Downloads/Kevin_Berry_Milestone_1_Paper.pdf",
+    "date": "2026-10-14",
+    "sha256": "9324826d82b63f525a095f44b25e9148099e869823a9cbe69c4aecd1c978b409",
+    "commit": "1e271ed10bb3f3f90b669aadc30e7698911cfe83"
+  },
+  "points": {
+    "fw-l2": {
+      "location": "host", "interface": "vnet1", "verified_in_handoff": true,
+      "attachment": "fw MAC 52:54:00:e5:cc:f1 on ics-l2/virbr-l2",
+      "filter": "tcp and (port 502 or port 4840 or port 8000)",
+      "coverage": "routed traffic involving L2; use this side only for counts",
+      "prerequisite": "reconfirm tap/MAC attachment; capture-open privilege unverified"
+    },
+    "plc-l1": {
+      "location": "host", "interface": "vnet4", "verified_in_handoff": true,
+      "attachment": "plc MAC 52:54:00:7c:c7:79 on ics-l1/virbr-l1",
+      "filter": "tcp and host 10.10.1.10 and port 502",
+      "coverage": "PLC-VFD, PLC-scanner, plant-PLC and routed PLC traffic",
+      "prerequisite": "reconfirm tap/MAC attachment; never sum routed PLC traffic with fw-l2"
+    },
+    "xle-local": {
+      "location": "xle", "interface": "lo", "verified_in_handoff": true,
+      "attachment": "guest route to 127.0.0.1 is local dev lo",
+      "filter": "tcp and host 127.0.0.1 and port 8089",
+      "coverage": "XLe-ASX HTTP; invisible from host taps",
+      "prerequisite": "separate guest write/privilege approval; verify timeout/prlimit, clock bounds and capture-open rights"
+    },
+    "scada-local": {
+      "location": "scada", "interface": "lo", "verified_in_handoff": true,
+      "attachment": "guest route to 10.10.2.10 is local dev lo",
+      "filter": "tcp and host 10.10.2.10 and port 4840",
+      "coverage": "HMI-OPC UA subscription/commands; connectedness does not prove fresh PLC data",
+      "prerequisite": "separate guest write/privilege approval; verify timeout/prlimit, clock bounds and capture-open rights"
+    },
+    "drives-local": {
+      "location": "drives", "interface": "lo", "verified_in_handoff": false,
+      "attachment": "PROPOSED ONLY: drives routes, aliases and local path unread",
+      "filter": "tcp and port 502",
+      "coverage": "plant-VFD local RPM polling if routing confirms local delivery",
+      "prerequisite": "BLOCKED: authenticate separately, read routes/tools, resolve scanner address discrepancy; update reviewed config only after observation"
+    }
+  }
+}

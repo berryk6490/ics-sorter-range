@@ -1,10 +1,13 @@
 """Bounded three-lane plant proof with dedicated XLe/ASX services.
 
 Run on SCADA. This script never starts XLe, ASX, or a second journal writer.
-The host verifies the dedicated journal and journald events after this run.
+The host verifies the dedicated outcome journal; service/socket/log evidence is
+collected separately through the same approved host operation.
 """
 
+import argparse
 import json
+import signal
 from pathlib import Path
 import sys
 import time
@@ -25,14 +28,63 @@ def wait(predicate, seconds, label):
     raise TimeoutError(label)
 
 
-def main():
+CASES=('normal','recirculation','backpressure','drive_stop')
+
+
+def scenario_config(case):
+    if case not in CASES:raise ValueError(case)
+    count=3 if case in ('normal','backpressure') else 1
+    expected={1:(1001,0)} if case=='recirculation' else {1:(6001,2),2:(5002,5),3:(3003,8)}
+    expected={lane:expected[lane] for lane in range(1,count+1)}
+    counters=[0]*9
+    for barcode,destination in expected.values():
+        if destination:counters[destination-1]+=1
+    return {'case':case,'count':count,'seed':1 if case=='recirculation' else 137,
+            'expected':expected,'trailer_counters':counters}
+
+
+def hold_proven(case,block,zone,counters,rpm):
+    active=[i for i in range(3) if block[i*12+4] in (1,2,3,4)]
+    required=3 if case=='backpressure' else 1
+    return (len(active)==required and not any(counters) and all(
+        zone[i*5+1]==4 and zone[i*5+2]==3 and zone[i*5+3]>=10 and zone[15+i]==1
+        for i in active) and (case!='drive_stop' or rpm==0))
+
+
+def observe_hold(previous,case,block,zone,counters,rpm,enables,now):
+    """Retain every sampled hold; any loss after establishment fails closed."""
+    proven=hold_proven(case,block,zone,counters,rpm) and not any(enables)
+    if previous is not None:assert proven,'sustained hold/no-load/drive-off proof lost'
+    if not proven:return None,False
+    sample={'block':list(block),'zone':list(zone),'trailer_counters':list(counters),
+            'rpm':rpm,'drive_enables':list(enables),'observed_monotonic':now}
+    if previous is None:previous={'observed_monotonic':now,'samples':[]}
+    assert len(previous['samples'])<256,'hold evidence limit'
+    previous['samples'].append(sample)
+    return previous,now-previous['observed_monotonic']>=3 and len(previous['samples'])>=2
+
+
+def validate_outcomes(rows,config):
+    assert len(rows)==config['count'],rows
+    assert {row['lane'] for row in rows.values()}==set(config['expected']),rows
+    for row in rows.values():
+        barcode,destination=config['expected'][row['lane']]
+        assert (row['barcode'],row['destination'],row['actual'],row['state'],row['reason'])==(
+            barcode,destination,destination,5 if destination else 6,0 if destination else 1),row
+        assert row['scanner_sequence'] and row['scan_tick']>0
+        if destination:assert row['scan_tick']<=row['accept_tick']<row['divert_tick'],row
+        else:assert row['accept_tick']==row['command_id']==0 and row['divert_tick']>row['scan_tick'],row
+
+
+def main(case='normal'):
+    config=scenario_config(case)
     plc = ModbusTcpClient("10.10.1.10", port=502, timeout=2)
     if not plc.connect():
         raise ConnectionError("SCADA cannot read PLC")
     original = {"enables": coils(plc, 881, 7),
                 "modes": {a: coils(plc, a)[0] for a in (914, 915, 918, 919, 920)},
                 "setpoints": holding(plc, 200, 11), "seed": holding(plc, 247)[0]}
-    failure = None
+    failure = None;drive=None;hold=None;stopped_at=None;resumed=False;positive_rpm=False
     try:
         assert holding(plc, 249)[0] == 24115
         assert not coils(plc, 880)[0]
@@ -40,14 +92,18 @@ def main():
         assert all(holding(plc, a + 4)[0] == 0 for a in (530, 542, 647))
         assert holding(plc, 591)[0] == 0 and holding(plc, 788)[0] == 0
         assert holding(plc, 748, 3) == [0, 0, 0]
-        set_register(plc, 247, 137)
+        set_register(plc, 247, config['seed'])
         old_nonce = holding(plc, 509)[0]
         set_coil(plc, 910, True)
         wait(lambda: holding(plc, 509)[0] != old_nonce and
              holding(plc, 255)[0] == 0 and holding(plc, 256)[0] == 0,
              30, "scanner reset ACK")
         for lane in (1, 2, 3):
-            set_coil(plc, 881 + lane, True)
+            set_coil(plc, 881 + lane, lane<=config['count'])
+        for address in (885,886,887):set_coil(plc,address,case!='backpressure')
+        if case=='drive_stop':
+            drive=ModbusTcpClient('10.10.1.21',port=502,timeout=2)
+            assert drive.connect(),'induct1 VFD unavailable'
         for address in (914, 915, 918, 919, 920):
             set_coil(plc, address, True)
         for address in range(200, 206):
@@ -71,8 +127,10 @@ def main():
         max_slots = 0
         deadline = time.monotonic() + 190
         while time.monotonic() < deadline:
+            assert holding(plc,558,2)==[lo,hi] and holding(plc,509)[0]==nonce,'run identity changed'
+            assert coils(plc,880)[0],'master changed during operating scenario'
             inducted = holding(plc, 220)[0]
-            if inducted >= 3:
+            if inducted >= config['count']:
                 for address in (207, 208, 209):
                     set_register(plc, address, 32000)
             sensor = holding(plc, 580, 6)
@@ -88,6 +146,22 @@ def main():
             lanes = holding(plc, 644, 2) + holding(plc, 659)
             max_slots = max(max_slots, sum(block[i + 4] in (1, 2, 3, 4)
                                            for i in (0, 12, 24)))
+            if case in ('backpressure','drive_stop'):
+                if case=='drive_stop' and stopped_at is None and any(block[i+4] in (1,2,3,4) for i in (0,12,24)):
+                    set_coil(plc,882,False);stopped_at=time.monotonic()
+                rpm=holding(drive,5)[0] if drive else None
+                if resumed and rpm is not None and rpm>0:positive_rpm=True
+                zone=holding(plc,766,23);counters_now=holding(plc,222,9)
+                ready=False
+                if not resumed:
+                    addresses=(885,886,887) if case=='backpressure' else (882,)
+                    enables=[coils(plc,address)[0] for address in addresses]
+                    hold,ready=observe_hold(hold,case,block,zone,counters_now,rpm,enables,time.monotonic())
+                if ready:
+                    for address in ((885,886,887) if case=='backpressure' else (882,)):
+                        set_coil(plc,address,True)
+                    resumed=True
+            assert holding(plc,591)[0]==holding(plc,788)[0]==0
             for slot in range(3):
                 row = block[slot * 12:(slot + 1) * 12]
                 if row[0] and row[4] in (5, 6, 7):
@@ -113,31 +187,29 @@ def main():
                 except (OSError, KeyError, ValueError):
                     pass
             counters = holding(plc, 222, 9)
-            if (len(rows) == 3 and counters == [0, 1, 0, 0, 1, 0, 0, 1, 0] and
-                all(block[i + 4] == 0 for i in (0, 12, 24))):
+            if (len(rows) == config['count'] and counters == config['trailer_counters'] and
+                all(block[i + 4] == 0 for i in (0, 12, 24)) and
+                (case not in ('backpressure','drive_stop') or (hold and resumed)) and
+                (case!='drive_stop' or positive_rpm)):
                 break
             time.sleep(.05)
-        expected = {1: (6001, 2), 2: (5002, 5), 3: (3003, 8)}
-        assert len(rows) == 3, rows
-        assert {row["lane"] for row in rows.values()} == {1, 2, 3}, rows
-        assert max_slots <= 3 and set(hmi_lanes) >= {1, 2, 3}, (max_slots, hmi_lanes)
-        assert pre_confirmation == [0] * 9, pre_confirmation
-        assert holding(plc, 222, 9) == [0, 1, 0, 0, 1, 0, 0, 1, 0]
+        validate_outcomes(rows,config)
+        assert max_slots <= 3 and set(hmi_lanes) >= set(config['expected']), (max_slots, hmi_lanes)
+        if case!='recirculation':assert pre_confirmation == [0] * 9, pre_confirmation
+        assert holding(plc, 222, 9) == config['trailer_counters']
+        assert holding(plc,220)[0]==config['count'],'unexpected extra package induction'
+        if case=='recirculation':assert holding(plc,218)[0]==1
+        if case in ('backpressure','drive_stop'):assert hold and resumed
+        if case=='drive_stop':assert positive_rpm
         assert holding(plc, 748, 3) == [0, 0, 0]
-        for row in rows.values():
-            barcode, destination = expected[row["lane"]]
-            assert (row["barcode"], row["destination"], row["actual"],
-                    row["state"], row["reason"]) == (barcode, destination,
-                                                      destination, 5, 0), row
-            assert row["scanner_sequence"] and row["scan_tick"] > 0
-            assert row["scan_tick"] <= row["accept_tick"] < row["divert_tick"], row
-        result = {"status": "PASS", "epoch": epoch, "scanner_nonce": nonce,
+        result = {"status": "PASS", "case":case,"epoch": epoch, "scanner_nonce": nonce,
+                  "hold_proof":hold,"drive_positive_after_resume":positive_rpm,
                   "rows": rows, "sensor_events": events,
                   "hmi_lanes": sorted(hmi_lanes), "maximum_occupied": max_slots,
                   "pre_confirmation_counters": pre_confirmation,
                   "trailer_counters": holding(plc, 222, 9),
                   "inducted": holding(plc, 220)[0]}
-        print(json.dumps(result, sort_keys=True), flush=True)
+        result['operator_restoration']='PENDING_FINALLY'
         return result
     except BaseException as exc:
         failure = exc
@@ -169,11 +241,17 @@ def main():
         except Exception as exc:
             errors.append(f"seed: {exc}")
         plc.close()
+        if drive:drive.close()
         if errors:
             print(json.dumps({"cleanup_errors": errors}), flush=True)
             if failure is None:
                 raise RuntimeError("operator restoration failed: " + ", ".join(errors))
+        if failure is None:result['operator_restoration']='PASS'
 
 
 if __name__ == "__main__":
-    main()
+    def interrupted(signum,frame):raise InterruptedError('bounded scenario interrupted')
+    for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,interrupted)
+    parser=argparse.ArgumentParser();parser.add_argument('--case',choices=CASES,default='normal')
+    args=parser.parse_args()
+    print(json.dumps(main(args.case),sort_keys=True),flush=True)

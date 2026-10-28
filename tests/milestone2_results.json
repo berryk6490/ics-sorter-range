@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "record_type": "UNEXECUTED_TEMPLATE",
+  "evidence_kind": "NOT COLLECTED",
+  "configuration_id": null,
+  "selected_source_commit": "f587cd6d6e5d425834d1ae35b43fd1fa1a8e69e9",
+  "guest_equality": "UNVERIFIED",
+  "records": [
+    {"scenario": "healthy_idle", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
+    {"scenario": "normal_sorting", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
+    {"scenario": "recirculation", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
+    {"scenario": "backpressure", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
+    {"scenario": "drive_stop_resume", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []},
+    {"scenario": "documented_recovery", "scenario_id": null, "functional_outcome": "NOT RUN", "capture_completeness": "NOT RUN", "service_restoration": "NOT RUN", "plc_recovery": "NOT RUN", "typed_postflight": "NOT RUN", "orphan_checks": "NOT RUN", "plan_restoration": "NOT RUN", "evidence": [], "errors": []}
+  ]
+}
