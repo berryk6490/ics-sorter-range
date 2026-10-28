@@ -89,7 +89,7 @@ The final accepted-route case recorded package IDs `l1-1-10-1-1` and
 `l1-1-12-1-1` and `l1-1-12-2-2`, terminal states 5/6, actual trailers 2/0,
 one recirculation, and no second route command. Both scanner-to-divert
 intervals were 3300 ms. The ASX decision for the second undecided package
-was deliberately delayed by the [test plan](tests/liveness_sort_plan.json);
+was deliberately delayed by the [test plan](../../tests/liveness_sort_plan.json);
 XLe was stopped while the slot was still in state 2, before a fallback
 event. These are actual PLC slot rows, trailer counters, XLe event records,
 and SQLite journal rows read by the SCADA runner.
@@ -98,9 +98,9 @@ The rendered Firefox HMI showed `XLE HEARTBEAT LOST`, then
 `XLE HEARTBEAT LOST — ACKNOWLEDGED` after its Acknowledge button was clicked.
 Its API still reported state 2 and heartbeat age 1 after XLe returned.
 Clicking Retry led to a cleared alarm. Screenshots:
-[lost](tests/artifacts/xle-heartbeat-lost.png),
-[acknowledged](tests/artifacts/xle-heartbeat-acknowledged.png),
-[cleared](tests/artifacts/xle-heartbeat-cleared.png).
+[lost](../../tests/artifacts/xle-heartbeat-lost.png),
+[acknowledged](../../tests/artifacts/xle-heartbeat-acknowledged.png),
+[cleared](../../tests/artifacts/xle-heartbeat-cleared.png).
 The `agent-browser` CLI was unavailable, so the installed headless Firefox
 and WebDriver were used for the rendered check, through the existing serial
 HMI proxy. No bridge address or firewall rule changed.

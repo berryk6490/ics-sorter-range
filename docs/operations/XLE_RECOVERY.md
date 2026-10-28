@@ -2,7 +2,7 @@
 
 > The SCADA-local process and journal instructions below describe the
 > pre-migration design. The dedicated service and journal are now on `xle`;
-> follow [XLE_VM_MIGRATION.md](XLE_VM_MIGRATION.md) for current recovery.
+> follow [XLE_VM_MIGRATION.md](../design/XLE_VM_MIGRATION.md) for current recovery.
 
 ## Contract and limits
 
@@ -44,7 +44,7 @@ Recovery has these boundaries:
   stale requests but cannot recover package state erased by that reset.
 - A cold PLC process restart can reuse its private nonce and token counters.
   XLe now commits a new run epoch in the same SQLite journal before the PLC
-  accepts external multi mode. See [RUN_IDENTITY.md](RUN_IDENTITY.md) for the
+  accepts external multi mode. See [RUN_IDENTITY.md](../design/RUN_IDENTITY.md) for the
   handshake, fail-closed behavior, and live cold-restart evidence.
 
 ## Verification before the run-epoch change

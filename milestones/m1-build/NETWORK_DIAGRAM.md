@@ -25,13 +25,13 @@ to scanners or VFDs; ASX listens only on XLe loopback TCP 8089. SCADA does
 not run XLe or ASX and does not originate route writes. HMI state flows only
 from PLC validation through OPC UA on SCADA. The current measured contract is
 [48 source-bound flows](../../tests/network_flows.json); the migration, packet
-evidence, and resource budget are in [XLE_VM_MIGRATION.md](../../XLE_VM_MIGRATION.md).
+evidence, and resource budget are in [XLE_VM_MIGRATION.md](../../docs/design/XLE_VM_MIGRATION.md).
 
 ## Historical Milestone 1 diagram (23 September 2026)
 
 This diagram describes the **lab range**, not a production sorter network. It
 reflects the inventory and firewall rules measured in
-[NETWORK_BASELINE.md](../../NETWORK_BASELINE.md) on 2026-09-23. Links in the topology
+[NETWORK_BASELINE.md](NETWORK_BASELINE.md) on 2026-09-23. Links in the topology
 diagram show physical or virtual connectivity; the traffic rules appear below.
 Case B hardening is planned for a later milestone and is **not** shown as
 deployed.
@@ -127,7 +127,7 @@ The [36-endpoint directional matrix](../../tests/network_flows.json) was checked
 from the appropriate guest source addresses:
 [36/36 matched observations](../../tests/evidence/network_reachability_2026-09-23.json),
 with 30 allowed and 6 denied. The
-[baseline narrative](../../NETWORK_BASELINE.md) records the firewall
+[baseline narrative](NETWORK_BASELINE.md) records the firewall
 allow/drop counter change for a controlled SCADA → PLC and SCADA → scanner
 probe. The [three-lane live record](../../tests/evidence/network_live_2026-09-23.json)
 correlates scanner, PLC, decision/journal and HMI data over the lab network.

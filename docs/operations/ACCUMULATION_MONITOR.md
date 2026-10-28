@@ -352,7 +352,7 @@ opposite order can create QW591=2 for one PLC scan and retain that value while
 plant mode is off. A timeout reports the expected and observed identity,
 heartbeat, fault, and event sequence/ACK. The comparator still requires
 plant fault zero. The preserved migration failure and host reproduction are
-documented in [XLE_VM_FAULT2_INVESTIGATION.md](XLE_VM_FAULT2_INVESTIGATION.md).
+documented in [XLE_VM_FAULT2_INVESTIGATION.md](../archive/XLE_VM_FAULT2_INVESTIGATION.md).
 
 The preserved 20260925T213332_fac009eab47348e4b39df76c8a67e23f run
 functionally completed three Lane 1 packages. Its first postflight was
@@ -422,7 +422,7 @@ The command excludes its actively redirected stdout file from its internal
 ### Prior manual command order (diagnostic reference only)
 
 The typed restoration baseline and comparison in
-[`PHASE2A_RESTORATION.md`](PHASE2A_RESTORATION.md) are mandatory. Capture the
+[`PHASE2A_RESTORATION.md`](../archive/PHASE2A_RESTORATION.md) are mandatory. Capture the
 baseline before starting the monitor and before operator approval. The
 scenario `launch` command requires `--typed-baseline "$EVIDENCE_DIR/typed-before.json"`;
 `verify-clean` captures the postflight snapshot and must pass before the next

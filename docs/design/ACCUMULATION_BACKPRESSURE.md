@@ -77,7 +77,7 @@ outbound, 6 terminal, or 7 recirculation tail. Zone 7 starts at front
 coordinate 14 only after the no-route DIVERT event fixes fallback; it ends
 at the RECIRC sensor at coordinate 19. The PLC accepts zone 3→7 only for
 the same undecided package identity and rejects a routed package there.
-See [the movement boundary contract](XLE_VM_MOVEMENT_BOUNDARY.md) for
+See [the movement boundary contract](../archive/XLE_VM_MOVEMENT_BOUNDARY.md) for
 inclusivity and route-dependent transitions. Motion is 1 MOVING, 2 HELD_DOWNSTREAM, 3
 HELD_MERGE, 4 DRIVE_STOPPED, 5 AWAITING_ROUTE, 6 OUTBOUND, or 7 TERMINAL.
 Motion value **8 JAMMED is reserved for Phase 2B**, rejected by this PLC and

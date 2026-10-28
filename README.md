@@ -48,7 +48,7 @@ The `analyst` VM is the attacker's starting point. In Case A, the configuration 
 | --- | --- | --- |
 | PLC | [Sorter.st](Sorter.st) | The Structured Text sorting program |
 | Plant and devices | [devices/](devices/) · [deployment notes](deploy/README.md) | Motion model, six VFDs, three tunnel scanners |
-| Routing | [services/](services/) · [XLe VM migration](XLE_VM_MIGRATION.md) | XLe and its journal-backed exchange with the PLC; ASX sort plan |
+| Routing | [services/](services/) · [XLe VM migration](docs/design/XLE_VM_MIGRATION.md) | XLe and its journal-backed exchange with the PLC; ASX sort plan |
 | Operator view | [scada/](scada/) · [SCADA notes](scada/README.md) | OPC UA server and HMI |
 | Segmentation | [firewall configuration](deploy/firewall/) | Zone rules and the Case A forwarding policy |
 

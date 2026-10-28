@@ -97,9 +97,9 @@ remained. Clicking the rendered Acknowledge button changed the display to
 `SCANNER TUNNEL 2 RESET FAULT — ACKNOWLEDGED` and `RETRY RESET`.
 Clicking Retry cleared the alarm only after all three scanner ACKs arrived.
 The three screenshots are
-[`fault`](tests/artifacts/scanner-fault.png),
-[`acknowledged`](tests/artifacts/scanner-acknowledged.png), and
-[`cleared`](tests/artifacts/scanner-cleared.png). The localhost-only
+[`fault`](../../tests/artifacts/scanner-fault.png),
+[`acknowledged`](../../tests/artifacts/scanner-acknowledged.png), and
+[`cleared`](../../tests/artifacts/scanner-cleared.png). The localhost-only
 `tests/serial_hmi_proxy.py` forwarded the actual guest HMI through the
 existing serial console to headless Firefox; it added no bridge address.
 Tunnel 2 service was restored and active; PLC reset state returned to 0.
@@ -180,7 +180,7 @@ ASX except for the unavailable case, resets the PLC with fixed seed 137,
 enables one-package lane 1 mode, observes the PLC and scanner mapping via
 SCADA-to-PLC Modbus, and restores the initial coils, setpoints, and seed in
 `finally`. Each printed record is written verbatim in
-[`tests/artifacts/xle-live-faults.jsonl`](tests/artifacts/xle-live-faults.jsonl).
+[`tests/artifacts/xle-live-faults.jsonl`](../../tests/artifacts/xle-live-faults.jsonl).
 Every record includes the scanner sequence, serial, barcode, and run nonce;
 the XLe and ASX request/response events; and the PLC command, terminal state,
 reason, counters, and timing registers. The test checks the package and

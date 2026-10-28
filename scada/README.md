@@ -1,7 +1,7 @@
 # SCADA HMI source
 
 The later XLe heartbeat alarm, Acknowledge, and Retry display is documented
-in [XLE_LIVENESS.md](../XLE_LIVENESS.md).
+in [XLE_LIVENESS.md](../docs/operations/XLE_LIVENESS.md).
 
 The deployed sources and units were copied from the `scada` VM before any
 changes to that guest. The exact original sources are in `baseline/`; the

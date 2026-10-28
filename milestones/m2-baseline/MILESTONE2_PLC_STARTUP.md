@@ -101,7 +101,7 @@ That claim is established only by the first bounded successful state read.
 ## Existing intended execution context and operator access
 
 The existing installation used a **detached root core**, independent of
-`openplc.service`: see [ACCUMULATION_BACKPRESSURE.md](../../ACCUMULATION_BACKPRESSURE.md), line234,
+`openplc.service`: see [ACCUMULATION_BACKPRESSURE.md](../../docs/design/ACCUMULATION_BACKPRESSURE.md), line234,
 and the preserved root launch receipt
 `/home/kevin/vm/sorter-evidence/xle-recirc-deployment-prep-20260926T062200Z/plc-core-launch.json`
 (`__SORTER_ROOT_RC_...`), not an authorization for a new launch.
